@@ -1,13 +1,17 @@
 import * as ts from 'typescript';
 import { StepTransformerError } from '../errors';
+import { IntrinsicsMethods, loadIntrinsics } from './intrinsics';
 
 export default class StepTransformerContext {
     public readonly checker: ts.TypeChecker;
     public readonly errors: Array<StepTransformerError> = [];
+    public readonly intrinsics: IntrinsicsMethods;
+    
     constructor(
         public readonly program: ts.Program,
         public readonly transformationContext: ts.TransformationContext) {
-        this.checker = program.getTypeChecker();        
+        this.checker = program.getTypeChecker();    
+        this.intrinsics = loadIntrinsics(this);    
     }
 
     visitEachChild<TNode extends ts.Node>(node: TNode, visitor: ts.Visitor): TNode {
