@@ -1,6 +1,6 @@
 import * as ts from 'typescript';
 import { StepTransformerError } from '../errors';
-import { IntrinsicsMethods, loadIntrinsics } from './intrinsics';
+import { IntrinsicsMethods, loadIntrinsics } from './analysis/intrinsics';
 
 export default class StepTransformerContext {
     public readonly checker: ts.TypeChecker;

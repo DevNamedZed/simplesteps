@@ -1,7 +1,14 @@
 import SimpleStepContext from "./SimpleStepContext";
 
+type JsonValue = string | number | boolean | null | JsonArray | JsonObject;
+interface JsonArray extends Array<JsonValue> {}
+interface JsonObject {
+    [key: string]: JsonValue;
+}
+
+
 export class Steps {
-    static createFunction<T = any>(factory: (context: SimpleStepContext) => T) {
+    static createFunction<TInput = any, TOutput = any>(factory: (context: SimpleStepContext, input: TInput) => TOutput) {
     }
 
 

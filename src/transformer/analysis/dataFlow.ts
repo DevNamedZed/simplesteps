@@ -8,9 +8,15 @@ export enum StepVariableType {
 }
 
 export type StepVariable = {
-
+    name: string;
+    possiblilites: Array<StepVariable>
 }
 
 export type FunctionStepVariables {
 
+}
+
+
+function analyizeVariables() {
+    
 }

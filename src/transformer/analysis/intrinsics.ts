@@ -1,8 +1,8 @@
 import path from 'path';
 import * as ts from 'typescript';
-import StepTransformerContext from './stepTransformerContext';
+import StepTransformerContext from '../stepTransformerContext';
 
-const LibraryFolder = path.resolve(path.join(__dirname, "../"));
+const LibraryFolder = path.resolve(path.join(__dirname, "../../"));
 const StepsClassFile = path.resolve(path.join(LibraryFolder, "./runtime/Steps.ts"))
 
 const StepFuctionFactoryClassName = "Steps"
