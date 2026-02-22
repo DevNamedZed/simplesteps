@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SimpleSteps Playground</title>
+  <link rel="stylesheet" href="/src/styles.css" />
+</head>
+<body>
+  <header>
+    <h1>SimpleSteps Playground</h1>
+    <div class="toolbar">
+      <button id="compile-btn">Compile</button>
+      <label>
+        <input type="checkbox" id="auto-compile" checked />
+        Auto
+      </label>
+      <select id="examples">
+        <option value="">-- Load Example --</option>
+        <option value="sequential">Sequential</option>
+        <option value="if-else">If / Else</option>
+        <option value="early-return">Early Return</option>
+        <option value="while-loop">While Loop</option>
+        <option value="for-each">For Each (Map)</option>
+        <option value="try-catch">Try / Catch</option>
+        <option value="multi-service">Multi-Service</option>
+        <option value="wait-and-continue">Wait & Continue</option>
+        <option value="switch-case">Switch / Case</option>
+        <option value="and-or-conditions">And / Or Conditions</option>
+        <option value="sqs-queue">SQS Queue</option>
+        <option value="eventbridge">EventBridge</option>
+        <option value="dynamodb-crud">DynamoDB CRUD</option>
+        <option value="nested-conditions">Nested Conditions</option>
+        <option value="dynamic-wait">Dynamic Wait</option>
+        <option value="multi-step-function">Multi Step Function</option>
+        <option value="intrinsics">Intrinsics (Steps.*)</option>
+        <option value="js-operators">JS Operators</option>
+        <option value="parallel">Promise.all (Parallel)</option>
+        <option value="string-interpolation">String Interpolation</option>
+        <option value="constants">Constants</option>
+        <option value="js-patterns">JS Patterns Reference</option>
+        <option value="s3-operations">S3 Operations</option>
+        <option value="secrets-manager">Secrets Manager</option>
+        <option value="ssm-params">SSM Parameter Store</option>
+      </select>
+    </div>
+  </header>
+  <main>
+    <div id="editor-container"></div>
+    <div id="output-container"></div>
+  </main>
+  <footer id="errors"></footer>
+  <script type="module" src="/src/main.ts"></script>
+</body>
+</html>

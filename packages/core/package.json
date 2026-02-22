@@ -1,0 +1,34 @@
+{
+  "name": "@simplesteps/core",
+  "version": "0.1.0",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "bin": {
+    "simplesteps": "dist/cli.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./runtime": {
+      "types": "./dist/runtime/index.d.ts",
+      "default": "./dist/runtime/index.js"
+    },
+    "./runtime/services": {
+      "types": "./dist/runtime/services/index.d.ts",
+      "default": "./dist/runtime/services/index.js"
+    },
+    "./asl": {
+      "types": "./dist/asl/index.d.ts",
+      "default": "./dist/asl/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "typescript": "^5.4.3"
+  }
+}

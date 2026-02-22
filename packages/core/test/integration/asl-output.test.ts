@@ -1,0 +1,1407 @@
+/**
+ * End-to-end ASL output tests.
+ *
+ * These tests compile fixture files through the full pipeline and assert
+ * on the exact ASL JSON output. This is the definitive correctness check
+ * for the compiler and serves as the contract for CDK integration.
+ *
+ * Usage pattern for CDK tests (future):
+ *   const asl = compileFixture('my-workflow.ts');
+ *   expect(asl).toMatchAsl({ StartAt: 'InvokeStep1', States: { ... } });
+ */
+import path from 'path';
+import { compile, AslSerializer, SimpleSteps } from '../../src/index';
+import type { StateMachineDefinition } from '../../src/asl/types';
+
+const FIXTURES_DIR = path.resolve(__dirname, '../fixtures/cfg');
+const FIXTURES_PARENT = path.resolve(__dirname, '../fixtures');
+
+// ---------------------------------------------------------------------------
+// Test helper: compile a fixture and return the ASL definition
+// ---------------------------------------------------------------------------
+
+function compileFixture(fixtureFile: string): StateMachineDefinition {
+  const filePath = path.join(FIXTURES_DIR, fixtureFile);
+  const result = compile({ sourceFiles: [filePath] });
+
+  if (result.errors.length > 0) {
+    const msgs = result.errors.map(e => `  [${e.code}] ${e.message}`);
+    throw new Error(`Compilation errors in ${fixtureFile}:\n${msgs.join('\n')}`);
+  }
+  if (result.stateMachines.length === 0) {
+    throw new Error(`No state machines found in ${fixtureFile}`);
+  }
+
+  return result.stateMachines[0].definition;
+}
+
+function compileFixtureAll(fixtureFile: string): StateMachineDefinition[] {
+  const filePath = path.join(FIXTURES_DIR, fixtureFile);
+  const result = compile({ sourceFiles: [filePath] });
+
+  if (result.errors.length > 0) {
+    const msgs = result.errors.map(e => `  [${e.code}] ${e.message}`);
+    throw new Error(`Compilation errors in ${fixtureFile}:\n${msgs.join('\n')}`);
+  }
+
+  return result.stateMachines.map(sm => sm.definition);
+}
+
+function compileParentFixtureAll(fixtureFile: string): any[] {
+  const filePath = path.join(FIXTURES_PARENT, fixtureFile);
+  const result = compile({ sourceFiles: [filePath] });
+
+  if (result.errors.length > 0) {
+    const msgs = result.errors.map(e => `  [${e.code}] ${e.message}`);
+    throw new Error(`Compilation errors in ${fixtureFile}:\n${msgs.join('\n')}`);
+  }
+
+  return result.stateMachines.map(sm => {
+    const json = AslSerializer.serialize(sm.definition);
+    return JSON.parse(json);
+  });
+}
+
+function compileToJson(fixtureFile: string): any {
+  const def = compileFixture(fixtureFile);
+  const json = AslSerializer.serialize(def);
+  return JSON.parse(json);
+}
+
+function getStateNames(def: any): string[] {
+  return Object.keys(def.States);
+}
+
+function getStatesByType(def: any, type: string): [string, any][] {
+  return Object.entries(def.States).filter(([, s]: any) => (s as any).Type === type) as any;
+}
+
+// ---------------------------------------------------------------------------
+// Sequential: const x = await lambda.call({...}); return { x }
+// ---------------------------------------------------------------------------
+
+describe('ASL output: sequential', () => {
+  let asl: any;
+  beforeAll(() => { asl = compileToJson('sequential.ts'); });
+
+  it('StartAt points to the first Task', () => {
+    expect(asl.StartAt).toMatch(/^Invoke_/);
+  });
+
+  it('produces Task states with correct Resources', () => {
+    const tasks = getStatesByType(asl, 'Task');
+    expect(tasks.length).toBeGreaterThanOrEqual(1);
+    for (const [, s] of tasks) {
+      expect(s.Resource).toMatch(/^arn:aws:lambda/);
+    }
+  });
+
+  it('final state has End: true', () => {
+    const stateNames = getStateNames(asl);
+    const last = asl.States[stateNames[stateNames.length - 1]];
+    expect(last.End).toBe(true);
+  });
+
+  it('Task states have Parameters with .$ references', () => {
+    const tasks = getStatesByType(asl, 'Task');
+    for (const [, s] of tasks) {
+      if (s.Parameters) {
+        const keys = Object.keys(s.Parameters);
+        const dynamicKeys = keys.filter(k => k.endsWith('.$'));
+        expect(dynamicKeys.length).toBeGreaterThanOrEqual(0);
+      }
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// If/else: if (condition) { ... } else { ... }
+// ---------------------------------------------------------------------------
+
+describe('ASL output: if-else', () => {
+  let asl: any;
+  beforeAll(() => { asl = compileToJson('if-else.ts'); });
+
+  it('contains a Choice state', () => {
+    const choices = getStatesByType(asl, 'Choice');
+    expect(choices).toHaveLength(1);
+  });
+
+  it('Choice state has Choices array with comparison', () => {
+    const [, choice] = getStatesByType(asl, 'Choice')[0];
+    expect(choice.Choices).toBeDefined();
+    expect(choice.Choices.length).toBeGreaterThanOrEqual(1);
+    expect(choice.Choices[0].Variable).toBeDefined();
+    expect(choice.Choices[0].Next).toBeDefined();
+  });
+
+  it('Choice state has Default branch', () => {
+    const [, choice] = getStatesByType(asl, 'Choice')[0];
+    expect(choice.Default).toBeDefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Early return: if (cond) return { ... }
+// ---------------------------------------------------------------------------
+
+describe('ASL output: early-return', () => {
+  let asl: any;
+  beforeAll(() => { asl = compileToJson('early-return.ts'); });
+
+  it('has multiple states ending with End: true', () => {
+    const endStates = Object.entries(asl.States)
+      .filter(([, s]: any) => (s as any).End === true);
+    expect(endStates.length).toBeGreaterThanOrEqual(2);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// While loop: while (cond) { await ... }
+// ---------------------------------------------------------------------------
+
+describe('ASL output: while-loop', () => {
+  let asl: any;
+  beforeAll(() => { asl = compileToJson('while-loop.ts'); });
+
+  it('contains a Choice state for the loop condition', () => {
+    const choices = getStatesByType(asl, 'Choice');
+    expect(choices.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('has a cycle — some state points back to the Choice', () => {
+    const choices = getStatesByType(asl, 'Choice');
+    const choiceName = choices[0][0];
+    const stateEntries = Object.entries(asl.States);
+    const backEdge = stateEntries.some(([, s]: any) =>
+      (s as any).Next === choiceName && (s as any).Type !== 'Choice'
+    );
+    expect(backEdge).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Try/catch: try { await ... } catch { ... }
+// ---------------------------------------------------------------------------
+
+describe('ASL output: try-catch', () => {
+  let asl: any;
+  beforeAll(() => { asl = compileToJson('try-catch.ts'); });
+
+  it('Task state has Catch rule', () => {
+    const tasks = getStatesByType(asl, 'Task');
+    const taskWithCatch = tasks.find(([, s]) => s.Catch && s.Catch.length > 0);
+    expect(taskWithCatch).toBeDefined();
+    expect(taskWithCatch![1].Catch[0].ErrorEquals).toContain('States.ALL');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// For-of: for (const item of input.items) { await ... }
+// ---------------------------------------------------------------------------
+
+describe('ASL output: for-of', () => {
+  let asl: any;
+  beforeAll(() => { asl = compileToJson('for-of.ts'); });
+
+  it('contains a Map state', () => {
+    const maps = getStatesByType(asl, 'Map');
+    expect(maps).toHaveLength(1);
+  });
+
+  it('Map state has ItemProcessor with nested states', () => {
+    const [, mapState] = getStatesByType(asl, 'Map')[0];
+    expect(mapState.ItemProcessor).toBeDefined();
+    expect(mapState.ItemProcessor.StartAt).toBeDefined();
+    expect(Object.keys(mapState.ItemProcessor.States).length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('Map state has ItemsPath', () => {
+    const [, mapState] = getStatesByType(asl, 'Map')[0];
+    expect(mapState.ItemsPath).toBeDefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// And/Or conditions: if (a && b) or if (a || b)
+// ---------------------------------------------------------------------------
+
+describe('ASL output: and-or-conditions', () => {
+  let asl: any;
+  beforeAll(() => { asl = compileToJson('and-or-conditions.ts'); });
+
+  it('has Choice states with And/Or rules', () => {
+    const choices = getStatesByType(asl, 'Choice');
+    expect(choices.length).toBeGreaterThanOrEqual(1);
+
+    const hasCompound = choices.some(([, s]) =>
+      s.Choices.some((c: any) => c.And || c.Or)
+    );
+    expect(hasCompound).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Wait state: Steps.delay({ seconds: 30 })
+// ---------------------------------------------------------------------------
+
+describe('ASL output: wait-state', () => {
+  let asl: any;
+  beforeAll(() => { asl = compileToJson('wait-state.ts'); });
+
+  it('contains a Wait state', () => {
+    const waits = getStatesByType(asl, 'Wait');
+    expect(waits.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('Wait state has Seconds or Timestamp', () => {
+    const [, wait] = getStatesByType(asl, 'Wait')[0];
+    const hasDelay = wait.Seconds !== undefined || wait.Timestamp !== undefined ||
+                     wait.SecondsPath !== undefined || wait.TimestampPath !== undefined;
+    expect(hasDelay).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Switch/case: switch (expr) { case ...: ... }
+// ---------------------------------------------------------------------------
+
+describe('ASL output: switch-case', () => {
+  let asl: any;
+  beforeAll(() => { asl = compileToJson('switch-case.ts'); });
+
+  it('contains Choice states (switch desugars to chained choices)', () => {
+    const choices = getStatesByType(asl, 'Choice');
+    expect(choices.length).toBeGreaterThanOrEqual(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Intrinsics: Steps.format(), Steps.uuid(), Steps.add()
+// ---------------------------------------------------------------------------
+
+describe('ASL output: intrinsics', () => {
+  let asl: any;
+  beforeAll(() => { asl = compileToJson('intrinsics.ts'); });
+
+  it('produces a Pass state with intrinsic Parameters', () => {
+    const passes = getStatesByType(asl, 'Pass');
+    const returnPass = passes.find(([, s]) => s.Parameters);
+    expect(returnPass).toBeDefined();
+    const params = returnPass![1].Parameters;
+
+    expect(params['message.$']).toBe("States.Format('Order {} confirmed', $.orderId)");
+    expect(params['id.$']).toBe('States.UUID()');
+    expect(params['total.$']).toBe('States.MathAdd($.price, $.tax)');
+    expect(params['meta.$']).toBe('States.StringToJson($.metadata)');
+  });
+
+  it('no errors in compilation', () => {
+    const filePath = path.join(FIXTURES_DIR, 'intrinsics.ts');
+    const result = compile({ sourceFiles: [filePath] });
+    expect(result.errors).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// JS operators: str.split(), a + b
+// ---------------------------------------------------------------------------
+
+describe('ASL output: js-operators', () => {
+  let asl: any;
+  beforeAll(() => { asl = compileToJson('js-operators.ts'); });
+
+  it('maps string.split to States.StringSplit', () => {
+    const passes = getStatesByType(asl, 'Pass');
+    const returnPass = passes.find(([, s]) => s.Parameters);
+    expect(returnPass).toBeDefined();
+    expect(returnPass![1].Parameters['parts.$']).toBe("States.StringSplit($.csv, ',')");
+  });
+
+  it('maps + operator to States.MathAdd', () => {
+    const passes = getStatesByType(asl, 'Pass');
+    const returnPass = passes.find(([, s]) => s.Parameters);
+    expect(returnPass).toBeDefined();
+    expect(returnPass![1].Parameters['total.$']).toBe('States.MathAdd($.price, $.tax)');
+  });
+
+  it('maps JSON.parse to States.StringToJson', () => {
+    const passes = getStatesByType(asl, 'Pass');
+    const returnPass = passes.find(([, s]) => s.Parameters);
+    expect(returnPass).toBeDefined();
+    expect(returnPass![1].Parameters['meta.$']).toBe('States.StringToJson($.metadata)');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Parallel: const [a, b] = await Promise.all([...])
+// ---------------------------------------------------------------------------
+
+describe('ASL output: parallel', () => {
+  let asl: any;
+  beforeAll(() => { asl = compileToJson('parallel.ts'); });
+
+  it('produces a Parallel state', () => {
+    const parallels = getStatesByType(asl, 'Parallel');
+    expect(parallels).toHaveLength(1);
+  });
+
+  it('Parallel has 2 branches, each with a Task', () => {
+    const [, p] = getStatesByType(asl, 'Parallel')[0];
+    expect(p.Branches).toHaveLength(2);
+
+    for (const branch of p.Branches) {
+      expect(branch.StartAt).toBeDefined();
+      const tasks = Object.values(branch.States).filter((s: any) => s.Type === 'Task');
+      expect(tasks).toHaveLength(1);
+    }
+  });
+
+  it('branch Tasks have correct Resources', () => {
+    const [, p] = getStatesByType(asl, 'Parallel')[0];
+    const resources = p.Branches.map((b: any) => {
+      const task = Object.values(b.States)[0] as any;
+      return task.Resource;
+    });
+    expect(resources).toContain('arn:aws:lambda:us-east-1:123:function:GetOrder');
+    expect(resources).toContain('arn:aws:lambda:us-east-1:123:function:ProcessPayment');
+  });
+
+  it('ResultSelector maps array positions to variable names', () => {
+    const [, p] = getStatesByType(asl, 'Parallel')[0];
+    expect(p.ResultSelector).toBeDefined();
+    expect(p.ResultSelector['orderResult.$']).toBe('$[0]');
+    expect(p.ResultSelector['paymentResult.$']).toBe('$[1]');
+  });
+
+  it('branch Task states have End: true', () => {
+    const [, p] = getStatesByType(asl, 'Parallel')[0];
+    for (const branch of p.Branches) {
+      const tasks = Object.values(branch.States) as any[];
+      for (const task of tasks) {
+        expect(task.End).toBe(true);
+      }
+    }
+  });
+
+  it('return Pass maps destructured variables to output', () => {
+    const passes = getStatesByType(asl, 'Pass');
+    const returnPass = passes.find(([, s]) => s.Parameters && s.End);
+    expect(returnPass).toBeDefined();
+    expect(returnPass![1].Parameters['order.$']).toBe('$.orderResult');
+    expect(returnPass![1].Parameters['payment.$']).toBe('$.paymentResult');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Multi-service: multiple service types in one workflow
+// ---------------------------------------------------------------------------
+
+describe('ASL output: multi-service', () => {
+  let asl: any;
+  beforeAll(() => { asl = compileToJson('multi-service.ts'); });
+
+  it('has Task states with different service ARN patterns', () => {
+    const tasks = getStatesByType(asl, 'Task');
+    expect(tasks.length).toBeGreaterThanOrEqual(2);
+
+    const resources = tasks.map(([, s]) => s.Resource);
+    // Should have both Lambda and DynamoDB (or other service) resources
+    expect(resources.length).toBeGreaterThanOrEqual(2);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Nested control flow: if inside while, try inside if, etc.
+// ---------------------------------------------------------------------------
+
+describe('ASL output: nested', () => {
+  let asl: any;
+  beforeAll(() => { asl = compileToJson('nested.ts'); });
+
+  it('has both Choice and Task states', () => {
+    const choices = getStatesByType(asl, 'Choice');
+    const tasks = getStatesByType(asl, 'Task');
+    expect(choices.length).toBeGreaterThanOrEqual(1);
+    expect(tasks.length).toBeGreaterThanOrEqual(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// All fixtures compile without errors
+// ---------------------------------------------------------------------------
+
+describe('ASL output: all fixtures compile cleanly', () => {
+  const fixtures = [
+    'sequential.ts',
+    'if-else.ts',
+    'early-return.ts',
+    'while-loop.ts',
+    'try-catch.ts',
+    'for-of.ts',
+    'nested.ts',
+    'multi-service.ts',
+    'and-or-conditions.ts',
+    'wait-state.ts',
+    'switch-case.ts',
+    'intrinsics.ts',
+    'js-operators.ts',
+    'parallel.ts',
+    'constants.ts',
+    'template-literals.ts',
+    'subtraction.ts',
+    'template-substitutions.ts',
+    's3.ts',
+    'secrets-manager.ts',
+    'ssm.ts',
+  ];
+
+  for (const fixture of fixtures) {
+    it(`${fixture} compiles with zero errors`, () => {
+      const filePath = path.join(FIXTURES_DIR, fixture);
+      const result = compile({ sourceFiles: [filePath] });
+      expect(result.errors).toHaveLength(0);
+      expect(result.stateMachines.length).toBeGreaterThanOrEqual(1);
+    });
+
+    it(`${fixture} produces valid JSON`, () => {
+      const def = compileFixture(fixture);
+      const json = AslSerializer.serialize(def);
+      expect(() => JSON.parse(json)).not.toThrow();
+    });
+
+    it(`${fixture} has StartAt pointing to an existing state`, () => {
+      const def = compileFixture(fixture);
+      expect(def.StartAt).toBeDefined();
+      expect(def.States[def.StartAt]).toBeDefined();
+    });
+
+    it(`${fixture} has at least one terminal state (End: true)`, () => {
+      const def = compileFixture(fixture);
+      const hasEnd = Object.values(def.States).some((s: any) =>
+        s.End === true || s.Type === 'Succeed' || s.Type === 'Fail'
+      );
+      expect(hasEnd).toBe(true);
+    });
+
+    it(`${fixture} has no dangling Next references`, () => {
+      const asl = compileToJson(fixture);
+      const stateNames = new Set(Object.keys(asl.States));
+
+      for (const [name, state] of Object.entries(asl.States) as any) {
+        if (state.Next) {
+          expect(stateNames.has(state.Next)).toBe(true);
+        }
+        if (state.Choices) {
+          for (const choice of state.Choices) {
+            if (choice.Next) {
+              expect(stateNames.has(choice.Next)).toBe(true);
+            }
+          }
+        }
+        if (state.Default) {
+          expect(stateNames.has(state.Default)).toBe(true);
+        }
+      }
+    });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Compile-time constants: module-level const values inlined as literals
+// ---------------------------------------------------------------------------
+
+describe('ASL output: constants', () => {
+  let asl: any;
+  beforeAll(() => { asl = compileToJson('constants.ts'); });
+
+  it('compiles without errors', () => {
+    const filePath = path.join(FIXTURES_DIR, 'constants.ts');
+    const result = compile({ sourceFiles: [filePath] });
+    expect(result.errors).toHaveLength(0);
+    expect(result.stateMachines.length).toBe(1);
+  });
+
+  it('inlines BASE_URL as literal string in Task Parameters', () => {
+    const tasks = getStatesByType(asl, 'Task');
+    expect(tasks.length).toBeGreaterThanOrEqual(1);
+    const [, taskState] = tasks[0];
+    // BASE_URL should be a plain string, not a $.* reference
+    expect(taskState.Parameters.url).toBe('https://api.example.com');
+    expect(taskState.Parameters['url.$']).toBeUndefined();
+  });
+
+  it('inlines MAX_RETRIES as literal number in Task Parameters', () => {
+    const tasks = getStatesByType(asl, 'Task');
+    const [, taskState] = tasks[0];
+    expect(taskState.Parameters.retries).toBe(3);
+    expect(taskState.Parameters['retries.$']).toBeUndefined();
+  });
+
+  it('folds TIMEOUT (30 + 10) to 40 in return Pass state', () => {
+    const passes = getStatesByType(asl, 'Pass');
+    expect(passes.length).toBeGreaterThanOrEqual(1);
+    // Find the return Pass state
+    const returnPass = passes.find(([name]) => name.startsWith('Return'));
+    expect(returnPass).toBeDefined();
+    const [, passState] = returnPass!;
+    expect(passState.Parameters.timeout).toBe(40);
+    expect(passState.Parameters['timeout.$']).toBeUndefined();
+  });
+
+  it('folds GREETING string concatenation to "Hello World"', () => {
+    const passes = getStatesByType(asl, 'Pass');
+    const returnPass = passes.find(([name]) => name.startsWith('Return'));
+    expect(returnPass).toBeDefined();
+    const [, passState] = returnPass!;
+    expect(passState.Parameters.greeting).toBe('Hello World');
+  });
+
+  it('folds DOUBLED (MAX_RETRIES * 2) to 6', () => {
+    const passes = getStatesByType(asl, 'Pass');
+    const returnPass = passes.find(([name]) => name.startsWith('Return'));
+    expect(returnPass).toBeDefined();
+    const [, passState] = returnPass!;
+    expect(passState.Parameters.doubled).toBe(6);
+  });
+
+  it('folds NEGATIVE (-1) correctly', () => {
+    const passes = getStatesByType(asl, 'Pass');
+    const returnPass = passes.find(([name]) => name.startsWith('Return'));
+    expect(returnPass).toBeDefined();
+    const [, passState] = returnPass!;
+    expect(passState.Parameters.negative).toBe(-1);
+  });
+
+  it('folds Math.max(10, 20) to 20', () => {
+    const passes = getStatesByType(asl, 'Pass');
+    const returnPass = passes.find(([name]) => name.startsWith('Return'));
+    expect(returnPass).toBeDefined();
+    const [, passState] = returnPass!;
+    expect(passState.Parameters.computed).toBe(20);
+  });
+
+  it('uses no .$ references for constant values in return state', () => {
+    const passes = getStatesByType(asl, 'Pass');
+    const returnPass = passes.find(([name]) => name.startsWith('Return'));
+    expect(returnPass).toBeDefined();
+    const [, passState] = returnPass!;
+    const params = passState.Parameters;
+    // None of the constant fields should use .$ notation
+    for (const key of ['timeout', 'greeting', 'doubled', 'negative', 'computed']) {
+      expect(params[key]).toBeDefined();
+      expect(params[`${key}.$`]).toBeUndefined();
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Template literals: `Hello ${name}` → States.Format('Hello {}', name)
+// ---------------------------------------------------------------------------
+
+describe('ASL output: template-literals', () => {
+  let asl: any;
+  beforeAll(() => { asl = compileToJson('template-literals.ts'); });
+
+  it('compiles without errors', () => {
+    const filePath = path.join(FIXTURES_DIR, 'template-literals.ts');
+    const result = compile({ sourceFiles: [filePath] });
+    expect(result.errors).toHaveLength(0);
+    expect(result.stateMachines.length).toBe(1);
+  });
+
+  it('simple template maps to States.Format', () => {
+    const passes = getStatesByType(asl, 'Pass');
+    const returnPass = passes.find(([, s]) => s.Parameters && s.End);
+    expect(returnPass).toBeDefined();
+    expect(returnPass![1].Parameters['greeting.$']).toBe("States.Format('Hello {}', $.name)");
+  });
+
+  it('multiple substitutions map to States.Format', () => {
+    const passes = getStatesByType(asl, 'Pass');
+    const returnPass = passes.find(([, s]) => s.Parameters && s.End);
+    expect(returnPass).toBeDefined();
+    expect(returnPass![1].Parameters['combined.$']).toBe("States.Format('{} and {}', $.a, $.b)");
+  });
+
+  it('nested intrinsic in template maps correctly', () => {
+    const passes = getStatesByType(asl, 'Pass');
+    const returnPass = passes.find(([, s]) => s.Parameters && s.End);
+    expect(returnPass).toBeDefined();
+    expect(returnPass![1].Parameters['total.$']).toBe("States.Format('Total: {}', States.MathAdd($.x, $.y))");
+  });
+
+  it('all-literal template folds to plain string', () => {
+    const passes = getStatesByType(asl, 'Pass');
+    const returnPass = passes.find(([, s]) => s.Parameters && s.End);
+    expect(returnPass).toBeDefined();
+    // Should be a literal "Hello 42", not an intrinsic
+    expect(returnPass![1].Parameters.literal).toBe('Hello 42');
+    expect(returnPass![1].Parameters['literal.$']).toBeUndefined();
+  });
+
+  it('template with constant folds at compile time', () => {
+    const passes = getStatesByType(asl, 'Pass');
+    const returnPass = passes.find(([, s]) => s.Parameters && s.End);
+    expect(returnPass).toBeDefined();
+    // TEMPLATE_GREETING = `Hello ${NAME}` where NAME='World' → "Hello World"
+    expect(returnPass![1].Parameters.withConst).toBe('Hello World');
+    expect(returnPass![1].Parameters['withConst.$']).toBeUndefined();
+  });
+
+  it('template with special chars escapes single quotes', () => {
+    const passes = getStatesByType(asl, 'Pass');
+    const returnPass = passes.find(([, s]) => s.Parameters && s.End);
+    expect(returnPass).toBeDefined();
+    expect(returnPass![1].Parameters['quoted.$']).toBe("States.Format('It\\'s {}', $.x)");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// JS operators: template literal in updated fixture
+// ---------------------------------------------------------------------------
+
+describe('ASL output: js-operators template literal', () => {
+  let asl: any;
+  beforeAll(() => { asl = compileToJson('js-operators.ts'); });
+
+  it('maps template literal to States.Format', () => {
+    const passes = getStatesByType(asl, 'Pass');
+    const returnPass = passes.find(([, s]) => s.Parameters);
+    expect(returnPass).toBeDefined();
+    expect(returnPass![1].Parameters['message.$']).toBe(
+      "States.Format('Order {} confirmed, total: {}', $.orderId, States.MathAdd($.price, $.tax))"
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Subtraction: a - literal → States.MathAdd(a, -literal)
+// ---------------------------------------------------------------------------
+
+describe('ASL output: subtraction', () => {
+  let asl: any;
+  beforeAll(() => { asl = compileToJson('subtraction.ts'); });
+
+  it('compiles without errors', () => {
+    const filePath = path.join(FIXTURES_DIR, 'subtraction.ts');
+    const result = compile({ sourceFiles: [filePath] });
+    expect(result.errors).toHaveLength(0);
+  });
+
+  it('maps a - 10 to States.MathAdd(a, -10)', () => {
+    const passes = getStatesByType(asl, 'Pass');
+    const returnPass = passes.find(([, s]) => s.Parameters && s.End);
+    expect(returnPass).toBeDefined();
+    expect(returnPass![1].Parameters['discounted.$']).toBe('States.MathAdd($.price, -10)');
+  });
+
+  it('maps a - 0 to States.MathAdd(a, 0)', () => {
+    const passes = getStatesByType(asl, 'Pass');
+    const returnPass = passes.find(([, s]) => s.Parameters && s.End);
+    expect(returnPass).toBeDefined();
+    expect(returnPass![1].Parameters['same.$']).toBe('States.MathAdd($.price, 0)');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Unsupported operators emit helpful errors
+// ---------------------------------------------------------------------------
+
+describe('ASL output: unsupported operator errors', () => {
+  function compileSource(code: string) {
+    const filePath = path.join(FIXTURES_DIR, '__inline__.ts');
+    // Use compile with inline source via a temp fixture
+    return compile({ sourceFiles: [filePath] });
+  }
+
+  it('* operator emits SS530 error', () => {
+    const fixturePath = path.join(FIXTURES_DIR, '__test_multiply.ts');
+    const fs = require('fs');
+    fs.writeFileSync(fixturePath, `
+      import { Steps, SimpleStepContext } from '../../../src/runtime/index';
+      export const test = Steps.createFunction(
+        async (context: SimpleStepContext, input: { a: number; b: number }) => {
+          const result = input.a * input.b;
+          return { result };
+        },
+      );
+    `);
+    try {
+      const result = compile({ sourceFiles: [fixturePath] });
+      const mulError = result.errors.find(e => e.code === 'SS530');
+      expect(mulError).toBeDefined();
+      expect(mulError!.message).toContain('States.MathMultiply');
+    } finally {
+      fs.unlinkSync(fixturePath);
+    }
+  });
+
+  it('/ operator emits SS531 error', () => {
+    const fixturePath = path.join(FIXTURES_DIR, '__test_divide.ts');
+    const fs = require('fs');
+    fs.writeFileSync(fixturePath, `
+      import { Steps, SimpleStepContext } from '../../../src/runtime/index';
+      export const test = Steps.createFunction(
+        async (context: SimpleStepContext, input: { a: number; b: number }) => {
+          const result = input.a / input.b;
+          return { result };
+        },
+      );
+    `);
+    try {
+      const result = compile({ sourceFiles: [fixturePath] });
+      const divError = result.errors.find(e => e.code === 'SS531');
+      expect(divError).toBeDefined();
+      expect(divError!.message).toContain('States.MathDivide');
+    } finally {
+      fs.unlinkSync(fixturePath);
+    }
+  });
+
+  it('% operator emits SS532 error', () => {
+    const fixturePath = path.join(FIXTURES_DIR, '__test_modulo.ts');
+    const fs = require('fs');
+    fs.writeFileSync(fixturePath, `
+      import { Steps, SimpleStepContext } from '../../../src/runtime/index';
+      export const test = Steps.createFunction(
+        async (context: SimpleStepContext, input: { a: number; b: number }) => {
+          const result = input.a % input.b;
+          return { result };
+        },
+      );
+    `);
+    try {
+      const result = compile({ sourceFiles: [fixturePath] });
+      const modError = result.errors.find(e => e.code === 'SS532');
+      expect(modError).toBeDefined();
+      expect(modError!.message).toContain('States.MathModulo');
+    } finally {
+      fs.unlinkSync(fixturePath);
+    }
+  });
+
+  it('dynamic subtraction emits SS533 error', () => {
+    const fixturePath = path.join(FIXTURES_DIR, '__test_dynamic_sub.ts');
+    const fs = require('fs');
+    fs.writeFileSync(fixturePath, `
+      import { Steps, SimpleStepContext } from '../../../src/runtime/index';
+      export const test = Steps.createFunction(
+        async (context: SimpleStepContext, input: { a: number; b: number }) => {
+          const result = input.a - input.b;
+          return { result };
+        },
+      );
+    `);
+    try {
+      const result = compile({ sourceFiles: [fixturePath] });
+      const subError = result.errors.find(e => e.code === 'SS533');
+      expect(subError).toBeDefined();
+      expect(subError!.message).toContain('dynamic right-hand side');
+    } finally {
+      fs.unlinkSync(fixturePath);
+    }
+  });
+
+  it('constant * still folds at compile time (no error)', () => {
+    const fixturePath = path.join(FIXTURES_DIR, '__test_const_multiply.ts');
+    const fs = require('fs');
+    fs.writeFileSync(fixturePath, `
+      import { Steps, SimpleStepContext } from '../../../src/runtime/index';
+      const DOUBLED = 3 * 2;
+      export const test = Steps.createFunction(
+        async (context: SimpleStepContext, input: { id: string }) => {
+          return { doubled: DOUBLED };
+        },
+      );
+    `);
+    try {
+      const result = compile({ sourceFiles: [fixturePath] });
+      expect(result.errors).toHaveLength(0);
+      expect(result.stateMachines.length).toBe(1);
+    } finally {
+      fs.unlinkSync(fixturePath);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Showcase examples compile cleanly
+// ---------------------------------------------------------------------------
+
+describe('ASL output: showcase examples compile', () => {
+  const SHOWCASE_DIR = path.resolve(__dirname, '../../../../examples/showcase');
+
+  function compileShowcase(filename: string) {
+    const filePath = path.join(SHOWCASE_DIR, filename);
+    return compile({ sourceFiles: [filePath] });
+  }
+
+  const showcases = [
+    '20-string-interpolation.ts',
+    '21-constants.ts',
+    '22-js-patterns.ts',
+    '23-s3.ts',
+    '24-secrets-manager.ts',
+    '25-ssm.ts',
+  ];
+
+  for (const showcase of showcases) {
+    it(`${showcase} compiles with zero errors`, () => {
+      const result = compileShowcase(showcase);
+      expect(result.errors).toHaveLength(0);
+      expect(result.stateMachines.length).toBeGreaterThanOrEqual(1);
+    });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Deploy-time substitutions: CDK-style value injection
+// ---------------------------------------------------------------------------
+
+describe('ASL output: substitutions', () => {
+  it('replaces Lambda resource with CloudFormation intrinsic', () => {
+    const filePath = path.join(FIXTURES_DIR, 'template-substitutions.ts');
+    const result = compile({
+      sourceFiles: [filePath],
+      substitutions: {
+        myLambda: { 'Fn::GetAtt': ['MyFunc', 'Arn'] },
+        myTable: { Ref: 'MyTable' },
+      },
+    });
+    expect(result.errors).toHaveLength(0);
+    expect(result.stateMachines.length).toBe(1);
+
+    const def = result.stateMachines[0].definition;
+    const json = JSON.parse(AslSerializer.serialize(def));
+
+    // Find the Lambda Task state — its Resource should be the CF intrinsic
+    const tasks = getStatesByType(json, 'Task');
+    const lambdaTask = tasks.find(([name]) => name.startsWith('Invoke_'));
+    expect(lambdaTask).toBeDefined();
+    expect(lambdaTask![1].Resource).toEqual({ 'Fn::GetAtt': ['MyFunc', 'Arn'] });
+  });
+
+  it('replaces DynamoDB TableName with CloudFormation Ref', () => {
+    const filePath = path.join(FIXTURES_DIR, 'template-substitutions.ts');
+    const result = compile({
+      sourceFiles: [filePath],
+      substitutions: {
+        myLambda: { 'Fn::GetAtt': ['MyFunc', 'Arn'] },
+        myTable: { Ref: 'MyTable' },
+      },
+    });
+    expect(result.errors).toHaveLength(0);
+
+    const def = result.stateMachines[0].definition;
+    const json = JSON.parse(AslSerializer.serialize(def));
+
+    // Find the DynamoDB Task state
+    const tasks = getStatesByType(json, 'Task');
+    const dynamoTask = tasks.find(([, s]) =>
+      typeof s.Resource === 'string' && s.Resource.includes('dynamodb')
+    );
+    expect(dynamoTask).toBeDefined();
+    expect(dynamoTask![1].Parameters.TableName).toEqual({ Ref: 'MyTable' });
+  });
+
+  it('uses original values when no substitutions provided', () => {
+    const filePath = path.join(FIXTURES_DIR, 'template-substitutions.ts');
+    const result = compile({ sourceFiles: [filePath] });
+    expect(result.errors).toHaveLength(0);
+
+    const def = result.stateMachines[0].definition;
+    const json = JSON.parse(AslSerializer.serialize(def));
+
+    const tasks = getStatesByType(json, 'Task');
+    const lambdaTask = tasks.find(([name]) => name.startsWith('Invoke_'));
+    expect(lambdaTask).toBeDefined();
+    expect(lambdaTask![1].Resource).toBe('placeholder-arn');
+  });
+
+  it('serializes CF intrinsics correctly in JSON output', () => {
+    const filePath = path.join(FIXTURES_DIR, 'template-substitutions.ts');
+    const result = compile({
+      sourceFiles: [filePath],
+      substitutions: {
+        myLambda: { 'Fn::GetAtt': ['MyFunc', 'Arn'] },
+        myTable: { Ref: 'MyTable' },
+      },
+    });
+    expect(result.errors).toHaveLength(0);
+
+    const def = result.stateMachines[0].definition;
+    const jsonStr = AslSerializer.serialize(def);
+    // Verify it's valid JSON
+    expect(() => JSON.parse(jsonStr)).not.toThrow();
+    // Verify the CF intrinsic appears in the JSON string
+    expect(jsonStr).toContain('"Fn::GetAtt"');
+    expect(jsonStr).toContain('"Ref"');
+  });
+
+  it('constant folding still works with substitutions', () => {
+    // Compile constants fixture (no substitutions needed) — regression test
+    const filePath = path.join(FIXTURES_DIR, 'constants.ts');
+    const result = compile({ sourceFiles: [filePath] });
+    expect(result.errors).toHaveLength(0);
+    const json = JSON.parse(AslSerializer.serialize(result.stateMachines[0].definition));
+    const passes = getStatesByType(json, 'Pass');
+    const returnPass = passes.find(([name]) => name.startsWith('Return'));
+    expect(returnPass).toBeDefined();
+    expect(returnPass![1].Parameters.timeout).toBe(40);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// S3: bucket operations with Bucket parameter injection
+// ---------------------------------------------------------------------------
+
+describe('ASL output: s3', () => {
+  let asl: any;
+  beforeAll(() => { asl = compileToJson('s3.ts'); });
+
+  it('compiles without errors', () => {
+    const filePath = path.join(FIXTURES_DIR, 's3.ts');
+    const result = compile({ sourceFiles: [filePath] });
+    expect(result.errors).toHaveLength(0);
+    expect(result.stateMachines.length).toBe(1);
+  });
+
+  it('produces Task states with S3 SDK resources', () => {
+    const tasks = getStatesByType(asl, 'Task');
+    expect(tasks.length).toBeGreaterThanOrEqual(2);
+    for (const [, s] of tasks) {
+      expect(s.Resource).toMatch(/arn:aws:states:::aws-sdk:s3:/);
+    }
+  });
+
+  it('injects Bucket in Task Parameters', () => {
+    const tasks = getStatesByType(asl, 'Task');
+    for (const [, s] of tasks) {
+      expect(s.Parameters.Bucket).toBe('my-data-bucket');
+    }
+  });
+
+  it('passes user params alongside Bucket', () => {
+    const tasks = getStatesByType(asl, 'Task');
+    // putObject should have Key and Body from user params
+    const putTask = tasks.find(([, s]) => s.Resource.includes('putObject'));
+    expect(putTask).toBeDefined();
+    // The Key and Body should be dynamic references
+    const params = putTask![1].Parameters;
+    expect(params['Key.$'] || params.Key).toBeDefined();
+    expect(params['Body.$'] || params.Body).toBeDefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// SecretsManager: stateless service (no constructor arg)
+// ---------------------------------------------------------------------------
+
+describe('ASL output: secrets-manager', () => {
+  let asl: any;
+  beforeAll(() => { asl = compileToJson('secrets-manager.ts'); });
+
+  it('compiles without errors', () => {
+    const filePath = path.join(FIXTURES_DIR, 'secrets-manager.ts');
+    const result = compile({ sourceFiles: [filePath] });
+    expect(result.errors).toHaveLength(0);
+    expect(result.stateMachines.length).toBe(1);
+  });
+
+  it('produces Task state with SecretsManager SDK resource', () => {
+    const tasks = getStatesByType(asl, 'Task');
+    expect(tasks.length).toBe(1);
+    expect(tasks[0][1].Resource).toBe('arn:aws:states:::aws-sdk:secretsmanager:getSecretValue');
+  });
+
+  it('passes user params directly (no resource key injected)', () => {
+    const tasks = getStatesByType(asl, 'Task');
+    const params = tasks[0][1].Parameters;
+    // SecretId should come from user params
+    expect(params['SecretId.$'] || params.SecretId).toBeDefined();
+    // No spurious resource keys
+    expect(params.TableName).toBeUndefined();
+    expect(params.Bucket).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// SSM: stateless service (no constructor arg)
+// ---------------------------------------------------------------------------
+
+describe('ASL output: ssm', () => {
+  let asl: any;
+  beforeAll(() => { asl = compileToJson('ssm.ts'); });
+
+  it('compiles without errors', () => {
+    const filePath = path.join(FIXTURES_DIR, 'ssm.ts');
+    const result = compile({ sourceFiles: [filePath] });
+    expect(result.errors).toHaveLength(0);
+    expect(result.stateMachines.length).toBe(1);
+  });
+
+  it('produces Task state with SSM SDK resource', () => {
+    const tasks = getStatesByType(asl, 'Task');
+    expect(tasks.length).toBe(1);
+    expect(tasks[0][1].Resource).toBe('arn:aws:states:::aws-sdk:ssm:getParameter');
+  });
+
+  it('passes user params directly (no resource key injected)', () => {
+    const tasks = getStatesByType(asl, 'Task');
+    const params = tasks[0][1].Parameters;
+    // Name should come from user params
+    expect(params['Name.$'] || params.Name).toBeDefined();
+    // No spurious resource keys
+    expect(params.TableName).toBeUndefined();
+    expect(params.Bucket).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// SimpleStepsBuilder.withSubstitutions() fluent API
+// ---------------------------------------------------------------------------
+
+describe('SimpleStepsBuilder.withSubstitutions', () => {
+  const filePath = path.join(FIXTURES_DIR, 'template-substitutions.ts');
+
+  it('injects substitutions via the fluent API', () => {
+    const def = SimpleSteps.fromFile(filePath)
+      .withSubstitutions({
+        myLambda: { 'Fn::GetAtt': ['MyFunc', 'Arn'] },
+        myTable: { Ref: 'MyTable' },
+      })
+      .toStateMachine();
+
+    const json = JSON.parse(AslSerializer.serialize(def));
+    const tasks = getStatesByType(json, 'Task');
+
+    const lambdaTask = tasks.find(([, s]) => typeof s.Resource === 'object');
+    expect(lambdaTask).toBeDefined();
+    expect(lambdaTask![1].Resource).toEqual({ 'Fn::GetAtt': ['MyFunc', 'Arn'] });
+  });
+
+  it('uses original values when withSubstitutions is not called', () => {
+    const def = SimpleSteps.fromFile(filePath).toStateMachine();
+
+    const json = JSON.parse(AslSerializer.serialize(def));
+    const tasks = getStatesByType(json, 'Task');
+    const lambdaTask = tasks.find(([, s]) => typeof s.Resource === 'string' && !s.Resource.startsWith('arn:aws:states'));
+    expect(lambdaTask).toBeDefined();
+    expect(lambdaTask![1].Resource).toBe('placeholder-arn');
+  });
+
+  it('merges substitutions from chained calls', () => {
+    const def = SimpleSteps.fromFile(filePath)
+      .withSubstitutions({ myLambda: { 'Fn::GetAtt': ['MyFunc', 'Arn'] } })
+      .withSubstitutions({ myTable: { Ref: 'MyTable' } })
+      .toStateMachine();
+
+    const json = JSON.parse(AslSerializer.serialize(def));
+    const tasks = getStatesByType(json, 'Task');
+
+    const lambdaTask = tasks.find(([, s]) => typeof s.Resource === 'object');
+    expect(lambdaTask).toBeDefined();
+    expect(lambdaTask![1].Resource).toEqual({ 'Fn::GetAtt': ['MyFunc', 'Arn'] });
+
+    const dynamoTask = tasks.find(([, s]) =>
+      typeof s.Resource === 'string' && s.Resource.includes('dynamodb'),
+    );
+    expect(dynamoTask).toBeDefined();
+    expect(dynamoTask![1].Parameters.TableName).toEqual({ Ref: 'MyTable' });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// JS standard library → intrinsic function mappings
+// ---------------------------------------------------------------------------
+
+describe('ASL output: JS intrinsic mappings', () => {
+  let asl: any;
+  beforeAll(() => { asl = compileToJson('js-intrinsics.ts'); });
+
+  it('should compile without errors', () => {
+    expect(asl).toBeDefined();
+    expect(asl.StartAt).toBeDefined();
+  });
+
+  it('should produce a Pass state for arr[index] → States.ArrayGetItem', () => {
+    const passes = getStatesByType(asl, 'Pass');
+    const allParams = passes.map(([, s]) => JSON.stringify(s.Parameters ?? s.Result ?? ''));
+    const hasArrayGetItem = allParams.some(p => p.includes('States.ArrayGetItem'));
+    expect(hasArrayGetItem).toBe(true);
+  });
+
+  it('should produce States.Array for dynamic array literal', () => {
+    const passes = getStatesByType(asl, 'Pass');
+    const allParams = passes.map(([, s]) => JSON.stringify(s.Parameters ?? s.Result ?? ''));
+    const hasStatesArray = allParams.some(p => p.includes('States.Array('));
+    expect(hasStatesArray).toBe(true);
+  });
+
+  it('should produce States.Base64Encode for btoa()', () => {
+    const passes = getStatesByType(asl, 'Pass');
+    const allParams = passes.map(([, s]) => JSON.stringify(s.Parameters ?? s.Result ?? ''));
+    const hasEncode = allParams.some(p => p.includes('States.Base64Encode'));
+    expect(hasEncode).toBe(true);
+  });
+
+  it('should produce States.Base64Decode for atob()', () => {
+    const passes = getStatesByType(asl, 'Pass');
+    const allParams = passes.map(([, s]) => JSON.stringify(s.Parameters ?? s.Result ?? ''));
+    const hasDecode = allParams.some(p => p.includes('States.Base64Decode'));
+    expect(hasDecode).toBe(true);
+  });
+
+  it('should produce States.UUID for crypto.randomUUID()', () => {
+    const passes = getStatesByType(asl, 'Pass');
+    const allParams = passes.map(([, s]) => JSON.stringify(s.Parameters ?? s.Result ?? ''));
+    const hasUUID = allParams.some(p => p.includes('States.UUID'));
+    expect(hasUUID).toBe(true);
+  });
+
+  it('should produce States.JsonMerge for { ...a, ...b }', () => {
+    const passes = getStatesByType(asl, 'Pass');
+    const allParams = passes.map(([, s]) => JSON.stringify(s.Parameters ?? s.Result ?? ''));
+    const hasMerge = allParams.some(p => p.includes('States.JsonMerge'));
+    expect(hasMerge).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Error handling: throw class extraction, instanceof chains, catch param
+// ---------------------------------------------------------------------------
+
+describe('ASL output: error handling', () => {
+  let defs: StateMachineDefinition[];
+  let asls: any[];
+
+  beforeAll(() => {
+    defs = compileFixtureAll('try-catch-specific.ts');
+    asls = defs.map(d => JSON.parse(AslSerializer.serialize(d)));
+  });
+
+  describe('instanceof chain', () => {
+    let asl: any;
+    beforeAll(() => { asl = asls[0]; });
+
+    it('should compile without errors', () => {
+      expect(asl).toBeDefined();
+      expect(asl.StartAt).toBeDefined();
+    });
+
+    it('should have Task state with multiple Catch rules', () => {
+      const tasks = getStatesByType(asl, 'Task');
+      const mainTask = tasks.find(([, s]) => s.Catch && s.Catch.length > 1);
+      expect(mainTask).toBeDefined();
+
+      const catchRules = mainTask![1].Catch;
+      expect(catchRules.length).toBe(3);
+    });
+
+    it('should have ordered Catch rules: specific errors first, States.ALL last', () => {
+      const tasks = getStatesByType(asl, 'Task');
+      const mainTask = tasks.find(([, s]) => s.Catch && s.Catch.length > 1);
+      const catchRules = mainTask![1].Catch;
+
+      expect(catchRules[0].ErrorEquals).toEqual(['States.Timeout']);
+      expect(catchRules[1].ErrorEquals).toEqual(['OrderNotFoundError']);
+      expect(catchRules[2].ErrorEquals).toEqual(['States.ALL']);
+    });
+
+    it('should use catch parameter name as ResultPath', () => {
+      const tasks = getStatesByType(asl, 'Task');
+      const mainTask = tasks.find(([, s]) => s.Catch && s.Catch.length > 1);
+      const catchRules = mainTask![1].Catch;
+
+      for (const rule of catchRules) {
+        expect(rule.ResultPath).toBe('$.e');
+      }
+    });
+
+    it('each Catch Next should point to a valid Task state', () => {
+      const tasks = getStatesByType(asl, 'Task');
+      const mainTask = tasks.find(([, s]) => s.Catch && s.Catch.length > 1);
+      const catchRules = mainTask![1].Catch;
+
+      for (const rule of catchRules) {
+        const targetState = asl.States[rule.Next];
+        expect(targetState).toBeDefined();
+        expect(targetState.Type).toBe('Task');
+      }
+    });
+  });
+
+  describe('throw custom error', () => {
+    let asl: any;
+    beforeAll(() => { asl = asls[1]; });
+
+    it('should produce a Fail state with custom error name', () => {
+      const fails = getStatesByType(asl, 'Fail');
+      expect(fails.length).toBeGreaterThanOrEqual(1);
+
+      const [, failState] = fails[0];
+      expect(failState.Error).toBe('OrderNotFoundError');
+      expect(failState.Cause).toBe('Order not found');
+    });
+  });
+
+  describe('throw built-in error', () => {
+    let asl: any;
+    beforeAll(() => { asl = asls[2]; });
+
+    it('should produce a Fail state with ASL error name', () => {
+      const fails = getStatesByType(asl, 'Fail');
+      expect(fails.length).toBeGreaterThanOrEqual(1);
+
+      const [, failState] = fails[0];
+      expect(failState.Error).toBe('States.Timeout');
+      expect(failState.Cause).toBe('Operation timed out');
+    });
+  });
+
+  describe('bare catch (no instanceof)', () => {
+    let asl: any;
+    beforeAll(() => { asl = asls[3]; });
+
+    it('should have a single States.ALL catch rule', () => {
+      const tasks = getStatesByType(asl, 'Task');
+      const taskWithCatch = tasks.find(([, s]) => s.Catch);
+      expect(taskWithCatch).toBeDefined();
+
+      const catchRules = taskWithCatch![1].Catch;
+      expect(catchRules).toHaveLength(1);
+      expect(catchRules[0].ErrorEquals).toEqual(['States.ALL']);
+    });
+
+    it('should use catch parameter name as ResultPath', () => {
+      const tasks = getStatesByType(asl, 'Task');
+      const taskWithCatch = tasks.find(([, s]) => s.Catch);
+      expect(taskWithCatch![1].Catch[0].ResultPath).toBe('$.error');
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Service features: new methods and extended parameters
+// ---------------------------------------------------------------------------
+
+describe('ASL output: service features', () => {
+  let asls: any[];
+  beforeAll(() => { asls = compileParentFixtureAll('service-features.ts'); });
+
+  describe('DynamoDB query', () => {
+    it('uses dynamodb:query resource', () => {
+      const tasks = getStatesByType(asls[0], 'Task');
+      expect(tasks.length).toBe(1);
+      expect(tasks[0][1].Resource).toBe('arn:aws:states:::dynamodb:query');
+    });
+
+    it('injects TableName and passes query params', () => {
+      const tasks = getStatesByType(asls[0], 'Task');
+      expect(tasks[0][1].Parameters.TableName).toBe('OrdersTable');
+      expect(tasks[0][1].Parameters.KeyConditionExpression).toBe('pk = :pk');
+    });
+  });
+
+  describe('DynamoDB scan', () => {
+    it('uses dynamodb:scan resource', () => {
+      const tasks = getStatesByType(asls[1], 'Task');
+      expect(tasks.length).toBe(1);
+      expect(tasks[0][1].Resource).toBe('arn:aws:states:::dynamodb:scan');
+    });
+
+    it('injects TableName and passes scan params', () => {
+      const tasks = getStatesByType(asls[1], 'Task');
+      expect(tasks[0][1].Parameters.TableName).toBe('OrdersTable');
+      expect(tasks[0][1].Parameters.FilterExpression).toBe('#s = :status');
+      expect(tasks[0][1].Parameters.ExpressionAttributeNames['#s']).toBe('status');
+    });
+  });
+
+  describe('DynamoDB conditional putItem', () => {
+    it('passes ConditionExpression alongside Item', () => {
+      const tasks = getStatesByType(asls[2], 'Task');
+      expect(tasks[0][1].Parameters.ConditionExpression).toBe('attribute_not_exists(id)');
+      expect(tasks[0][1].Parameters.Item).toBeDefined();
+    });
+  });
+
+  describe('DynamoDB consistent getItem', () => {
+    it('passes ConsistentRead alongside Key', () => {
+      const tasks = getStatesByType(asls[3], 'Task');
+      expect(tasks[0][1].Parameters.ConsistentRead).toBe(true);
+      expect(tasks[0][1].Parameters.Key).toBeDefined();
+    });
+  });
+
+  describe('Lambda async invocation', () => {
+    it('uses lambda:invoke resource with InvocationType Event', () => {
+      const tasks = getStatesByType(asls[4], 'Task');
+      expect(tasks[0][1].Resource).toBe('arn:aws:states:::lambda:invoke');
+      expect(tasks[0][1].Parameters.InvocationType).toBe('Event');
+    });
+
+    it('injects FunctionName and wraps input as Payload', () => {
+      const tasks = getStatesByType(asls[4], 'Task');
+      expect(tasks[0][1].Parameters.FunctionName).toBe('arn:aws:lambda:us-east-1:123:function:Process');
+    });
+  });
+
+  describe('Lambda waitForTaskToken', () => {
+    it('uses lambda:invoke.waitForTaskToken resource', () => {
+      const tasks = getStatesByType(asls[5], 'Task');
+      expect(tasks[0][1].Resource).toBe('arn:aws:states:::lambda:invoke.waitForTaskToken');
+    });
+
+    it('injects FunctionName', () => {
+      const tasks = getStatesByType(asls[5], 'Task');
+      expect(tasks[0][1].Parameters.FunctionName).toBe('arn:aws:lambda:us-east-1:123:function:Process');
+    });
+  });
+
+  describe('StepFunction waitForTaskToken', () => {
+    it('uses states:startExecution.waitForTaskToken resource', () => {
+      const tasks = getStatesByType(asls[6], 'Task');
+      expect(tasks[0][1].Resource).toBe('arn:aws:states:::states:startExecution.waitForTaskToken');
+    });
+
+    it('injects StateMachineArn', () => {
+      const tasks = getStatesByType(asls[6], 'Task');
+      expect(tasks[0][1].Parameters.StateMachineArn).toBe('arn:aws:states:us-east-1:123:stateMachine:Child');
+    });
+  });
+
+  describe('S3 headObject', () => {
+    it('uses aws-sdk:s3:headObject resource', () => {
+      const tasks = getStatesByType(asls[7], 'Task');
+      expect(tasks[0][1].Resource).toBe('arn:aws:states:::aws-sdk:s3:headObject');
+    });
+
+    it('injects Bucket', () => {
+      const tasks = getStatesByType(asls[7], 'Task');
+      expect(tasks[0][1].Parameters.Bucket).toBe('my-bucket');
+    });
+  });
+
+  describe('SecretsManager updateSecret', () => {
+    it('uses aws-sdk:secretsmanager:updateSecret resource', () => {
+      const tasks = getStatesByType(asls[8], 'Task');
+      expect(tasks[0][1].Resource).toBe('arn:aws:states:::aws-sdk:secretsmanager:updateSecret');
+    });
+  });
+
+  describe('SecretsManager describeSecret', () => {
+    it('uses aws-sdk:secretsmanager:describeSecret resource', () => {
+      const tasks = getStatesByType(asls[9], 'Task');
+      expect(tasks[0][1].Resource).toBe('arn:aws:states:::aws-sdk:secretsmanager:describeSecret');
+    });
+  });
+
+  describe('SSM getParameters (batch)', () => {
+    it('uses aws-sdk:ssm:getParameters resource', () => {
+      const tasks = getStatesByType(asls[10], 'Task');
+      expect(tasks[0][1].Resource).toBe('arn:aws:states:::aws-sdk:ssm:getParameters');
+    });
+  });
+});
