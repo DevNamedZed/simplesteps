@@ -18,6 +18,9 @@ export interface VariableResolution {
   readonly inputSymbol: ts.Symbol | undefined;
   /** The ts.Symbol of the context parameter (factory param 0). */
   readonly contextSymbol: ts.Symbol | undefined;
+  /** Deferred inline bindings: param symbol → argument expression.
+   *  Resolved lazily when the identifier is first accessed. */
+  readonly deferredBindings?: ReadonlyMap<ts.Symbol, ts.Expression>;
 }
 
 export interface ResolvedExpression {
@@ -32,11 +35,17 @@ export interface ResolvedExpression {
 
 export class VariableResolutionBuilder {
   readonly variables = new Map<ts.Symbol, VariableInfo>();
+  readonly deferredBindings = new Map<ts.Symbol, ts.Expression>();
   inputSymbol: ts.Symbol | undefined;
   contextSymbol: ts.Symbol | undefined;
 
   addVariable(symbol: ts.Symbol, info: VariableInfo): void {
     this.variables.set(symbol, info);
+  }
+
+  /** Register a deferred inline binding that will be resolved lazily. */
+  addDeferredBinding(paramSymbol: ts.Symbol, argExpression: ts.Expression): void {
+    this.deferredBindings.set(paramSymbol, argExpression);
   }
 
   getBySymbol(symbol: ts.Symbol): VariableInfo | undefined {
@@ -48,6 +57,7 @@ export class VariableResolutionBuilder {
       variables: this.variables,
       inputSymbol: this.inputSymbol,
       contextSymbol: this.contextSymbol,
+      deferredBindings: this.deferredBindings.size > 0 ? this.deferredBindings : undefined,
     };
   }
 }
@@ -243,6 +253,14 @@ export function resolveExpression(
         }
         if (info.jsonPath) {
           return { kind: 'jsonpath', path: info.jsonPath };
+        }
+      }
+
+      // Check deferred inline bindings — resolve the argument expression lazily
+      if (variables.deferredBindings) {
+        const argExpr = variables.deferredBindings.get(sym);
+        if (argExpr) {
+          return resolveExpression(context, argExpr, variables);
         }
       }
     }

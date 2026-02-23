@@ -58,7 +58,7 @@ function buildCFGFromFixture(fixtureFile: string): {
   expect(factory.body).toBeDefined();
   expect(ts.isBlock(factory.body!)).toBe(true);
 
-  const cfg = buildCFG(context, factory.body! as ts.Block);
+  const { cfg } = buildCFG(context, factory.body! as ts.Block);
   return { cfg, context };
 }
 

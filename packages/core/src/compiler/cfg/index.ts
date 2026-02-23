@@ -16,3 +16,4 @@ export type {
 } from './types.js';
 
 export { buildCFG } from './cfgBuilder.js';
+export type { BuildCFGResult } from './cfgBuilder.js';

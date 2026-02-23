@@ -135,9 +135,9 @@ describe('NotificationStack', () => {
       definition = extractDefinition(template);
     });
 
-    test('has a Choice state (if/else on check.valid)', () => {
+    test('has exactly 1 Choice state (if/else on check.valid)', () => {
       const choices = getStatesByType(definition, 'Choice');
-      expect(choices.length).toBeGreaterThanOrEqual(1);
+      expect(choices.length).toBe(1);
     });
 
     test('has a Task state for Lambda invocation', () => {
@@ -156,9 +156,9 @@ describe('NotificationStack', () => {
       expect(hasResourcePattern(definition, 'sqs')).toBe(true);
     });
 
-    test('at least 6 states total', () => {
+    test('has exactly 8 top-level states', () => {
       const stateNames = getAllStateNames(definition);
-      expect(stateNames.length).toBeGreaterThanOrEqual(6);
+      expect(stateNames.length).toBe(8);
     });
   });
 });

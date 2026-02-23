@@ -3,6 +3,11 @@
 // Uses placeholder values that are overridden at deploy time via the
 // substitutions option. This mirrors how the CDK construct injects
 // real resource ARNs.
+//
+// Note: This fixture intentionally diverges from lib/stack.ts:
+// - Uses `return { status: 'INVALID' }` instead of `throw new Error(...)`,
+//   producing a Pass state instead of Fail. Both are valid SimpleSteps patterns.
+// - Uses document-format DynamoDB items (no `{S:...}` wrappers).
 
 import { Steps, SimpleStepContext } from '../../../src/runtime/index';
 import { Lambda } from '../../../src/runtime/services/Lambda';

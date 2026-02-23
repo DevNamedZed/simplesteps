@@ -1,6 +1,7 @@
 import ts from 'typescript';
 import { CompilerContext } from '../compilerContext.js';
 import { ErrorCodes } from '../diagnosticCodes.js';
+import type { InlinableHelper, InlineBinding } from '../analysis/asyncHelperAnalyzer.js';
 import type {
   BasicBlock,
   ControlFlowGraph,
@@ -27,8 +28,13 @@ class CFGBuilderState {
     return id;
   }
 
-  addBlock(id: string, statements: readonly ts.Statement[], terminator: Terminator): void {
-    this.blocks.set(id, { id, statements, terminator });
+  addBlock(
+    id: string,
+    statements: readonly ts.Statement[],
+    terminator: Terminator,
+    returnTargetVar?: BasicBlock['returnTargetVar'],
+  ): void {
+    this.blocks.set(id, { id, statements, terminator, ...(returnTargetVar && { returnTargetVar }) });
   }
 }
 
@@ -37,22 +43,59 @@ class CFGBuilderState {
 // ---------------------------------------------------------------------------
 
 /**
+ * Result of building a CFG, including any inline bindings from helper
+ * function inlining.
+ */
+export interface BuildCFGResult {
+  readonly cfg: ControlFlowGraph;
+  readonly inlineBindings: readonly InlineBinding[];
+}
+
+/**
  * Build a control flow graph from a function body block.
  *
  * Takes a `ts.Block` (the factory function body), not a full
  * `StepFunctionCallSite` — keeps CFG construction decoupled from discovery.
+ *
+ * When `helperRegistry` is provided, awaited calls to functions in the
+ * registry are inlined: the helper's body statements are spliced into the
+ * CFG at the call site, and parameter-to-argument bindings are returned
+ * so the variable resolver can map helper parameters to caller values.
  */
-export function buildCFG(context: CompilerContext, body: ts.Block): ControlFlowGraph {
+export function buildCFG(
+  context: CompilerContext,
+  body: ts.Block,
+  helperRegistry?: ReadonlyMap<ts.Symbol, InlinableHelper>,
+): BuildCFGResult {
   const state = new CFGBuilderState();
+  const inlineBindings: InlineBinding[] = [];
   const entryId = state.newBlockId('entry');
 
   const statements = Array.from(body.statements);
-  processStatements(state, context, statements, entryId, []);
+  processStatements(state, context, statements, entryId, [], { helperRegistry, inlineBindings });
 
   return {
-    entry: entryId,
-    blocks: state.blocks,
+    cfg: {
+      entry: entryId,
+      blocks: state.blocks,
+    },
+    inlineBindings,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Inlining context — threaded through to detect and inline helper calls
+// ---------------------------------------------------------------------------
+
+interface InliningContext {
+  readonly helperRegistry?: ReadonlyMap<ts.Symbol, InlinableHelper>;
+  readonly inlineBindings?: InlineBinding[];
+  /** If set, `return` terminators become `fall` to this block (used inside inlined helpers). */
+  readonly returnOverride?: string;
+  /** Caller's variable name for value-returning helpers (e.g. `const data = await helper()`). */
+  readonly returnVarName?: string;
+  /** Caller's variable symbol for value-returning helpers. */
+  readonly returnVarSymbol?: ts.Symbol;
 }
 
 // ---------------------------------------------------------------------------
@@ -75,6 +118,7 @@ function processStatements(
   statements: readonly ts.Statement[],
   currentBlockId: string,
   loopStack: readonly LoopContext[],
+  inlining: InliningContext = {},
 ): string | null {
   const accumulated: ts.Statement[] = [];
 
@@ -84,6 +128,55 @@ function processStatements(
 
     // --- Return statement ---
     if (ts.isReturnStatement(stmt)) {
+      // Inside an inlined helper: return → fall to continuation
+      if (inlining.returnOverride) {
+        if (stmt.expression) {
+          if (inlining.returnVarName && inlining.returnVarSymbol) {
+            // Value-returning helper: caller captures the result
+            const returnTarget = { name: inlining.returnVarName, symbol: inlining.returnVarSymbol };
+
+            if (ts.isAwaitExpression(stmt.expression)) {
+              // return await svc.call(...) → push as fire-and-forget statement,
+              // then override ResultPath via returnTargetVar on the block
+              const exprStmt = ts.factory.createExpressionStatement(stmt.expression);
+              ts.setTextRange(exprStmt, stmt);
+              accumulated.push(exprStmt);
+              state.addBlock(currentBlockId, accumulated, {
+                kind: 'fall',
+                target: inlining.returnOverride,
+              }, returnTarget);
+            } else {
+              // return someVar → alias the caller's variable to this expression
+              state.addBlock(currentBlockId, accumulated, {
+                kind: 'fall',
+                target: inlining.returnOverride,
+              }, { ...returnTarget, expression: stmt.expression });
+            }
+          } else if (ts.isAwaitExpression(stmt.expression)) {
+            // Void call of value-returning helper: result discarded but side effects preserved
+            const exprStmt = ts.factory.createExpressionStatement(stmt.expression);
+            ts.setTextRange(exprStmt, stmt);
+            accumulated.push(exprStmt);
+            state.addBlock(currentBlockId, accumulated, {
+              kind: 'fall',
+              target: inlining.returnOverride,
+            });
+          } else {
+            // Non-await return value discarded in void call — no effect needed
+            state.addBlock(currentBlockId, accumulated, {
+              kind: 'fall',
+              target: inlining.returnOverride,
+            });
+          }
+        } else {
+          // Void return — fall to continuation
+          state.addBlock(currentBlockId, accumulated, {
+            kind: 'fall',
+            target: inlining.returnOverride,
+          });
+        }
+        return null;
+      }
       state.addBlock(currentBlockId, accumulated, {
         kind: 'return',
         expression: stmt.expression,
@@ -131,7 +224,7 @@ function processStatements(
     // --- If/else ---
     if (ts.isIfStatement(stmt)) {
       const result = processIfStatement(
-        state, context, stmt, accumulated, currentBlockId, remaining, loopStack,
+        state, context, stmt, accumulated, currentBlockId, remaining, loopStack, inlining,
       );
       return result;
     }
@@ -139,12 +232,12 @@ function processStatements(
     // --- While loop ---
     if (ts.isWhileStatement(stmt)) {
       const afterLoop = processWhileStatement(
-        state, context, stmt, accumulated, currentBlockId, loopStack,
+        state, context, stmt, accumulated, currentBlockId, loopStack, inlining,
       );
       if (afterLoop === null) return null;
       // Continue processing remaining statements in the exit block
       if (remaining.length > 0) {
-        return processStatements(state, context, remaining, afterLoop, loopStack);
+        return processStatements(state, context, remaining, afterLoop, loopStack, inlining);
       }
       return afterLoop;
     }
@@ -152,11 +245,11 @@ function processStatements(
     // --- Do-while loop ---
     if (ts.isDoStatement(stmt)) {
       const afterLoop = processDoWhileStatement(
-        state, context, stmt, accumulated, currentBlockId, loopStack,
+        state, context, stmt, accumulated, currentBlockId, loopStack, inlining,
       );
       if (afterLoop === null) return null;
       if (remaining.length > 0) {
-        return processStatements(state, context, remaining, afterLoop, loopStack);
+        return processStatements(state, context, remaining, afterLoop, loopStack, inlining);
       }
       return afterLoop;
     }
@@ -164,11 +257,11 @@ function processStatements(
     // --- For(;;) loop ---
     if (ts.isForStatement(stmt)) {
       const afterLoop = processForStatement(
-        state, context, stmt, accumulated, currentBlockId, loopStack,
+        state, context, stmt, accumulated, currentBlockId, loopStack, inlining,
       );
       if (afterLoop === null) return null;
       if (remaining.length > 0) {
-        return processStatements(state, context, remaining, afterLoop, loopStack);
+        return processStatements(state, context, remaining, afterLoop, loopStack, inlining);
       }
       return afterLoop;
     }
@@ -176,11 +269,11 @@ function processStatements(
     // --- For...of loop (map state) ---
     if (ts.isForOfStatement(stmt)) {
       const afterLoop = processForOfStatement(
-        state, context, stmt, accumulated, currentBlockId, loopStack,
+        state, context, stmt, accumulated, currentBlockId, loopStack, inlining,
       );
       if (afterLoop === null) return null;
       if (remaining.length > 0) {
-        return processStatements(state, context, remaining, afterLoop, loopStack);
+        return processStatements(state, context, remaining, afterLoop, loopStack, inlining);
       }
       return afterLoop;
     }
@@ -188,7 +281,7 @@ function processStatements(
     // --- Try/catch/finally ---
     if (ts.isTryStatement(stmt)) {
       const afterTry = processTryStatement(
-        state, context, stmt, accumulated, currentBlockId, remaining, loopStack,
+        state, context, stmt, accumulated, currentBlockId, remaining, loopStack, inlining,
       );
       return afterTry;
     }
@@ -196,7 +289,7 @@ function processStatements(
     // --- Switch/case ---
     if (ts.isSwitchStatement(stmt)) {
       const afterSwitch = processSwitchStatement(
-        state, context, stmt, accumulated, currentBlockId, remaining, loopStack,
+        state, context, stmt, accumulated, currentBlockId, remaining, loopStack, inlining,
       );
       return afterSwitch;
     }
@@ -216,9 +309,19 @@ function processStatements(
         });
 
         if (remaining.length > 0) {
-          return processStatements(state, context, remaining, exitBlockId, loopStack);
+          return processStatements(state, context, remaining, exitBlockId, loopStack, inlining);
         }
         return exitBlockId;
+      }
+    }
+
+    // --- Async helper function call (inlining) ---
+    if (inlining.helperRegistry) {
+      const helperResult = tryInlineHelperCall(
+        state, context, stmt, accumulated, currentBlockId, remaining, loopStack, inlining,
+      );
+      if (helperResult !== undefined) {
+        return helperResult;
       }
     }
 
@@ -227,6 +330,18 @@ function processStatements(
   }
 
   // End of statements — finalize block with a fall-through to a terminal block
+  // Inside an inlined helper: fall to the continuation block instead of implicit return
+  if (inlining.returnOverride) {
+    if (accumulated.length > 0) {
+      const bridgeId = state.newBlockId('inline_exit');
+      state.addBlock(currentBlockId, accumulated, { kind: 'fall', target: bridgeId });
+      state.addBlock(bridgeId, [], { kind: 'fall', target: inlining.returnOverride });
+      return bridgeId;
+    }
+    state.addBlock(currentBlockId, accumulated, { kind: 'fall', target: inlining.returnOverride });
+    return currentBlockId;
+  }
+
   // If there are no remaining statements, this is an implicit return
   const exitId = state.newBlockId('exit');
   state.addBlock(currentBlockId, accumulated, {
@@ -249,6 +364,7 @@ function processIfStatement(
   currentBlockId: string,
   remaining: readonly ts.Statement[],
   loopStack: readonly LoopContext[],
+  inlining: InliningContext = {},
 ): string | null {
   const thenBlockId = state.newBlockId('then');
   const elseBlockId = state.newBlockId('else');
@@ -263,13 +379,13 @@ function processIfStatement(
 
   // Process then branch
   const thenBody = getBlockStatements(stmt.thenStatement);
-  const thenExit = processStatements(state, context, thenBody, thenBlockId, loopStack);
+  const thenExit = processStatements(state, context, thenBody, thenBlockId, loopStack, inlining);
 
   // Process else branch
   let elseExit: string | null;
   if (stmt.elseStatement) {
     const elseBody = getBlockStatements(stmt.elseStatement);
-    elseExit = processStatements(state, context, elseBody, elseBlockId, loopStack);
+    elseExit = processStatements(state, context, elseBody, elseBlockId, loopStack, inlining);
   } else {
     // No else: the else block is empty and falls through to merge
     elseExit = elseBlockId;
@@ -283,7 +399,7 @@ function processIfStatement(
       const mergeId = state.newBlockId('merge');
       state.addBlock(elseBlockId, [], { kind: 'fall', target: mergeId });
       if (remaining.length > 0) {
-        return processStatements(state, context, remaining, mergeId, loopStack);
+        return processStatements(state, context, remaining, mergeId, loopStack, inlining);
       }
       state.addBlock(mergeId, [], { kind: 'return', expression: undefined });
       return mergeId;
@@ -310,7 +426,7 @@ function processIfStatement(
 
   // Process remaining statements in merge block
   if (remaining.length > 0) {
-    return processStatements(state, context, remaining, mergeId, loopStack);
+    return processStatements(state, context, remaining, mergeId, loopStack, inlining);
   }
 
   // No remaining — merge falls through to implicit return
@@ -329,6 +445,7 @@ function processWhileStatement(
   accumulated: readonly ts.Statement[],
   currentBlockId: string,
   loopStack: readonly LoopContext[],
+  inlining: InliningContext = {},
 ): string | null {
   const condBlockId = state.newBlockId('while_cond');
   const bodyBlockId = state.newBlockId('while_body');
@@ -352,7 +469,7 @@ function processWhileStatement(
   const loopCtx: LoopContext = { conditionBlock: condBlockId, exitBlock: exitBlockId };
   const bodyStatements = getBlockStatements(stmt.statement);
   const bodyExit = processStatements(
-    state, context, bodyStatements, bodyBlockId, [...loopStack, loopCtx],
+    state, context, bodyStatements, bodyBlockId, [...loopStack, loopCtx], inlining,
   );
 
   // Body exit loops back to condition
@@ -374,6 +491,7 @@ function processDoWhileStatement(
   accumulated: readonly ts.Statement[],
   currentBlockId: string,
   loopStack: readonly LoopContext[],
+  inlining: InliningContext = {},
 ): string | null {
   const bodyBlockId = state.newBlockId('do_body');
   const condBlockId = state.newBlockId('do_cond');
@@ -389,7 +507,7 @@ function processDoWhileStatement(
   const loopCtx: LoopContext = { conditionBlock: condBlockId, exitBlock: exitBlockId };
   const bodyStatements = getBlockStatements(stmt.statement);
   const bodyExit = processStatements(
-    state, context, bodyStatements, bodyBlockId, [...loopStack, loopCtx],
+    state, context, bodyStatements, bodyBlockId, [...loopStack, loopCtx], inlining,
   );
 
   // Body exit falls to condition check
@@ -419,6 +537,7 @@ function processForStatement(
   accumulated: readonly ts.Statement[],
   currentBlockId: string,
   loopStack: readonly LoopContext[],
+  inlining: InliningContext = {},
 ): string | null {
   // Process initializer as part of the pre-loop block
   const initStatements: ts.Statement[] = [...accumulated];
@@ -466,7 +585,7 @@ function processForStatement(
   const loopCtx: LoopContext = { conditionBlock: updateBlockId, exitBlock: exitBlockId };
   const bodyStatements = getBlockStatements(stmt.statement);
   const bodyExit = processStatements(
-    state, context, bodyStatements, bodyBlockId, [...loopStack, loopCtx],
+    state, context, bodyStatements, bodyBlockId, [...loopStack, loopCtx], inlining,
   );
 
   // Body exit → update block
@@ -500,6 +619,7 @@ function processForOfStatement(
   accumulated: readonly ts.Statement[],
   currentBlockId: string,
   loopStack: readonly LoopContext[],
+  inlining: InliningContext = {},
 ): string | null {
   const bodyBlockId = state.newBlockId('forof_body');
   const exitBlockId = state.newBlockId('forof_exit');
@@ -521,7 +641,7 @@ function processForOfStatement(
   const loopCtx: LoopContext = { conditionBlock: bodyBlockId, exitBlock: exitBlockId };
   const bodyStatements = getBlockStatements(stmt.statement);
   const bodyExit = processStatements(
-    state, context, bodyStatements, bodyBlockId, [...loopStack, loopCtx],
+    state, context, bodyStatements, bodyBlockId, [...loopStack, loopCtx], inlining,
   );
 
   // Body exit: implicit end of iteration
@@ -545,6 +665,7 @@ function processTryStatement(
   currentBlockId: string,
   remaining: readonly ts.Statement[],
   loopStack: readonly LoopContext[],
+  inlining: InliningContext = {},
 ): string | null {
   const tryBlockId = state.newBlockId('try');
   const finallyBlockId = stmt.finallyBlock ? state.newBlockId('finally') : undefined;
@@ -573,7 +694,7 @@ function processTryStatement(
       for (const handler of instanceofChain.handlers) {
         const handlerBlockId = state.newBlockId(`catch_${handler.className}`);
         const handlerExit = processStatements(
-          state, context, handler.statements, handlerBlockId, loopStack,
+          state, context, handler.statements, handlerBlockId, loopStack, inlining,
         );
         if (handlerExit !== null) {
           patchBlockTerminator(state, handlerExit, { kind: 'fall', target: targetAfterCatch });
@@ -585,7 +706,7 @@ function processTryStatement(
       if (instanceofChain.fallbackStatements.length > 0) {
         const fallbackBlockId = state.newBlockId('catch_fallback');
         const fallbackExit = processStatements(
-          state, context, instanceofChain.fallbackStatements, fallbackBlockId, loopStack,
+          state, context, instanceofChain.fallbackStatements, fallbackBlockId, loopStack, inlining,
         );
         if (fallbackExit !== null) {
           patchBlockTerminator(state, fallbackExit, { kind: 'fall', target: targetAfterCatch });
@@ -596,7 +717,7 @@ function processTryStatement(
     } else {
       // No instanceof pattern — whole catch block is a States.ALL fallback
       const catchBlockId = state.newBlockId('catch');
-      catchExit = processStatements(state, context, catchStatements, catchBlockId, loopStack);
+      catchExit = processStatements(state, context, catchStatements, catchBlockId, loopStack, inlining);
       if (catchExit !== null) {
         patchBlockTerminator(state, catchExit, { kind: 'fall', target: targetAfterCatch });
       }
@@ -617,7 +738,7 @@ function processTryStatement(
 
   // Process try block
   const tryStatements = Array.from(stmt.tryBlock.statements);
-  const tryExit = processStatements(state, context, tryStatements, tryBlockId, loopStack);
+  const tryExit = processStatements(state, context, tryStatements, tryBlockId, loopStack, inlining);
 
   // Wire try exit to merge (or finally)
   const targetAfterTry = finallyBlockId ?? mergeId;
@@ -629,7 +750,7 @@ function processTryStatement(
   if (finallyBlockId && stmt.finallyBlock) {
     const finallyStatements = Array.from(stmt.finallyBlock.statements);
     const finallyExit = processStatements(
-      state, context, finallyStatements, finallyBlockId, loopStack,
+      state, context, finallyStatements, finallyBlockId, loopStack, inlining,
     );
 
     if (finallyExit !== null) {
@@ -639,7 +760,7 @@ function processTryStatement(
 
   // Process remaining statements in merge block
   if (remaining.length > 0) {
-    return processStatements(state, context, remaining, mergeId, loopStack);
+    return processStatements(state, context, remaining, mergeId, loopStack, inlining);
   }
 
   // Always create merge block so the CFG is structurally complete
@@ -758,6 +879,7 @@ function processSwitchStatement(
   currentBlockId: string,
   remaining: readonly ts.Statement[],
   loopStack: readonly LoopContext[],
+  inlining: InliningContext = {},
 ): string | null {
   const mergeId = state.newBlockId('switch_merge');
   const discriminant = stmt.expression;
@@ -799,7 +921,7 @@ function processSwitchStatement(
   if (defaultClause && defaultClause.statements.length > 0) {
     defaultBlockId = state.newBlockId('switch_default');
     const defaultBody = filterBreaks(Array.from(defaultClause.statements));
-    const defaultExit = processStatements(state, context, defaultBody, defaultBlockId, switchLoopStack);
+    const defaultExit = processStatements(state, context, defaultBody, defaultBlockId, switchLoopStack, inlining);
     if (defaultExit !== null) {
       patchBlockTerminator(state, defaultExit, { kind: 'fall', target: mergeId });
     }
@@ -819,7 +941,7 @@ function processSwitchStatement(
     // Create the body block for this case
     const caseBodyId = state.newBlockId(`switch_case_${i}`);
     const caseBody = filterBreaks(Array.from(clause.statements));
-    const caseExit = processStatements(state, context, caseBody, caseBodyId, switchLoopStack);
+    const caseExit = processStatements(state, context, caseBody, caseBodyId, switchLoopStack, inlining);
     if (caseExit !== null) {
       patchBlockTerminator(state, caseExit, { kind: 'fall', target: mergeId });
     }
@@ -850,7 +972,7 @@ function processSwitchStatement(
 
   // Process remaining statements in the merge block
   if (remaining.length > 0) {
-    return processStatements(state, context, remaining, mergeId, loopStack);
+    return processStatements(state, context, remaining, mergeId, loopStack, inlining);
   }
 
   state.addBlock(mergeId, [], { kind: 'return', expression: undefined });
@@ -865,6 +987,136 @@ function filterBreaks(stmts: ts.Statement[]): ts.Statement[] {
     return stmts.slice(0, -1);
   }
   return stmts;
+}
+
+// ---------------------------------------------------------------------------
+// Helper function inlining
+// ---------------------------------------------------------------------------
+
+/**
+ * Detect and inline an awaited helper function call.
+ *
+ * Matches patterns:
+ *   await helperFunc(arg1, arg2);                   // void call
+ *   const x = await helperFunc(arg1, arg2);         // value-returning call
+ *
+ * Returns:
+ *   - string | null if the statement was inlined (the exit block ID or null)
+ *   - undefined if this statement is not a helper call (caller should continue)
+ */
+function tryInlineHelperCall(
+  state: CFGBuilderState,
+  context: CompilerContext,
+  stmt: ts.Statement,
+  accumulated: ts.Statement[],
+  currentBlockId: string,
+  remaining: readonly ts.Statement[],
+  loopStack: readonly LoopContext[],
+  inlining: InliningContext,
+): string | null | undefined {
+  const { helperRegistry, inlineBindings } = inlining;
+  if (!helperRegistry || !inlineBindings) return undefined;
+
+  // Match: await helperFunc(arg1, arg2)              — void call
+  //   or:  const x = await helperFunc(arg1, arg2)  — value-returning call
+  let callExpr: ts.CallExpression | undefined;
+  let resultVarName: string | undefined;
+  let resultVarSymbol: ts.Symbol | undefined;
+
+  // Pattern 1: await helperFunc(arg1, arg2) — void
+  if (ts.isExpressionStatement(stmt) && ts.isAwaitExpression(stmt.expression)) {
+    const awaited = stmt.expression.expression;
+    if (ts.isCallExpression(awaited)) {
+      callExpr = awaited;
+    }
+  }
+
+  // Pattern 2: const x = await helperFunc(arg1, arg2) — value-returning
+  if (!callExpr && ts.isVariableStatement(stmt)) {
+    const decls = stmt.declarationList.declarations;
+    if (decls.length === 1) {
+      const decl = decls[0];
+      if (ts.isIdentifier(decl.name) && decl.initializer && ts.isAwaitExpression(decl.initializer)) {
+        const awaited = decl.initializer.expression;
+        if (ts.isCallExpression(awaited)) {
+          callExpr = awaited;
+          resultVarName = decl.name.text;
+          resultVarSymbol = context.checker.getSymbolAtLocation(decl.name);
+        }
+      }
+    }
+  }
+
+  if (!callExpr) return undefined;
+
+  // Resolve the called function's symbol
+  const calleeSym = context.checker.getSymbolAtLocation(callExpr.expression);
+  if (!calleeSym) return undefined;
+
+  // Check if this symbol is in the helper registry
+  // Follow aliases for imports
+  const resolvedSym = (calleeSym.flags & ts.SymbolFlags.Alias)
+    ? context.checker.getAliasedSymbol(calleeSym)
+    : calleeSym;
+  const helper = helperRegistry.get(resolvedSym);
+  if (!helper) return undefined;
+
+  // Validate argument count
+  if (callExpr.arguments.length !== helper.parameters.length) {
+    context.addError(
+      callExpr,
+      `Helper function '${helper.symbol.getName()}' expects ${helper.parameters.length} arguments but got ${callExpr.arguments.length}`,
+      ErrorCodes.Inlining.UninlinableFunction.code,
+    );
+    return undefined;
+  }
+
+  // Record parameter-to-argument bindings for the variable resolver
+  for (let p = 0; p < helper.parameters.length; p++) {
+    const param = helper.parameters[p];
+    const paramSym = context.checker.getSymbolAtLocation(param.name);
+    if (paramSym) {
+      inlineBindings.push({
+        paramSymbol: paramSym,
+        argExpression: callExpr.arguments[p],
+      });
+    }
+  }
+
+  // Finalize the current block with accumulated statements → fall to inline entry
+  const inlineEntryId = state.newBlockId(`inline_${helper.symbol.getName()}`);
+  const continuationId = state.newBlockId(`after_${helper.symbol.getName()}`);
+
+  state.addBlock(currentBlockId, accumulated, {
+    kind: 'fall',
+    target: inlineEntryId,
+  });
+
+  // Process the helper's body statements with returnOverride → continuation
+  const helperStatements = Array.from(helper.body.statements);
+  const inlineInlining: InliningContext = {
+    ...inlining,
+    returnOverride: continuationId,
+    returnVarName: resultVarName,
+    returnVarSymbol: resultVarSymbol,
+  };
+  const inlineExit = processStatements(
+    state, context, helperStatements, inlineEntryId, loopStack, inlineInlining,
+  );
+
+  // Wire inline exit to continuation (if not already terminated)
+  if (inlineExit !== null) {
+    patchBlockTerminator(state, inlineExit, { kind: 'fall', target: continuationId });
+  }
+
+  // Process remaining statements in the continuation block
+  if (remaining.length > 0) {
+    return processStatements(state, context, remaining, continuationId, loopStack, inlining);
+  }
+
+  // No remaining statements — continuation falls through
+  state.addBlock(continuationId, [], { kind: 'return', expression: undefined });
+  return continuationId;
 }
 
 // ---------------------------------------------------------------------------
@@ -894,11 +1146,12 @@ function patchBlockTerminator(
 ): void {
   const existing = state.blocks.get(blockId);
   if (existing) {
-    // Replace the block with updated terminator
+    // Replace the block with updated terminator, preserving returnTargetVar
     state.blocks.set(blockId, {
       id: existing.id,
       statements: existing.statements,
       terminator,
+      ...(existing.returnTargetVar && { returnTargetVar: existing.returnTargetVar }),
     });
   } else {
     state.addBlock(blockId, [], terminator);

@@ -44,9 +44,19 @@ export function extractDefinition(template: any, machineIndex = 0): AslDefinitio
   // Fn::Join format: { "Fn::Join": ["", [...parts]] }
   if (defString['Fn::Join']) {
     const [separator, parts] = defString['Fn::Join'];
+    if (separator !== '') {
+      throw new Error(`Expected Fn::Join separator "" but got ${JSON.stringify(separator)}`);
+    }
     const joined = parts
       .map((part: any) => {
         if (typeof part === 'string') return part;
+        // Nested Fn::Join (e.g. from complex CDK token substitutions)
+        if (part['Fn::Join']) {
+          const [innerSep, innerParts] = part['Fn::Join'];
+          return innerParts
+            .map((p: any) => (typeof p === 'string' ? p : '__CDK_TOKEN__'))
+            .join(innerSep);
+        }
         // Replace Ref, Fn::GetAtt, and other CDK token objects with placeholder.
         // No extra quotes — the surrounding JSON string parts already provide them.
         return '__CDK_TOKEN__';

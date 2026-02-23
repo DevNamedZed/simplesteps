@@ -5,7 +5,8 @@ import { loadIntrinsics } from './compiler/discovery/intrinsics.js';
 import { findCallSites } from './compiler/discovery/callSiteLocator.js';
 import { createCallGraph, type CallGraphNode } from './compiler/discovery/callGraph.js';
 import { discoverServices } from './compiler/discovery/serviceDiscovery.js';
-import { buildCFG } from './compiler/cfg/index.js';
+import { buildCFG, type BuildCFGResult } from './compiler/cfg/index.js';
+import { analyzeHelperFunctions, type InlinableHelper, type InlineBinding } from './compiler/analysis/index.js';
 import { generateStateMachine, deriveStateMachineName } from './compiler/generation/index.js';
 import { WholeProgramAnalyzer } from './compiler/analysis/wholeProgramAnalyzer.js';
 
@@ -108,6 +109,7 @@ export type {
 } from './compiler/cfg/index.js';
 
 export { buildCFG } from './compiler/cfg/index.js';
+export type { BuildCFGResult } from './compiler/cfg/index.js';
 
 // Re-export generation types
 export {
@@ -141,6 +143,7 @@ export {
   ExpressionEvaluator,
   ModuleEnvironment,
   isEligibleForInlining,
+  analyzeHelperFunctions,
   top,
   constant,
   bottom,
@@ -152,6 +155,8 @@ export {
 
 export type {
   WholeProgramAnalyzerOptions,
+  InlinableHelper,
+  InlineBinding,
   LatticeValue,
   TopValue,
   ConstantValue,
@@ -265,13 +270,23 @@ export function compile(options: CompileOptions): CompileResult {
     };
   }
 
+  // ── Stage 3b: Analyze helper functions for inlining ────────────────────
+  const helperRegistries = new Map<typeof allCallSites[0], Map<ts.Symbol, InlinableHelper>>();
+  for (const { callSite, graph } of callGraphs) {
+    const helpers = analyzeHelperFunctions(context, graph, callSite.file);
+    if (helpers.size > 0) {
+      helperRegistries.set(callSite, helpers);
+    }
+  }
+
   // ── Stage 4: Build control flow graphs ────────────────────────────────
-  const compilationUnits: { callSite: typeof allCallSites[0]; graph: CallGraphNode; cfg: import('./compiler/cfg/types.js').ControlFlowGraph }[] = [];
+  const compilationUnits: { callSite: typeof allCallSites[0]; graph: CallGraphNode; cfg: import('./compiler/cfg/types.js').ControlFlowGraph; inlineBindings: readonly InlineBinding[] }[] = [];
   for (const { callSite, graph } of callGraphs) {
     const body = callSite.factoryFunction.factory.body;
     if (body && ts.isBlock(body)) {
-      const cfg = buildCFG(context, body);
-      compilationUnits.push({ callSite, graph, cfg });
+      const helpers = helperRegistries.get(callSite);
+      const result = buildCFG(context, body, helpers);
+      compilationUnits.push({ callSite, graph, cfg: result.cfg, inlineBindings: result.inlineBindings });
     }
   }
 
@@ -285,8 +300,8 @@ export function compile(options: CompileOptions): CompileResult {
 
   // ── Stage 5: ASL generation ──────────────────────────────────────────
   const stateMachines: CompiledStateMachine[] = [];
-  for (const { callSite, cfg } of compilationUnits) {
-    const definition = generateStateMachine(context, callSite, cfg, serviceRegistry, options.substitutions, analyzer);
+  for (const { callSite, cfg, inlineBindings } of compilationUnits) {
+    const definition = generateStateMachine(context, callSite, cfg, serviceRegistry, options.substitutions, analyzer, inlineBindings);
     const name = deriveStateMachineName(callSite);
 
     // Collect service names used by this state machine
@@ -373,13 +388,23 @@ export function compileFromProgram(options: CompileFromProgramOptions): CompileR
     return { stateMachines: [], errors: [...context.diagnostics] };
   }
 
+  // Stage 3b: Analyze helper functions for inlining
+  const helperRegistries2 = new Map<typeof allCallSites[0], Map<ts.Symbol, InlinableHelper>>();
+  for (const { callSite, graph } of callGraphs) {
+    const helpers = analyzeHelperFunctions(context, graph, callSite.file);
+    if (helpers.size > 0) {
+      helperRegistries2.set(callSite, helpers);
+    }
+  }
+
   // Stage 4: Build control flow graphs
-  const compilationUnits: { callSite: typeof allCallSites[0]; graph: CallGraphNode; cfg: import('./compiler/cfg/types.js').ControlFlowGraph }[] = [];
+  const compilationUnits: { callSite: typeof allCallSites[0]; graph: CallGraphNode; cfg: import('./compiler/cfg/types.js').ControlFlowGraph; inlineBindings: readonly InlineBinding[] }[] = [];
   for (const { callSite, graph } of callGraphs) {
     const body = callSite.factoryFunction.factory.body;
     if (body && ts.isBlock(body)) {
-      const cfg = buildCFG(context, body);
-      compilationUnits.push({ callSite, graph, cfg });
+      const helpers = helperRegistries2.get(callSite);
+      const result = buildCFG(context, body, helpers);
+      compilationUnits.push({ callSite, graph, cfg: result.cfg, inlineBindings: result.inlineBindings });
     }
   }
 
@@ -389,8 +414,8 @@ export function compileFromProgram(options: CompileFromProgramOptions): CompileR
 
   // Stage 5: ASL generation
   const stateMachines: CompiledStateMachine[] = [];
-  for (const { callSite, cfg } of compilationUnits) {
-    const definition = generateStateMachine(context, callSite, cfg, serviceRegistry, options.substitutions, analyzer2);
+  for (const { callSite, cfg, inlineBindings } of compilationUnits) {
+    const definition = generateStateMachine(context, callSite, cfg, serviceRegistry, options.substitutions, analyzer2, inlineBindings);
     const name = deriveStateMachineName(callSite);
 
     const services: string[] = [];

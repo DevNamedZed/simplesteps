@@ -64,7 +64,7 @@ function compileFixture(fixtureFile: string): {
   expect(factory.body).toBeDefined();
   expect(ts.isBlock(factory.body!)).toBe(true);
 
-  const cfg = buildCFG(context, factory.body! as ts.Block);
+  const { cfg } = buildCFG(context, factory.body! as ts.Block);
   const definition = generateStateMachine(context, callSite, cfg, serviceRegistry);
   const name = deriveStateMachineName(callSite);
 

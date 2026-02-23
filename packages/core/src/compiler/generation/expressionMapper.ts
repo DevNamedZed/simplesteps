@@ -39,6 +39,14 @@ export function buildParameters(
             resolved = { kind: 'jsonpath', path: varInfo.jsonPath };
           }
         }
+
+        // Check deferred inline bindings for helper function parameters
+        if (resolved.kind === 'unknown' && variables.deferredBindings) {
+          const argExpr = variables.deferredBindings.get(valueSym);
+          if (argExpr) {
+            resolved = resolveExpression(context, argExpr, variables);
+          }
+        }
       }
 
       switch (resolved.kind) {

@@ -2,6 +2,13 @@
 module.exports = {
   preset: 'ts-jest',
   testEnvironment: 'node',
+  coverageDirectory: 'build/reports/coverage',
+  coverageReporters: ['text', 'text-summary', 'lcov', 'cobertura'],
+  collectCoverageFrom: [
+    'packages/core/src/**/*.ts',
+    'packages/cdk/src/**/*.ts',
+    '!**/*.d.ts',
+  ],
   roots: [
     '<rootDir>/packages/core/test',
     '<rootDir>/packages/cdk/test',

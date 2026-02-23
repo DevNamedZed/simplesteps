@@ -25,28 +25,65 @@ Workaround: Use compile-time constants (`const TIMEOUT = 30 * 1000` is folded at
 
 ## Helper Functions
 
-Only simple pure functions can be inlined by the compiler. A function must:
+The compiler supports two kinds of inlineable helper functions:
 
-- Have a single `return` statement
-- Use only `const` declarations (no `let`)
-- Have no loops, `try/catch`, or `async`
-- Have no side effects
+### Pure functions (expression inlining)
+
+Simple pure functions with a single `return` statement are inlined as expressions:
 
 ```typescript
-// OK — simple pure function, inlined at compile time
+// OK — pure function, inlined at compile time
 const formatKey = (id: string) => `order-${id}`;
-
-// NOT OK — too complex to inline
-function calculateTotal(items: Item[]) {
-  let total = 0;
-  for (const item of items) {
-    total += item.price;
-  }
-  return total;
-}
 ```
 
-Workaround: Move complex logic into a Lambda function.
+### Async helpers (CFG-level inlining)
+
+Module-scope `async` functions that make service calls can be inlined at the call site. The compiler splices the helper's body into the main workflow's state machine — no nested executions, no runtime cost.
+
+```typescript
+// OK — async helper, inlined into the caller's state machine
+async function provisionWithRollback(id: string, networkId: string) {
+  try {
+    return await computeApi.call({ action: 'create', id });
+  } catch (e) {
+    await rollbackApi.call({ networkId });
+    throw new StepException('Provisioning failed');
+  }
+}
+
+export const workflow = Steps.createFunction(async (ctx, input) => {
+  const network = await networkApi.call({ id: input.id });
+  const compute = await provisionWithRollback(input.id, network.networkId);
+  return { instanceId: compute.instanceId };
+});
+```
+
+**v1 constraints:**
+
+- Must be declared at **module scope** (top-level `async function` or `const fn = async () => { ... }`)
+- Parameters must be **simple identifiers** (no destructuring, rest, or defaults)
+- **Single-level only**: helpers can call services but not other async helpers
+- Must be **awaited** at the call site (`await helper(...)`)
+
+**Not supported:**
+
+```typescript
+// NOT OK — pure function too complex to inline (loops, side effects)
+function calculateTotal(items: Item[]) {
+  let total = 0;
+  for (const item of items) { total += item.price; }
+  return total;
+}
+
+// NOT OK — nested helpers (helper calls another helper)
+async function innerHelper() { await svc.call({}); }
+async function outerHelper() { await innerHelper(); } // SS803
+
+// NOT OK — destructured parameters
+async function process({ id }: { id: string }) { ... } // SS804
+```
+
+Workaround for unsupported patterns: Move the logic into a Lambda function.
 
 ## Closures and Variable Capture
 

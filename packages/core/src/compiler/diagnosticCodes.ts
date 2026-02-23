@@ -64,6 +64,15 @@ export class ErrorCodes {
     static readonly MissingResourceArn = error('SS611', 'generation');
   };
 
+  // ── Helper function inlining (SS8xx) ─────────────────────────────────
+  static readonly Inlining = class {
+    static readonly UninlinableFunction = error('SS800', 'inlining');
+    static readonly HelperTooDeep = error('SS803', 'inlining');
+    static readonly HelperDestructuringParam = error('SS804', 'inlining');
+    static readonly HelperNotAwaited = error('SS805', 'inlining');
+    static readonly HelperReturnValue = error('SS806', 'inlining');
+  };
+
   // ── Whole-program data flow (SS7xx) ───────────────────────────────────
   static readonly DataFlow = class {
     static readonly UnresolvableVariable = error('SS700', 'data-flow');

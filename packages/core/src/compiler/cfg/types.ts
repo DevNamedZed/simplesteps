@@ -100,6 +100,17 @@ export interface BasicBlock {
   readonly id: string;
   readonly statements: readonly ts.Statement[];
   readonly terminator: Terminator;
+  /**
+   * Set on blocks produced by inlined helpers that return a value.
+   * Tells the state builder to assign the last Task state's ResultPath
+   * to the caller's variable, or to create a variable alias for non-await returns.
+   */
+  readonly returnTargetVar?: {
+    readonly name: string;
+    readonly symbol: ts.Symbol;
+    /** For non-await returns (e.g. `return someVar`), the expression to alias. */
+    readonly expression?: ts.Expression;
+  };
 }
 
 export interface ControlFlowGraph {

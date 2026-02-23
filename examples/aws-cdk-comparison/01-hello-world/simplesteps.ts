@@ -1,18 +1,38 @@
-// Hello World — SimpleSteps
+// Hello World — CDK + SimpleSteps
 //
 // The simplest Step Functions example: invoke a Lambda and return the result.
-// When installed via npm, use: import { Steps } from '@simplesteps/core/runtime'
+// Same infrastructure as pure CDK — only the step function definition changes.
 
-import { Steps, SimpleStepContext } from '../../../packages/core/src/runtime/index';
-import { Lambda } from '../../../packages/core/src/runtime/services/Lambda';
+import * as cdk from 'aws-cdk-lib';
+import * as lambda from 'aws-cdk-lib/aws-lambda';
+import { Construct } from 'constructs';
+import { SimpleStepsStateMachine } from '@simplesteps/cdk';
+import { Steps, SimpleStepContext } from '@simplesteps/core/runtime';
+import { Lambda } from '@simplesteps/core/runtime/services';
 
-const helloFn = Lambda<{ name: string }, { greeting: string }>(
-  'arn:aws:lambda:us-east-1:123456789:function:Hello',
-);
+export class HelloWorldStack extends cdk.Stack {
+  constructor(scope: Construct, id: string, props?: cdk.StackProps) {
+    super(scope, id, props);
 
-export const helloWorld = Steps.createFunction(
-  async (context: SimpleStepContext, input: { name: string }) => {
-    const result = await helloFn.call({ name: input.name });
-    return { greeting: result.greeting };
-  },
-);
+    const helloFunction = new lambda.Function(this, 'HelloFunction', {
+      runtime: lambda.Runtime.NODEJS_20_X,
+      handler: 'index.handler',
+      code: lambda.Code.fromAsset('lambda/hello'),
+    });
+
+    const helloFn = Lambda<{ name: string }, { greeting: string }>(
+      helloFunction.functionArn,
+    );
+
+    const machine = new SimpleStepsStateMachine(this, 'HelloWorldStateMachine', {
+      workflow: Steps.createFunction(
+        async (context: SimpleStepContext, input: { name: string }) => {
+          const result = await helloFn.call({ name: input.name });
+          return { greeting: result.greeting };
+        },
+      ),
+    });
+
+    helloFunction.grantInvoke(machine);
+  }
+}

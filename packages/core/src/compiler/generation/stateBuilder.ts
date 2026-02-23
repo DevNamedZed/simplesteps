@@ -179,6 +179,63 @@ function processBlock(ctx: BuildContext, blockId: string): string | null {
     patchNext(ctx.states, stateNames[i], stateNames[i + 1]);
   }
 
+  // Handle value-returning helper inlining: override ResultPath or create alias
+  if (block.returnTargetVar) {
+    const { name, symbol, expression } = block.returnTargetVar;
+
+    if (!expression) {
+      // return await svc.call(...) → override the last Task state's ResultPath
+      const resultPath = `$.${name}`;
+      const lastEmittedName = stateNames[stateNames.length - 1];
+      if (lastEmittedName) {
+        const lastState = ctx.states.get(lastEmittedName);
+        if (lastState && lastState.Type === 'Task') {
+          const taskState = lastState as TaskState;
+          if (taskState.ResultPath === null) {
+            const { ResultPath: _, ...rest } = taskState;
+            ctx.states.set(lastEmittedName, { ...rest, ResultPath: resultPath } as State);
+          }
+        }
+      }
+      // Register the caller's variable as StateOutput
+      ctx.variables.addVariable(symbol, {
+        symbol,
+        type: StepVariableType.StateOutput,
+        jsonPath: resultPath,
+        definitelyAssigned: true,
+        constant: false,
+      });
+    } else {
+      // return expr (non-await) → resolve expression and create variable binding
+      const resolved = resolveExpression(ctx.compilerContext, expression, ctx.variables.toResolution());
+      if (resolved.kind === 'jsonpath' && resolved.path) {
+        ctx.variables.addVariable(symbol, {
+          symbol,
+          type: StepVariableType.StateOutput,
+          jsonPath: resolved.path,
+          definitelyAssigned: true,
+          constant: false,
+        });
+      } else if (resolved.kind === 'literal') {
+        ctx.variables.addVariable(symbol, {
+          symbol,
+          type: StepVariableType.Constant,
+          definitelyAssigned: true,
+          constant: true,
+          literalValue: resolved.value,
+        });
+      } else if (resolved.kind === 'intrinsic' && resolved.path) {
+        ctx.variables.addVariable(symbol, {
+          symbol,
+          type: StepVariableType.Derived,
+          definitelyAssigned: true,
+          constant: true,
+          intrinsicPath: resolved.path,
+        });
+      }
+    }
+  }
+
   // Handle terminator
   const lastStateName = stateNames[stateNames.length - 1] ?? null;
   const terminatorResult = processTerminator(ctx, block, lastStateName);

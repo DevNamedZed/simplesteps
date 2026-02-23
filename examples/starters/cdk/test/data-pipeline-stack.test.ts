@@ -119,9 +119,9 @@ describe('DataPipelineStack', () => {
       expect(hasResourcePattern(definition, 's3:putObject')).toBe(true);
     });
 
-    test('sequential flow: at least 3 Task states', () => {
+    test('sequential flow: exactly 3 Task states', () => {
       const tasks = getStatesByType(definition, 'Task');
-      expect(tasks.length).toBeGreaterThanOrEqual(3);
+      expect(tasks.length).toBe(3);
     });
 
     test('no Choice or Parallel states (simple sequential)', () => {

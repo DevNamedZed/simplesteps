@@ -62,6 +62,9 @@ export class AdvancedWorkflowStack extends cdk.Stack {
         ) => {
           const correlationId = Steps.uuid();
 
+          // Result fields ARE accessible via JSONPath (e.g., apiKeySecret.SecretString
+          // compiles to $.apiKeySecret.SecretString). Not used here because this
+          // workflow only needs the secret retrieval as a side effect.
           const apiKeySecret = await secrets.getSecretValue({
             SecretId: 'prod/api-key',
           });

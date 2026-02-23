@@ -44,7 +44,7 @@ export const batchProcessing = Steps.createFunction(
     // Steps.format → States.Format intrinsic
     const resultKey = Steps.format('results/{}/output.json', input.batchId);
 
-    // S3 write
+    // S3 write — Body simplified; JSON.stringify() is not supported by the compiler
     await resultsBucket.putObject({
       Key: resultKey,
       Body: input.batchId,

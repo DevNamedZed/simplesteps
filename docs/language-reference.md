@@ -142,6 +142,43 @@ if (!order.valid) {
 
 `return` in a branch produces an End state at that point.
 
+## Helper Functions
+
+Extract parts of a workflow into named async functions. The compiler inlines them at compile time — no nested executions, no runtime cost.
+
+### Pure functions
+
+Simple expression functions are inlined as values:
+
+```typescript
+const formatKey = (id: string) => `order-${id}`;
+```
+
+### Async helpers
+
+Module-scope `async` functions that make service calls are inlined at the CFG level. The helper's body is spliced into the caller's state machine:
+
+```typescript
+async function provisionWithRollback(id: string, networkId: string) {
+  try {
+    return await computeApi.call({ action: 'create', id });
+  } catch (e) {
+    await rollbackApi.call({ networkId });
+    throw new StepException('Failed');
+  }
+}
+
+export const workflow = Steps.createFunction(async (ctx, input) => {
+  const network = await networkApi.call({ id: input.id });
+  const compute = await provisionWithRollback(input.id, network.networkId);
+  return { instanceId: compute.instanceId };
+});
+```
+
+Helpers can contain any supported control flow: `if/else`, `try/catch`, loops, `Promise.all`. Parameters can be input references, service call results, or constants.
+
+See [Limitations](./limitations.md#helper-functions) for v1 constraints.
+
 ## Automatic Data Flow (No JSONPath)
 
 One of SimpleSteps' key design goals: **you never write JSONPath or data flow fields**. The compiler derives all of them from your variable usage.

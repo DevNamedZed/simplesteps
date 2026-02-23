@@ -143,20 +143,19 @@ describe('EventDrivenStack', () => {
       expect(hasResourcePattern(definition, 'events')).toBe(true);
     });
 
-    test('has a Task with resource containing step function execution', () => {
-      // StepFunction.startExecution compiles to either states:startExecution or __CDK_TOKEN__
+    test('has exactly 4 Task states (Lambda, StepFunction, 2x EventBridge)', () => {
       const tasks = getStatesByType(definition, 'Task');
-      expect(tasks.length).toBeGreaterThanOrEqual(3);
+      expect(tasks.length).toBe(4);
     });
 
-    test('has a Choice state (if/else on fraud.fraudulent)', () => {
+    test('has exactly 1 Choice state (if/else on enriched.risk)', () => {
       const choices = getStatesByType(definition, 'Choice');
-      expect(choices.length).toBeGreaterThanOrEqual(1);
+      expect(choices.length).toBe(1);
     });
 
-    test('at least 5 states total', () => {
+    test('has exactly 7 top-level states', () => {
       const stateNames = getAllStateNames(definition);
-      expect(stateNames.length).toBeGreaterThanOrEqual(5);
+      expect(stateNames.length).toBe(7);
     });
   });
 });

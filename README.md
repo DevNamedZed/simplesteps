@@ -2,8 +2,6 @@
 
 TypeScript-to-ASL compiler for AWS Step Functions. Write workflows as ordinary TypeScript functions — the compiler handles the rest.
 
-[53% less code than CDK on average](docs/cdk-comparison.md) across 12 real-world examples.
-
 ## Why
 
 At my previous company we had dozens of Step Functions deployed with CDK. They were incredibly hard to read and understand. The CDK approach defines a program by stringing together a tree of construct objects — but reading a program defined that way is difficult. That's what compilers are supposed to do for us.
@@ -66,32 +64,68 @@ The compiler generates all data flow fields (`Parameters`, `ResultPath`, `InputP
 npm install @simplesteps/core @simplesteps/cdk
 ```
 
-Define your workflow inline, right in your CDK stack:
+Your CDK stack stays the same — you still create your Lambda functions, DynamoDB tables, and grant permissions with CDK. The only thing that changes is how you define the step function:
 
 ```typescript
+import * as cdk from 'aws-cdk-lib';
+import * as lambda from 'aws-cdk-lib/aws-lambda';
+import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
+import { Construct } from 'constructs';
 import { SimpleStepsStateMachine } from '@simplesteps/cdk';
 import { Steps, SimpleStepContext } from '@simplesteps/core/runtime';
 import { Lambda, DynamoDB } from '@simplesteps/core/runtime/services';
 
-// Service bindings — CDK tokens flow through to ASL automatically
-const validateOrder = Lambda<{ orderId: string }, { valid: boolean }>(validateFn.functionArn);
-const orders = new DynamoDB(ordersTable.tableName);
+export class OrderStack extends cdk.Stack {
+  constructor(scope: Construct, id: string, props?: cdk.StackProps) {
+    super(scope, id, props);
 
-// Inline workflow — compiled to ASL at build time
-const machine = new SimpleStepsStateMachine(this, 'OrderWorkflow', {
-  workflow: Steps.createFunction(
-    async (context: SimpleStepContext, input: { orderId: string }) => {
-      const order = await validateOrder.call({ orderId: input.orderId });
-      if (!order.valid) {
-        throw new Error('Invalid order');
-      }
-      await orders.putItem({
-        Item: { id: { S: input.orderId }, status: { S: 'CONFIRMED' } },
-      });
-      return { status: 'CONFIRMED' };
-    },
-  ),
-});
+    // Infrastructure — same as any CDK stack
+    const validateFn = new lambda.Function(this, 'ValidateOrder', {
+      runtime: lambda.Runtime.NODEJS_20_X,
+      handler: 'index.handler',
+      code: lambda.Code.fromAsset('lambda/validate-order'),
+    });
+
+    const ordersTable = new dynamodb.Table(this, 'OrdersTable', {
+      partitionKey: { name: 'id', type: dynamodb.AttributeType.STRING },
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
+    });
+
+    // Service bindings — CDK tokens flow through to ASL automatically
+    const validateOrder = Lambda<{ orderId: string }, { valid: boolean; total: number }>(
+      validateFn.functionArn,
+    );
+    const orders = new DynamoDB(ordersTable.tableName);
+
+    // Step function — defined as readable TypeScript instead of construct chains
+    const machine = new SimpleStepsStateMachine(this, 'OrderWorkflow', {
+      workflow: Steps.createFunction(
+        async (context: SimpleStepContext, input: { orderId: string; customerId: string }) => {
+          const order = await validateOrder.call({ orderId: input.orderId });
+
+          if (!order.valid) {
+            throw new Error('Invalid order');
+          }
+
+          await orders.putItem({
+            Item: {
+              id: { S: input.orderId },
+              customerId: { S: input.customerId },
+              total: { N: String(order.total) },
+              status: { S: 'CONFIRMED' },
+            },
+          });
+
+          return { orderId: input.orderId, status: 'CONFIRMED' };
+        },
+      ),
+    });
+
+    // Permissions — same as any CDK stack
+    validateFn.grantInvoke(machine);
+    ordersTable.grantWriteData(machine);
+  }
+}
 ```
 
 You can also use [separate workflow files](docs/cdk-integration.md) with `sourceFile` + `bindings` if you prefer to keep business logic out of infrastructure code.
@@ -144,10 +178,6 @@ npx simplesteps compile workflow.ts -o output/
 
 - **[Starter projects](examples/starters/)** -- 3 standalone, cloneable projects (CLI, library API, CDK)
 - **[Showcase](examples/showcase/)** -- 29 examples covering every language feature
-
-## Contributing
-
-See [docs/contributing.md](docs/contributing.md). The project has ~450 tests across the compiler pipeline.
 
 ## License
 

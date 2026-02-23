@@ -1,72 +1,62 @@
-# AWS CDK vs SimpleSteps — Side-by-Side Comparison
+# AWS CDK vs CDK + SimpleSteps — Side-by-Side Comparison
 
-Each directory contains two files showing the **complete** code for both approaches:
+Each directory contains two **complete CDK stacks** for the same workflow:
 
-- **`cdk.ts`** — Full CDK stack: all imports, resource constructs, Lambda functions, permissions, state machine definition
-- **`simplesteps.ts`** — Full SimpleSteps workflow: imports, service declarations, workflow function
+- **`cdk.ts`** — Step function defined with `sfn.*` constructs, `.next()` chains, `sfn.CustomState` for unsupported services
+- **`simplesteps.ts`** — Same infrastructure, step function defined with `SimpleStepsStateMachine` + inline `Steps.createFunction()`
 
-This is what a real developer writes. No abbreviation, no cherry-picking.
+Both sides create the same Lambda functions, DynamoDB tables, SQS queues, SNS topics, S3 buckets, and grant the same permissions. The only difference is how the step function is defined.
 
 ## Line Count Comparison
 
-| # | Example | CDK Lines | SimpleSteps Lines | Reduction |
-|---|---------|-----------|-------------------|-----------|
-| 01 | Hello World | 41 | 17 | 59% |
-| 02 | Job Poller | 73 | 32 | 56% |
-| 04 | Saga Pattern | 126 | 72 | 43% |
-| 05 | Checkout Processing | 130 | 68 | 48% |
-| 06 | Parallel Processing | 91 | 39 | 57% |
-| 08 | Wait for Callback | 102 | 52 | 49% |
-| 10 | DynamoDB CRUD | 100 | 51 | 49% |
-| 15 | S3 Data Processing | 95 | 36 | 62% |
-| 16 | Secrets & Config | 85 | 40 | 53% |
-| 21 | Human Approval | 110 | 55 | 50% |
-| 29 | Multi-Catch with Retry | 131 | 63 | 52% |
-| 30 | ETL Pipeline | 143 | 60 | 58% |
-| | **Average** | **102** | **49** | **53%** |
+| # | Example | CDK | CDK + SimpleSteps | Reduction |
+|---|---------|-----|-------------------|-----------|
+| 01 | Hello World | 41 | 38 | 7% |
+| 02 | Job Poller | 73 | 61 | 16% |
+| 03 | Saga Pattern | 126 | 117 | 7% |
+| 04 | Checkout Processing | 130 | 105 | 19% |
+| 05 | Parallel Processing | 91 | 74 | 19% |
+| 06 | Wait for Callback | 102 | 82 | 20% |
+| 07 | DynamoDB CRUD | 100 | 69 | 31% |
+| 08 | S3 Data Processing | 95 | 58 | 39% |
+| 09 | Secrets & Config | 85 | 69 | 19% |
+| 10 | Human Approval | 110 | 81 | 26% |
+| 11 | Multi-Catch with Retry | 131 | 92 | 30% |
+| 12 | ETL Pipeline | 143 | 101 | 29% |
+| 13 | Resource Provisioning | 454 | 332 | 27% |
+| | **Average** | **129** | **98** | **24%** |
 
-## What Makes CDK Verbose
+## What Changes Between the Two Stacks
 
-1. **Infrastructure boilerplate** — Every Lambda needs `runtime`, `handler`, `code`. Every DynamoDB table needs `partitionKey`. These constructs exist only for CDK.
+The infrastructure code is identical. The difference is in how the step function is defined:
 
-2. **No abstraction for most services** — CDK has typed constructs for Lambda, SQS, and SNS only. DynamoDB (with expressions), S3, Secrets Manager, and SSM all require `sfn.CustomState` with raw ASL JSON — no type safety, no autocompletion.
+**Pure CDK:**
+- `new tasks.LambdaInvoke()`, `new sfn.Choice()`, `new sfn.Wait()`, `new sfn.Fail()`
+- `.next()` chains to wire states together
+- `sfn.CustomState` with raw ASL JSON for DynamoDB (with expressions), S3, Secrets Manager, SSM
+- `sfn.JsonPath.stringAt(...)` for data references
+- `task.addCatch()` / `task.addRetry()` for error handling
 
-3. **Manual permission grants** — Every `grantInvoke()`, `grantReadWriteData()`, `grantSendMessages()` must be written explicitly.
-
-4. **Explicit state wiring** — `.next()`, `.addCatch()`, `.addRetry()`, `sfn.Choice().when().otherwise()` chains replace natural `if/else`, `try/catch`, `while`, and `Promise.all`.
-
-5. **JSONPath string references** — `'$.field'`, `sfn.JsonPath.stringAt(...)` replace natural variable access.
-
-## What SimpleSteps Eliminates
-
-- No infrastructure constructs (Lambda, Table, Queue definitions)
-- No `sfn.CustomState` with raw JSON — typed methods for all 10 services
-- No manual permission grants
-- No `.next()` chains — sequential statements
-- No `sfn.Choice` — `if/else` and `switch/case`
-- No `sfn.Wait` — `Steps.delay()`
-- No `sfn.Parallel` — `Promise.all()`
-- No `sfn.Map` — `for...of` loops
-- No JSONPath strings — variable names
-- No `addCatch/addRetry` — `try/catch` and retry options
+**CDK + SimpleSteps:**
+- `SimpleStepsStateMachine` with `workflow: Steps.createFunction(async (ctx, input) => { ... })`
+- Sequential statements, `if/else`, `while`, `for...of`, `try/catch`, `Promise.all`
+- Typed service methods for all 10 AWS services
+- Variable names instead of JSONPath
 
 ## Feature Coverage
 
-These 12 examples cover every major Step Functions feature:
-
 | Feature | Examples |
 |---------|----------|
-| Lambda invocation | 01, 02, 04, 05, 06, 08, 21, 29, 30 |
-| DynamoDB operations | 05, 10, 30 |
-| SQS messaging | 05, 08, 21 |
-| SNS notifications | 05, 21, 29, 30 |
-| S3 operations | 15, 30 |
-| Secrets Manager | 16 |
-| SSM Parameter Store | 16 |
-| Loops / polling | 02 |
-| Parallel execution | 06 |
-| Error handling / retry | 04, 29 |
-| Wait for callback | 08, 21 |
-| Branching / conditions | 02, 05, 08, 21, 29 |
-| Map iteration | 30 |
-| Intrinsic functions | 30 |
+| Lambda invocation | 01, 02, 03, 04, 05, 06, 10, 11, 12, 13 |
+| DynamoDB operations | 04, 07, 12, 13 |
+| SQS messaging | 04, 06, 10, 13 |
+| SNS notifications | 04, 10, 11, 12, 13 |
+| S3 operations | 08, 12 |
+| Secrets Manager | 09 |
+| SSM Parameter Store | 09 |
+| Loops / polling | 02, 13 |
+| Parallel execution | 05, 13 |
+| Error handling / retry | 03, 11, 13 |
+| Wait for callback | 06, 10 |
+| Map iteration | 12 |
+| Saga-pattern rollback | 03, 13 |

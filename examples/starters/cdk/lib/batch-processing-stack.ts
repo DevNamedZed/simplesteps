@@ -67,6 +67,7 @@ export class BatchProcessingStack extends cdk.Stack {
 
           const resultKey = Steps.format('results/{}/output.json', input.batchId);
 
+          // Body simplified — JSON.stringify() is not supported by the compiler
           await bucket.putObject({
             Key: resultKey,
             Body: input.batchId,

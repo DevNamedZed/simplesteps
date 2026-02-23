@@ -113,9 +113,9 @@ describe('OrderStack', () => {
       expect(stateNames).toContain(definition.StartAt);
     });
 
-    test('has a Choice state (if/else on order.valid)', () => {
+    test('has exactly 1 Choice state (if/else on order.valid)', () => {
       const choices = getStatesByType(definition, 'Choice');
-      expect(choices.length).toBeGreaterThanOrEqual(1);
+      expect(choices.length).toBe(1);
     });
 
     test('has a Task state for Lambda invocation', () => {
@@ -126,14 +126,14 @@ describe('OrderStack', () => {
       expect(hasResourcePattern(definition, 'dynamodb:putItem')).toBe(true);
     });
 
-    test('has a Pass state for early return (invalid order)', () => {
+    test('has Pass states for early return and final output', () => {
       const passes = getStatesByType(definition, 'Pass');
-      expect(passes.length).toBeGreaterThanOrEqual(1);
+      expect(passes.length).toBe(2);
     });
 
-    test('total state count >= 4', () => {
+    test('has exactly 5 top-level states', () => {
       const stateNames = getAllStateNames(definition);
-      expect(stateNames.length).toBeGreaterThanOrEqual(4);
+      expect(stateNames.length).toBe(5);
     });
   });
 });

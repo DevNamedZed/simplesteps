@@ -3,7 +3,9 @@ import { CompilerContext } from '../compilerContext.js';
 import type { ControlFlowGraph } from '../cfg/types.js';
 import type { ServiceRegistry } from '../discovery/serviceDiscovery.js';
 import type { StepFunctionCallSite } from '../discovery/callSiteLocator.js';
-import { resolveVariables } from '../analysis/variableResolver.js';
+import { resolveVariables, resolveExpression } from '../analysis/variableResolver.js';
+import { StepVariableType } from '../analysis/types.js';
+import type { InlineBinding } from '../analysis/asyncHelperAnalyzer.js';
 import type { WholeProgramAnalyzer } from '../analysis/wholeProgramAnalyzer.js';
 import { buildStateMachine } from './stateBuilder.js';
 import type { StateMachineDefinition } from '../../asl/types.js';
@@ -22,8 +24,52 @@ export function generateStateMachine(
   serviceRegistry: ServiceRegistry,
   substitutions?: Readonly<Record<string, unknown>>,
   analyzer?: WholeProgramAnalyzer,
+  inlineBindings?: readonly InlineBinding[],
 ): StateMachineDefinition {
   const variables = resolveVariables(context, callSite, serviceRegistry, substitutions, analyzer);
+
+  // Apply inline bindings: map helper parameter symbols to the same
+  // variable info as the call-site argument expressions.
+  // Bindings are registered as deferred so they resolve lazily — this handles
+  // arguments that reference runtime variables (e.g. service call results)
+  // which aren't in the resolution until the state builder processes them.
+  if (inlineBindings && inlineBindings.length > 0) {
+    for (const binding of inlineBindings) {
+      // Try eager resolution first (works for input refs, literals, intrinsics)
+      const resolved = resolveExpression(context, binding.argExpression, variables.toResolution());
+
+      if (resolved.kind === 'jsonpath' && resolved.path) {
+        variables.addVariable(binding.paramSymbol, {
+          symbol: binding.paramSymbol,
+          type: StepVariableType.StateOutput,
+          jsonPath: resolved.path,
+          definitelyAssigned: true,
+          constant: false,
+        });
+      } else if (resolved.kind === 'literal') {
+        variables.addVariable(binding.paramSymbol, {
+          symbol: binding.paramSymbol,
+          type: StepVariableType.Constant,
+          definitelyAssigned: true,
+          constant: true,
+          literalValue: resolved.value,
+        });
+      } else if (resolved.kind === 'intrinsic' && resolved.path) {
+        variables.addVariable(binding.paramSymbol, {
+          symbol: binding.paramSymbol,
+          type: StepVariableType.Derived,
+          definitelyAssigned: true,
+          constant: true,
+          intrinsicPath: resolved.path,
+        });
+      } else {
+        // Defer: the argument references a runtime variable not yet registered.
+        // It will be resolved lazily when the parameter is accessed during state building.
+        variables.addDeferredBinding(binding.paramSymbol, binding.argExpression);
+      }
+    }
+  }
+
   return buildStateMachine(context, cfg, callSite, serviceRegistry, variables);
 }
 

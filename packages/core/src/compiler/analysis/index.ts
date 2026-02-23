@@ -47,6 +47,10 @@ export type { SymbolResolver, CallResolver } from './expressionEvaluator.js';
 // Pure function inliner
 export { isEligibleForInlining, inlineFunction } from './pureFunctionInliner.js';
 
+// Async helper function inlining
+export { analyzeHelperFunctions } from './asyncHelperAnalyzer.js';
+export type { InlinableHelper, InlineBinding } from './asyncHelperAnalyzer.js';
+
 // Module analyzer
 export { ModuleEnvironment, analyzeModule } from './moduleAnalyzer.js';
 export type { ImportInfo, ImportResolver, NamespaceResolver } from './moduleAnalyzer.js';

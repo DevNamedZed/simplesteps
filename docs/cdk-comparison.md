@@ -1,92 +1,38 @@
-# CDK vs SimpleSteps Comparison
+# CDK vs CDK + SimpleSteps Comparison
 
-Side-by-side comparison of AWS CDK Step Functions constructs vs SimpleSteps.
+Both sides are **full CDK stacks** — same Lambda functions, same DynamoDB tables, same permission grants. The only difference is how the step function is defined: CDK construct chains vs SimpleSteps inline TypeScript.
 
 ## Line Count
 
-Each example in [`examples/aws-cdk-comparison/`](../examples/aws-cdk-comparison/) contains complete code for both approaches -- full CDK stack vs full SimpleSteps workflow.
+Each example in [`examples/aws-cdk-comparison/`](../examples/aws-cdk-comparison/) contains two complete CDK stacks:
 
-| # | Example | CDK Lines | SimpleSteps Lines | Reduction |
+- **`cdk.ts`** — Step function defined with `sfn.*` constructs, `tasks.*` invocations, `.next()` chains, `sfn.CustomState` for unsupported services
+- **`simplesteps.ts`** — Same infrastructure, step function defined with `SimpleStepsStateMachine` + inline `Steps.createFunction()`
+
+| # | Example | CDK | CDK + SimpleSteps | Reduction |
 |---|---|---|---|---|
-| 01 | Hello World | 41 | 17 | 59% |
-| 02 | Job Poller | 73 | 32 | 56% |
-| 04 | Saga Pattern | 126 | 72 | 43% |
-| 05 | Checkout Processing | 130 | 68 | 48% |
-| 06 | Parallel Processing | 91 | 39 | 57% |
-| 08 | Wait for Callback | 102 | 52 | 49% |
-| 10 | DynamoDB CRUD | 100 | 51 | 49% |
-| 15 | S3 Data Processing | 95 | 36 | 62% |
-| 16 | Secrets & Config | 85 | 40 | 53% |
-| 21 | Human Approval | 110 | 55 | 50% |
-| 29 | Multi-Catch with Retry | 131 | 63 | 52% |
-| 30 | ETL Pipeline | 143 | 60 | 58% |
-| | **Average** | **102** | **49** | **53%** |
+| 01 | Hello World | 41 | 38 | 7% |
+| 02 | Job Poller | 73 | 61 | 16% |
+| 03 | Saga Pattern | 126 | 117 | 7% |
+| 04 | Checkout Processing | 130 | 105 | 19% |
+| 05 | Parallel Processing | 91 | 74 | 19% |
+| 06 | Wait for Callback | 102 | 82 | 20% |
+| 07 | DynamoDB CRUD | 100 | 69 | 31% |
+| 08 | S3 Data Processing | 95 | 58 | 39% |
+| 09 | Secrets & Config | 85 | 69 | 19% |
+| 10 | Human Approval | 110 | 81 | 26% |
+| 11 | Multi-Catch with Retry | 131 | 92 | 30% |
+| 12 | ETL Pipeline | 143 | 101 | 29% |
+| 13 | Resource Provisioning | 454 | 332 | 27% |
+| | **Average** | **129** | **98** | **24%** |
 
-## Side-by-Side: Hello World
+The savings are modest for simple examples (Hello World is only 3 lines shorter) and grow as workflows get more complex. The biggest gains come from examples that use services CDK doesn't have typed constructs for (DynamoDB expressions, S3, Secrets Manager, SSM) — those require `sfn.CustomState` with raw ASL JSON in pure CDK. The Resource Provisioning example (13) shows the gap at scale: a real-world control plane orchestrator with saga-pattern rollback, parallel provisioning, and health check polling — 454 lines of CDK constructs vs 332 lines of readable TypeScript.
 
-The simplest example — invoke a Lambda and return the result.
+## Side-by-Side: Checkout Processing
 
-**CDK (41 lines):**
+A real-world workflow: validate a cart, process payment, save to DynamoDB, queue for fulfillment, notify the customer. Both stacks create the same Lambda functions, DynamoDB table, SQS queue, and SNS topic.
 
-```typescript
-import * as cdk from 'aws-cdk-lib';
-import * as lambda from 'aws-cdk-lib/aws-lambda';
-import * as sfn from 'aws-cdk-lib/aws-stepfunctions';
-import * as tasks from 'aws-cdk-lib/aws-stepfunctions-tasks';
-import { Construct } from 'constructs';
-
-export class HelloWorldStack extends cdk.Stack {
-  constructor(scope: Construct, id: string, props?: cdk.StackProps) {
-    super(scope, id, props);
-
-    const helloFunction = new lambda.Function(this, 'HelloFunction', {
-      runtime: lambda.Runtime.NODEJS_20_X,
-      handler: 'index.handler',
-      code: lambda.Code.fromAsset('lambda/hello'),
-    });
-
-    const invokeHello = new tasks.LambdaInvoke(this, 'Invoke Hello', {
-      lambdaFunction: helloFunction,
-      outputPath: '$.Payload',
-    });
-
-    const succeed = new sfn.Succeed(this, 'Done');
-    const definition = invokeHello.next(succeed);
-
-    const stateMachine = new sfn.StateMachine(this, 'HelloWorldStateMachine', {
-      definitionBody: sfn.DefinitionBody.fromChainable(definition),
-    });
-
-    helloFunction.grantInvoke(stateMachine);
-  }
-}
-```
-
-**SimpleSteps (17 lines):**
-
-```typescript
-import { Steps, SimpleStepContext } from '@simplesteps/core/runtime';
-import { Lambda } from '@simplesteps/core/runtime/services';
-
-const helloFn = Lambda<{ name: string }, { greeting: string }>(
-  'arn:aws:lambda:us-east-1:123456789:function:Hello',
-);
-
-export const helloWorld = Steps.createFunction(
-  async (context: SimpleStepContext, input: { name: string }) => {
-    const result = await helloFn.call({ name: input.name });
-    return { greeting: result.greeting };
-  },
-);
-```
-
-The CDK version requires 5 imports, a class wrapper, infrastructure definitions, explicit state wiring (`.next()`), manual output path extraction, and permission grants. The SimpleSteps version is just a function.
-
-## CDK Stack vs CDK + SimpleSteps Stack
-
-If you already use CDK, SimpleSteps doesn't replace it — it replaces the step function wiring inside your CDK stack. Here's the same checkout workflow defined both ways:
-
-**Pure CDK** — state machine defined with construct objects:
+**Pure CDK** — step function defined with construct objects:
 
 ```typescript
 // Define states individually
@@ -129,75 +75,95 @@ const saveOrder = new sfn.CustomState(this, 'Save Order', {
   },
 });
 
+// SQS send message
+const queueForFulfillment = new tasks.SqsSendMessage(this, 'Queue for Fulfillment', {
+  queue: fulfillmentQueue,
+  messageBody: sfn.TaskInput.fromObject({
+    'orderId.$': '$.cartId',
+    'items.$': '$.items',
+  }),
+  resultPath: sfn.JsonPath.DISCARD,
+});
+
 // Wire state graph
 const definition = validateCart.next(checkCartValid);
 
 const stateMachine = new sfn.StateMachine(this, 'CheckoutStateMachine', {
   definitionBody: sfn.DefinitionBody.fromChainable(definition),
 });
-
-// Grant permissions manually
-validateCartFn.grantInvoke(stateMachine);
-processPaymentFn.grantInvoke(stateMachine);
-ordersTable.grantWriteData(stateMachine);
 ```
 
-**CDK + SimpleSteps** — same workflow, inline:
+**CDK + SimpleSteps** — same stack, step function defined inline:
 
 ```typescript
-const validateCart = Lambda<{ cartId: string }, { valid: boolean; total: number }>(
-  validateCartFn.functionArn,
-);
-const processPayment = Lambda<{ cartId: string; total: number }, { status: string }>(
-  processPaymentFn.functionArn,
-);
-const orders = new DynamoDB(ordersTable.tableName);
+const validateCart = Lambda<
+  { cartId: string },
+  { valid: boolean; total: number; items: string[] }
+>(validateCartFn.functionArn);
 
-const machine = new SimpleStepsStateMachine(this, 'Checkout', {
+const processPayment = Lambda<
+  { cartId: string; total: number },
+  { paymentId: string; status: string }
+>(processPaymentFn.functionArn);
+
+const orders = new DynamoDB(ordersTable.tableName);
+const fulfillment = new SQS(fulfillmentQueue.queueUrl);
+const notifications = new SNS(notificationTopic.topicArn);
+
+const machine = new SimpleStepsStateMachine(this, 'CheckoutStateMachine', {
   workflow: Steps.createFunction(
-    async (context: SimpleStepContext, input: { cartId: string }) => {
+    async (context: SimpleStepContext, input: { cartId: string; customerId: string }) => {
       const cart = await validateCart.call({ cartId: input.cartId });
+
       if (!cart.valid) {
-        throw new Error('Cart validation failed');
+        throw new StepException('Cart validation failed');
       }
-      const payment = await processPayment.call({ cartId: input.cartId, total: cart.total });
+
+      const payment = await processPayment.call({
+        cartId: input.cartId,
+        total: cart.total,
+      });
+
       if (payment.status !== 'approved') {
-        throw new Error('Payment declined');
+        throw new StepException('Payment declined');
       }
+
       await orders.putItem({
         Item: {
           orderId: { S: input.cartId },
+          customerId: { S: input.customerId },
+          paymentId: { S: payment.paymentId },
           status: { S: 'CONFIRMED' },
         },
       });
-      return { status: 'CONFIRMED' };
+
+      await fulfillment.publish({
+        orderId: input.cartId,
+        items: cart.items,
+      });
+
+      await notifications.publish({
+        message: 'Your order has been confirmed',
+        orderId: input.cartId,
+      });
+
+      return {
+        orderId: input.cartId,
+        paymentId: payment.paymentId,
+        status: 'CONFIRMED',
+      };
     },
   ),
 });
-
-// Permissions still granted the CDK way
-validateCartFn.grantInvoke(machine);
-processPaymentFn.grantInvoke(machine);
-ordersTable.grantWriteData(machine);
 ```
 
-The infrastructure stays CDK. The workflow logic becomes readable TypeScript. No `CustomState`, no `'$.Payload'`, no `.next()` chains, no `sfn.Condition.booleanEquals()`.
+The infrastructure is identical on both sides. The difference is readability: the SimpleSteps version reads top-to-bottom as a function. The CDK version requires you to mentally reconstruct the flow from `.next()` chains, `sfn.Choice().when().otherwise()`, and `sfn.CustomState` blocks with raw JSON.
 
-## What Makes CDK Verbose
+## What SimpleSteps Replaces
 
-**Infrastructure boilerplate.** Every Lambda needs `runtime`, `handler`, `code`. Every DynamoDB table needs `partitionKey`. SimpleSteps doesn't define infrastructure -- it defines workflow logic only.
+SimpleSteps doesn't replace CDK — it replaces the step function constructs inside your CDK stack.
 
-**Limited service coverage.** CDK has typed constructs for 5 services: Lambda, SQS, SNS, DynamoDB (limited), Step Functions, EventBridge. DynamoDB (with expressions), S3, Secrets Manager, and SSM all require `sfn.CustomState` with raw ASL JSON. SimpleSteps provides typed bindings for all 10.
-
-**Manual permission grants.** Every `grantInvoke()`, `grantReadWriteData()`, `grantSendMessages()` must be written explicitly per resource.
-
-**Explicit state wiring.** `.next()`, `.addCatch()`, `.addRetry()`, `sfn.Choice().when().otherwise()` replace natural `if/else`, `try/catch`, `while`, and `Promise.all`.
-
-**JSONPath strings.** `'$.field'`, `sfn.JsonPath.stringAt(...)` replace natural variable access.
-
-## What SimpleSteps Eliminates
-
-| CDK Pattern | SimpleSteps Equivalent |
+| CDK Step Function Pattern | SimpleSteps Equivalent |
 |---|---|
 | `task1.next(task2).next(task3)` | Sequential statements |
 | `new sfn.Choice().when().otherwise()` | `if/else`, `switch/case` |
@@ -209,25 +175,35 @@ The infrastructure stays CDK. The workflow logic becomes readable TypeScript. No
 | `task.addRetry({ ... })` | `{ retry: { ... } }` option |
 | `sfn.CustomState` with raw JSON | Typed service methods |
 | `sfn.JsonPath.stringAt(...)` | Variable names |
-| `grantInvoke()`, `grantReadWriteData()` | Auto-granted (planned) |
+
+## Where the Savings Come From
+
+The line count reduction varies by example. The pattern:
+
+- **Simple Lambda-only workflows** (01, 02, 03): Small savings. CDK's `LambdaInvoke` is already reasonably concise. The gain is mostly readability — `if/else` vs `sfn.Choice`, `while` vs back-edge wiring.
+
+- **Multi-service workflows** (04, 07, 08, 09, 12): Larger savings. CDK requires `sfn.CustomState` with raw ASL JSON for DynamoDB (with expressions), S3, Secrets Manager, and SSM. SimpleSteps provides typed methods for all of these.
+
+- **Error handling** (03, 11, 13): Moderate savings. `try/catch` with `instanceof` replaces `addCatch()` chains with manual error string matching.
+
+- **Complex orchestration** (13): The biggest example. 11 Lambda functions across 4 team APIs with saga-pattern rollback at every level, parallel provisioning, a health check polling loop, DynamoDB audit trail, SQS queueing, and SNS notification. The CDK version requires you to mentally reconstruct the rollback graph from scattered `addCatch()` chains. The SimpleSteps version reads like a function: nested `try/catch` for rollback scopes, `Promise.all` for parallelism, `while` for polling.
 
 ## Feature Coverage
 
-The 12 comparison examples cover every major Step Functions feature:
-
 | Feature | Examples |
 |---|---|
-| Lambda invocation | 01, 02, 04, 05, 06, 08, 21, 29, 30 |
-| DynamoDB operations | 05, 10, 30 |
-| SQS messaging | 05, 08, 21 |
-| SNS notifications | 05, 21, 29, 30 |
-| S3 operations | 15, 30 |
-| Secrets Manager | 16 |
-| SSM Parameter Store | 16 |
-| Loops / polling | 02 |
-| Parallel execution | 06 |
-| Error handling / retry | 04, 29 |
-| Wait for callback | 08, 21 |
-| Map iteration | 30 |
+| Lambda invocation | 01, 02, 03, 04, 05, 06, 10, 11, 12, 13 |
+| DynamoDB operations | 04, 07, 12, 13 |
+| SQS messaging | 04, 06, 10, 13 |
+| SNS notifications | 04, 10, 11, 12, 13 |
+| S3 operations | 08, 12 |
+| Secrets Manager | 09 |
+| SSM Parameter Store | 09 |
+| Loops / polling | 02, 13 |
+| Parallel execution | 05, 13 |
+| Error handling / retry | 03, 11, 13 |
+| Wait for callback | 06, 10 |
+| Map iteration | 12 |
+| Saga-pattern rollback | 03, 13 |
 
 See [`examples/aws-cdk-comparison/`](../examples/aws-cdk-comparison/) for the complete source files.
