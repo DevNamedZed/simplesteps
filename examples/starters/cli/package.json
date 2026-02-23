@@ -1,0 +1,11 @@
+{
+  "name": "simplesteps-cli-starter",
+  "private": true,
+  "version": "0.1.0",
+  "scripts": {
+    "compile": "simplesteps compile workflow.ts -o output/"
+  },
+  "dependencies": {
+    "@simplesteps/core": "^0.1.0"
+  }
+}

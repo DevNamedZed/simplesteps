@@ -1,10 +1,11 @@
 // S3 Data Processing — SimpleSteps
 //
 // Read data from S3, transform with Lambda, write results back, verify.
+// When installed via npm, use: import { Steps } from '@simplesteps/core/runtime'
 
-import { Steps, SimpleStepContext } from '@simplesteps/core/runtime';
-import { Lambda } from '@simplesteps/core/runtime/services';
-import { S3 } from '@simplesteps/core/runtime/services';
+import { Steps, SimpleStepContext } from '../../../packages/core/src/runtime/index';
+import { Lambda } from '../../../packages/core/src/runtime/services/Lambda';
+import { S3 } from '../../../packages/core/src/runtime/services/S3';
 
 const transformData = Lambda<
   { data: string },

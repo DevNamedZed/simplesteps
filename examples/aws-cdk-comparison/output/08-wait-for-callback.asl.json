@@ -1,0 +1,85 @@
+{
+  "StartAt": "Invoke_validateOrder",
+  "States": {
+    "Invoke_validateOrder": {
+      "Type": "Task",
+      "Resource": "arn:aws:lambda:us-east-1:123456789:function:ValidateOrder",
+      "Parameters": {
+        "orderId.$": "$.orderId"
+      },
+      "ResultPath": "$.order",
+      "Next": "Choice"
+    },
+    "Invoke_approvalQueue": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::sqs:sendMessage.waitForTaskToken",
+      "Parameters": {
+        "QueueUrl": "https://sqs.us-east-1.amazonaws.com/123456789/ApprovalQueue",
+        "MessageBody": {
+          "orderId.$": "$.order.orderId",
+          "amount.$": "$.order.amount"
+        }
+      },
+      "ResultPath": "$.approval",
+      "Next": "Check_approved"
+    },
+    "Throw_Error": {
+      "Type": "Fail",
+      "Error": "Error",
+      "Cause": "Order rejected"
+    },
+    "Invoke_fulfillOrder": {
+      "Type": "Task",
+      "Resource": "arn:aws:lambda:us-east-1:123456789:function:FulfillOrder",
+      "Parameters": {
+        "orderId.$": "$.order.orderId",
+        "approvedBy.$": "$.approval.approvedBy"
+      },
+      "ResultPath": null,
+      "Next": "Return_Result"
+    },
+    "Return_Result": {
+      "Type": "Pass",
+      "Parameters": {
+        "orderId.$": "$.orderId",
+        "status": "FULFILLED"
+      },
+      "End": true
+    },
+    "Check_approved": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Not": {
+            "Variable": "$.approval.approved",
+            "BooleanEquals": true,
+            "Next": ""
+          },
+          "Next": "Throw_Error"
+        }
+      ],
+      "Default": "Invoke_fulfillOrder"
+    },
+    "Invoke_fulfillOrder_2": {
+      "Type": "Task",
+      "Resource": "arn:aws:lambda:us-east-1:123456789:function:FulfillOrder",
+      "Parameters": {
+        "orderId.$": "$.order.orderId",
+        "approvedBy": "auto"
+      },
+      "ResultPath": null,
+      "Next": "Return_Result"
+    },
+    "Choice": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.order.requiresApproval",
+          "BooleanEquals": true,
+          "Next": "Invoke_approvalQueue"
+        }
+      ],
+      "Default": "Invoke_fulfillOrder_2"
+    }
+  }
+}

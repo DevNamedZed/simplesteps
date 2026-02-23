@@ -1,0 +1,21 @@
+{
+  "StartAt": "Invoke_helloFn",
+  "States": {
+    "Invoke_helloFn": {
+      "Type": "Task",
+      "Resource": "arn:aws:lambda:us-east-1:123456789:function:Hello",
+      "Parameters": {
+        "name.$": "$.name"
+      },
+      "ResultPath": "$.result",
+      "Next": "Return_Result"
+    },
+    "Return_Result": {
+      "Type": "Pass",
+      "Parameters": {
+        "greeting.$": "$.result.greeting"
+      },
+      "End": true
+    }
+  }
+}

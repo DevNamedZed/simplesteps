@@ -13,15 +13,21 @@ export interface SqsPublishOptions {
 
 /** SQS queue binding for the SimpleSteps compiler. */
 export class SimpleQueueService {
-  constructor(queueUrl: string) {
-    throw new Error(BINDING_ERROR);
-  }
+  constructor(queueUrl: string) {}
 
   publish(message: any, options?: SqsPublishOptions): Promise<void> {
     throw new Error(BINDING_ERROR);
   }
 
   publishWithCallback<T>(message: any, options?: SqsPublishOptions): Promise<T> {
+    throw new Error(BINDING_ERROR);
+  }
+
+  receiveMessage<T = any>(params: Record<string, any>, options?: SqsPublishOptions): Promise<T> {
+    throw new Error(BINDING_ERROR);
+  }
+
+  deleteMessage(params: Record<string, any>, options?: SqsPublishOptions): Promise<void> {
     throw new Error(BINDING_ERROR);
   }
 }

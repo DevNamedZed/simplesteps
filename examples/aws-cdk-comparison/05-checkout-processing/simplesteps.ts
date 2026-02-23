@@ -2,12 +2,13 @@
 //
 // Multi-service e-commerce checkout: validate cart, process payment,
 // create order in DynamoDB, queue for fulfillment, notify customer.
+// When installed via npm, use: import { Steps } from '@simplesteps/core/runtime'
 
-import { Steps, SimpleStepContext, StepException } from '@simplesteps/core/runtime';
-import { Lambda } from '@simplesteps/core/runtime/services';
-import { DynamoDB } from '@simplesteps/core/runtime/services';
-import { SQS } from '@simplesteps/core/runtime/services';
-import { SNS } from '@simplesteps/core/runtime/services';
+import { Steps, SimpleStepContext, StepException } from '../../../packages/core/src/runtime/index';
+import { Lambda } from '../../../packages/core/src/runtime/services/Lambda';
+import { DynamoDB } from '../../../packages/core/src/runtime/services/DynamoDB';
+import { SQS } from '../../../packages/core/src/runtime/services/SimpleQueueService';
+import { SNS } from '../../../packages/core/src/runtime/services/SNS';
 
 const validateCart = Lambda<
   { cartId: string },

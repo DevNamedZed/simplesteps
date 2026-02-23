@@ -10,6 +10,15 @@ import { DynamoDB } from '@simplesteps/core/runtime/services/DynamoDB';
 import { SNS } from '@simplesteps/core/runtime/services/SNS';
 import { StepFunction } from '@simplesteps/core/runtime/services/StepFunction';
 import { EventBridge } from '@simplesteps/core/runtime/services/EventBridge';
+import { S3 } from '@simplesteps/core/runtime/services/S3';
+import { SecretsManager } from '@simplesteps/core/runtime/services/SecretsManager';
+import { SSM } from '@simplesteps/core/runtime/services/SSM';
+import { ECS } from '@simplesteps/core/runtime/services/ECS';
+import { Bedrock } from '@simplesteps/core/runtime/services/Bedrock';
+import { Batch } from '@simplesteps/core/runtime/services/Batch';
+import { Glue } from '@simplesteps/core/runtime/services/Glue';
+import { CodeBuild } from '@simplesteps/core/runtime/services/CodeBuild';
+import { Athena } from '@simplesteps/core/runtime/services/Athena';
 
 const RUNTIME_MSG = 'SimpleSteps runtime types cannot be called directly';
 
@@ -19,8 +28,10 @@ describe('Runtime types throw at runtime', () => {
       expect(() => new (Steps as any)()).toThrow(RUNTIME_MSG);
     });
 
-    it('createFunction throws', () => {
-      expect(() => Steps.createFunction(async () => ({}))).toThrow(RUNTIME_MSG);
+    it('createFunction returns a stub', () => {
+      // createFunction returns the factory as a stub (safe for CDK inline workflows)
+      const result = Steps.createFunction(async () => ({}));
+      expect(result).toBeDefined();
     });
 
     it('delay throws', () => {
@@ -146,33 +157,108 @@ describe('Runtime types throw at runtime', () => {
     });
   });
 
-  describe('Service bindings throw at runtime', () => {
-    it('Lambda factory throws', () => {
-      expect(() => Lambda('arn:aws:lambda:us-east-1:123:function:Func')).toThrow();
+  describe('Service bindings at runtime', () => {
+    // Constructors are no-op stubs (safe for CDK inline workflows).
+    // Methods still throw since they're compiler-only.
+    it('Lambda factory returns a stub', () => {
+      const stub = Lambda('arn:aws:lambda:us-east-1:123:function:Func');
+      expect(stub).toBeDefined();
+      expect(() => stub.call({} as any)).toThrow();
     });
 
     it('SQS is an alias for SimpleQueueService', () => {
       expect(SQS).toBe(SimpleQueueService);
     });
 
-    it('SimpleQueueService constructor throws', () => {
-      expect(() => new SimpleQueueService('https://sqs.us-east-1.amazonaws.com/123/queue')).toThrow();
+    it('SimpleQueueService constructor returns instance', () => {
+      const sqs = new SimpleQueueService('https://sqs.us-east-1.amazonaws.com/123/queue');
+      expect(sqs).toBeInstanceOf(SimpleQueueService);
+      expect(() => sqs.publish({} as any)).toThrow();
     });
 
-    it('DynamoDB constructor throws', () => {
-      expect(() => new DynamoDB('MyTable')).toThrow();
+    it('DynamoDB constructor returns instance', () => {
+      const db = new DynamoDB('MyTable');
+      expect(db).toBeInstanceOf(DynamoDB);
+      expect(() => db.getItem({} as any)).toThrow();
     });
 
-    it('SNS constructor throws', () => {
-      expect(() => new SNS('arn:aws:sns:us-east-1:123:topic')).toThrow();
+    it('SNS constructor returns instance', () => {
+      const sns = new SNS('arn:aws:sns:us-east-1:123:topic');
+      expect(sns).toBeInstanceOf(SNS);
+      expect(() => sns.publish({} as any)).toThrow();
     });
 
-    it('StepFunction constructor throws', () => {
-      expect(() => new StepFunction('arn:aws:states:us-east-1:123:stateMachine:Workflow')).toThrow();
+    it('StepFunction constructor returns instance', () => {
+      const sf = new StepFunction('arn:aws:states:us-east-1:123:stateMachine:Workflow');
+      expect(sf).toBeInstanceOf(StepFunction);
+      expect(() => sf.startExecution({} as any)).toThrow();
     });
 
-    it('EventBridge constructor throws', () => {
-      expect(() => new EventBridge('my-event-bus')).toThrow();
+    it('EventBridge constructor returns instance', () => {
+      const eb = new EventBridge('my-event-bus');
+      expect(eb).toBeInstanceOf(EventBridge);
+      expect(() => eb.putEvent({} as any)).toThrow();
+    });
+
+    it('S3 constructor returns instance', () => {
+      const s3 = new S3('my-bucket');
+      expect(s3).toBeInstanceOf(S3);
+      expect(() => s3.getObject({} as any)).toThrow();
+      expect(() => s3.putObject({} as any)).toThrow();
+    });
+
+    it('SecretsManager constructor returns instance', () => {
+      const sm = new SecretsManager();
+      expect(sm).toBeInstanceOf(SecretsManager);
+      expect(() => sm.getSecretValue({} as any)).toThrow();
+    });
+
+    it('SSM constructor returns instance', () => {
+      const ssm = new SSM();
+      expect(ssm).toBeInstanceOf(SSM);
+      expect(() => ssm.getParameter({} as any)).toThrow();
+    });
+
+    it('ECS constructor returns instance', () => {
+      const ecs = new ECS('arn:aws:ecs:us-east-1:123:cluster/test');
+      expect(ecs).toBeInstanceOf(ECS);
+      expect(() => ecs.runTask({} as any)).toThrow();
+      expect(() => ecs.runTaskAsync({} as any)).toThrow();
+    });
+
+    it('Bedrock constructor returns instance', () => {
+      const bedrock = new Bedrock('anthropic.claude-3-sonnet');
+      expect(bedrock).toBeInstanceOf(Bedrock);
+      expect(() => bedrock.invokeModel({} as any)).toThrow();
+    });
+
+    it('Batch constructor returns instance', () => {
+      const batch = new Batch('arn:aws:batch:us-east-1:123:job-queue/test');
+      expect(batch).toBeInstanceOf(Batch);
+      expect(() => batch.submitJob({} as any)).toThrow();
+      expect(() => batch.submitJobAsync({} as any)).toThrow();
+    });
+
+    it('Glue constructor returns instance', () => {
+      const glue = new Glue('my-etl-job');
+      expect(glue).toBeInstanceOf(Glue);
+      expect(() => glue.startJobRun({} as any)).toThrow();
+      expect(() => glue.startJobRunAsync({} as any)).toThrow();
+    });
+
+    it('CodeBuild constructor returns instance', () => {
+      const cb = new CodeBuild('my-project');
+      expect(cb).toBeInstanceOf(CodeBuild);
+      expect(() => cb.startBuild({} as any)).toThrow();
+      expect(() => cb.startBuildAsync({} as any)).toThrow();
+    });
+
+    it('Athena constructor returns instance', () => {
+      const athena = new Athena();
+      expect(athena).toBeInstanceOf(Athena);
+      expect(() => athena.startQueryExecution({} as any)).toThrow();
+      expect(() => athena.getQueryExecution({} as any)).toThrow();
+      expect(() => athena.getQueryResults({} as any)).toThrow();
     });
   });
 });

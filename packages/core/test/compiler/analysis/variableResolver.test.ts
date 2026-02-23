@@ -10,6 +10,7 @@ import {
   VariableResolutionBuilder,
 } from '@simplesteps/core/compiler/analysis/variableResolver';
 import { StepVariableType } from '@simplesteps/core/compiler/analysis/types';
+import { WholeProgramAnalyzer } from '@simplesteps/core/compiler/analysis/wholeProgramAnalyzer';
 
 const CFG_FIXTURES_DIR = path.resolve(__dirname, '../../fixtures/cfg');
 
@@ -59,7 +60,27 @@ function resolveFromFixture(fixtureFile: string) {
   expect(callSites).toHaveLength(1);
 
   const builder = resolveVariables(context, callSites[0], serviceRegistry);
-  return { builder, context, callSite: callSites[0], sourceFile: sourceFile! };
+  return { builder, context, callSite: callSites[0], sourceFile: sourceFile!, serviceRegistry };
+}
+
+function resolveFromFixtureWithAnalyzer(fixtureFile: string) {
+  const program = createProgram(fixtureFile);
+  const context = new CompilerContext(program);
+  const intrinsics = loadIntrinsics(context);
+  expect(intrinsics).not.toBeNull();
+
+  const serviceRegistry = discoverServices(context);
+  const analyzer = new WholeProgramAnalyzer(context, serviceRegistry);
+
+  const filePath = path.join(CFG_FIXTURES_DIR, fixtureFile);
+  const sourceFile = program.getSourceFile(filePath);
+  expect(sourceFile).toBeDefined();
+
+  const callSites = findCallSites(context, intrinsics!, sourceFile!);
+  expect(callSites).toHaveLength(1);
+
+  const builder = resolveVariables(context, callSites[0], serviceRegistry, undefined, analyzer);
+  return { builder, context, callSite: callSites[0], sourceFile: sourceFile!, analyzer };
 }
 
 // ---------------------------------------------------------------------------
@@ -222,6 +243,83 @@ describe('Variable resolver', () => {
 
       const resolution = builder.toResolution();
       expect(resolution.variables.size).toBe(0);
+    });
+  });
+
+  describe('with WholeProgramAnalyzer', () => {
+    it('should classify variables same as without analyzer', () => {
+      const withoutAnalyzer = resolveFromFixture('sequential.ts');
+      const withAnalyzer = resolveFromFixtureWithAnalyzer('sequential.ts');
+
+      // Both should have same context and input symbols
+      expect(withAnalyzer.builder.contextSymbol).toBeDefined();
+      expect(withAnalyzer.builder.inputSymbol).toBeDefined();
+    });
+
+    it('should classify service bindings with analyzer', () => {
+      const { builder } = resolveFromFixtureWithAnalyzer('sequential.ts');
+      const resolution = builder.toResolution();
+
+      let externalCount = 0;
+      for (const info of resolution.variables.values()) {
+        if (info.type === StepVariableType.External) {
+          externalCount++;
+          expect(info.serviceBinding).toBeDefined();
+        }
+      }
+
+      expect(externalCount).toBe(2);
+    });
+
+    it('should resolve compile-time constants via analyzer', () => {
+      const { builder } = resolveFromFixtureWithAnalyzer('constants.ts');
+      const resolution = builder.toResolution();
+
+      // Check that the analyzer path resolves constants
+      let constantCount = 0;
+      for (const info of resolution.variables.values()) {
+        if (info.type === StepVariableType.Constant) {
+          constantCount++;
+        }
+      }
+
+      // constants.ts has: BASE_URL, MAX_RETRIES, TIMEOUT, GREETING, DOUBLED, NEGATIVE, COMPUTED
+      expect(constantCount).toBeGreaterThanOrEqual(7);
+    });
+
+    it('should fold computed constants via analyzer', () => {
+      const { builder } = resolveFromFixtureWithAnalyzer('constants.ts');
+      const resolution = builder.toResolution();
+
+      const constants = new Map<string, unknown>();
+      for (const [sym, info] of resolution.variables) {
+        if (info.type === StepVariableType.Constant) {
+          constants.set(sym.getName(), info.literalValue);
+        }
+      }
+
+      expect(constants.get('BASE_URL')).toBe('https://api.example.com');
+      expect(constants.get('MAX_RETRIES')).toBe(3);
+      expect(constants.get('TIMEOUT')).toBe(40);       // 30 + 10
+      expect(constants.get('GREETING')).toBe('Hello World');
+      expect(constants.get('DOUBLED')).toBe(6);          // 3 * 2
+      expect(constants.get('NEGATIVE')).toBe(-1);
+      expect(constants.get('COMPUTED')).toBe(20);         // Math.max(10, 20)
+    });
+
+    it('should produce same ARNs with analyzer', () => {
+      const { builder } = resolveFromFixtureWithAnalyzer('sequential.ts');
+      const resolution = builder.toResolution();
+
+      const arns: string[] = [];
+      for (const info of resolution.variables.values()) {
+        if (info.type === StepVariableType.External && info.literalValue) {
+          arns.push(info.literalValue as string);
+        }
+      }
+
+      expect(arns).toContain('arn:aws:lambda:us-east-1:123:function:A');
+      expect(arns).toContain('arn:aws:lambda:us-east-1:123:function:B');
     });
   });
 });

@@ -19,11 +19,16 @@ export interface LambdaInstance<TInput, TOutput> {
 /**
  * Creates a typed Lambda function binding.
  *
- * This is a compile-time-only construct and will throw at runtime.
+ * Returns a stub at runtime (safe for CDK inline workflows where the
+ * transformer replaces usage). Methods throw if called directly.
  */
 export function Lambda<TInput = any, TOutput = any>(
   arn: string,
   options?: LambdaOptions,
 ): LambdaInstance<TInput, TOutput> {
-  throw new Error(BINDING_ERROR);
+  const stub: any = () => { throw new Error(BINDING_ERROR); };
+  stub.call = () => { throw new Error(BINDING_ERROR); };
+  stub.callAsync = () => { throw new Error(BINDING_ERROR); };
+  stub.callWithCallback = () => { throw new Error(BINDING_ERROR); };
+  return stub;
 }

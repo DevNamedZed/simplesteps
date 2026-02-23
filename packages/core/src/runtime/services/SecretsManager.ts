@@ -10,9 +10,7 @@ export interface SecretsManagerOptions {
 
 /** Secrets Manager binding for the SimpleSteps compiler. */
 export class SecretsManager {
-  constructor() {
-    throw new Error(BINDING_ERROR);
-  }
+  constructor() {}
 
   getSecretValue<T = any>(params: Record<string, any>, options?: SecretsManagerOptions): Promise<T> {
     throw new Error(BINDING_ERROR);

@@ -11,9 +11,7 @@ export interface StepFunctionOptions {
 
 /** Step Function binding for the SimpleSteps compiler. */
 export class StepFunction<TInput = any, TOutput = any> {
-  constructor(stateMachineArn: string, options?: StepFunctionOptions) {
-    throw new Error(BINDING_ERROR);
-  }
+  constructor(stateMachineArn: string, options?: StepFunctionOptions) {}
 
   startExecution(input: TInput): Promise<TOutput> {
     throw new Error(BINDING_ERROR);

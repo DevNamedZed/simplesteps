@@ -1,5 +1,6 @@
 import ts from 'typescript';
 import { CompilerContext } from '../compilerContext.js';
+import { ErrorCodes } from '../diagnosticCodes.js';
 import type { ControlFlowGraph, BasicBlock } from '../cfg/types.js';
 import type { ServiceRegistry, ServiceMethodInfo } from '../discovery/serviceDiscovery.js';
 import type { StepFunctionCallSite } from '../discovery/callSiteLocator.js';
@@ -54,6 +55,10 @@ const SDK_PARAM_SHAPE: Record<string, Record<string, {
   EventBridge: {
     putEvent: { resourceKey: 'EventBusName', paramKey: 'Detail' },
   },
+  Batch: {
+    submitJob: { resourceKey: 'JobQueue', paramKey: 'Parameters' },
+    submitJobAsync: { resourceKey: 'JobQueue', paramKey: 'Parameters' },
+  },
 };
 
 /**
@@ -64,6 +69,11 @@ const SDK_PARAM_SHAPE: Record<string, Record<string, {
 const SDK_RESOURCE_INJECT: Record<string, string> = {
   DynamoDB: 'TableName',
   S3: 'Bucket',
+  SimpleQueueService: 'QueueUrl',
+  ECS: 'Cluster',
+  Bedrock: 'ModelId',
+  Glue: 'JobName',
+  CodeBuild: 'ProjectName',
 };
 
 // ---------------------------------------------------------------------------
@@ -126,7 +136,7 @@ export function buildStateMachine(
     context.addRawDiagnostic(
       callSite.file.fileName, 1, 1,
       'Step function body produced no ASL states',
-      'error', 'SS600',
+      'error', ErrorCodes.Gen.EmptyStateMachine.code,
     );
     return { StartAt: '', States: {} };
   }
@@ -1080,7 +1090,7 @@ function extractServiceCall(
     ctx.compilerContext.addError(
       callExpr,
       `Unknown service method: ${serviceName}.${methodName}`,
-      'SS610',
+      ErrorCodes.Gen.UnknownServiceMethod.code,
     );
     return null;
   }
@@ -1094,7 +1104,7 @@ function extractServiceCall(
       ctx.compilerContext.addError(
         callExpr,
         `Cannot determine ARN for service binding: ${serviceVarName}. Provide a string literal ARN or use the substitutions option`,
-        'SS611',
+        ErrorCodes.Gen.MissingResourceArn.code,
       );
       return null;
     }

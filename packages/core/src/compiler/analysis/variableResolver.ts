@@ -1,8 +1,11 @@
 import ts from 'typescript';
 import { CompilerContext } from '../compilerContext.js';
+import { ErrorCodes } from '../diagnosticCodes.js';
 import type { ServiceRegistry } from '../discovery/serviceDiscovery.js';
 import type { StepFunctionCallSite } from '../discovery/callSiteLocator.js';
 import { StepVariableType, type VariableInfo } from './types.js';
+import type { WholeProgramAnalyzer } from './wholeProgramAnalyzer.js';
+import { isConstant, isBottom } from './lattice.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -62,6 +65,7 @@ export function resolveVariables(
   callSite: StepFunctionCallSite,
   serviceRegistry: ServiceRegistry,
   substitutions?: Readonly<Record<string, unknown>>,
+  analyzer?: WholeProgramAnalyzer,
 ): VariableResolutionBuilder {
   const builder = new VariableResolutionBuilder();
   const factory = callSite.factoryFunction.factory;
@@ -100,39 +104,87 @@ export function resolveVariables(
 
   // Scan source file for top-level service binding declarations
   const sourceFile = callSite.file;
-  for (const stmt of sourceFile.statements) {
-    if (!ts.isVariableStatement(stmt)) continue;
-    for (const decl of stmt.declarationList.declarations) {
-      if (!decl.initializer) continue;
-      if (!ts.isIdentifier(decl.name)) continue;
 
-      const sym = context.checker.getSymbolAtLocation(decl.name);
-      if (!sym) continue;
+  // When analyzer is available, use whole-program data flow results
+  if (analyzer) {
+    const env = analyzer.analyzeFile(sourceFile);
+    for (const stmt of sourceFile.statements) {
+      if (!ts.isVariableStatement(stmt)) continue;
+      for (const decl of stmt.declarationList.declarations) {
+        if (!decl.initializer) continue;
+        if (!ts.isIdentifier(decl.name)) continue;
 
-      const serviceMatch = matchServiceBinding(context, decl.initializer, serviceRegistry);
-      if (serviceMatch) {
-        const varName = (decl.name as ts.Identifier).text;
-        // Use substitution if provided, otherwise fall back to extracted ARN
-        const resourceValue = substitutions?.[varName] ?? serviceMatch.resourceArn;
-        builder.addVariable(sym, {
-          symbol: sym,
-          type: StepVariableType.External,
-          definitelyAssigned: true,
-          constant: true,
-          serviceBinding: serviceMatch.serviceName,
-          literalValue: resourceValue,
-        });
-      } else if (stmt.declarationList.flags & ts.NodeFlags.Const) {
-        // Non-service const — try to evaluate as compile-time constant
-        const constValue = tryFoldConstant(decl.initializer, builder);
-        if (constValue !== undefined) {
+        const sym = context.checker.getSymbolAtLocation(decl.name);
+        if (!sym) continue;
+        if (builder.getBySymbol(sym)) continue; // already classified as param
+
+        const serviceMatch = matchServiceBinding(context, decl.initializer, serviceRegistry);
+        if (serviceMatch) {
+          const varName = decl.name.text;
+          const resourceValue = substitutions?.[varName] ?? serviceMatch.resourceArn;
           builder.addVariable(sym, {
             symbol: sym,
-            type: StepVariableType.Constant,
+            type: StepVariableType.External,
             definitelyAssigned: true,
             constant: true,
-            literalValue: constValue,
+            serviceBinding: serviceMatch.serviceName,
+            literalValue: resourceValue,
           });
+        } else {
+          // Use lattice value from whole-program analysis
+          const latticeVal = env.resolve(sym);
+          if (isConstant(latticeVal)) {
+            builder.addVariable(sym, {
+              symbol: sym,
+              type: StepVariableType.Constant,
+              definitelyAssigned: true,
+              constant: true,
+              literalValue: latticeVal.value,
+            });
+          } else if (isBottom(latticeVal) && latticeVal.isSafe) {
+            // Steps.safeVar() — warn but allow
+            context.addWarning(decl.name, `Variable '${decl.name.text}' is not a compile-time constant (wrapped in Steps.safeVar())`, ErrorCodes.DataFlow.SafeVarEscapeHatch);
+          } else if (isBottom(latticeVal)) {
+            // Non-constant, non-safe — this will be caught when the variable
+            // is used in an expression that requires a constant value
+          }
+        }
+      }
+    }
+  } else {
+    // Fallback: original single-file scan without whole-program analysis
+    for (const stmt of sourceFile.statements) {
+      if (!ts.isVariableStatement(stmt)) continue;
+      for (const decl of stmt.declarationList.declarations) {
+        if (!decl.initializer) continue;
+        if (!ts.isIdentifier(decl.name)) continue;
+
+        const sym = context.checker.getSymbolAtLocation(decl.name);
+        if (!sym) continue;
+
+        const serviceMatch = matchServiceBinding(context, decl.initializer, serviceRegistry);
+        if (serviceMatch) {
+          const varName = (decl.name as ts.Identifier).text;
+          const resourceValue = substitutions?.[varName] ?? serviceMatch.resourceArn;
+          builder.addVariable(sym, {
+            symbol: sym,
+            type: StepVariableType.External,
+            definitelyAssigned: true,
+            constant: true,
+            serviceBinding: serviceMatch.serviceName,
+            literalValue: resourceValue,
+          });
+        } else if (stmt.declarationList.flags & ts.NodeFlags.Const) {
+          const constValue = tryFoldConstant(decl.initializer, builder);
+          if (constValue !== undefined) {
+            builder.addVariable(sym, {
+              symbol: sym,
+              type: StepVariableType.Constant,
+              definitelyAssigned: true,
+              constant: true,
+              literalValue: constValue,
+            });
+          }
         }
       }
     }
@@ -576,7 +628,7 @@ function buildIntrinsicFromArgs(
     const resolved = resolveExpression(context, arg, variables);
     const serialized = serializeIntrinsicArg(resolved);
     if (serialized === null) {
-      context.addError(arg, 'Cannot resolve intrinsic function argument to ASL value', 'SS520');
+      context.addError(arg, 'Cannot resolve intrinsic function argument to ASL value', ErrorCodes.Expr.UnresolvableIntrinsicArg.code);
       return { kind: 'unknown' };
     }
     serializedArgs.push(serialized);
@@ -600,15 +652,15 @@ function resolveBinaryExpression(
 
   // Unsupported operators — emit helpful errors
   if (op === ts.SyntaxKind.AsteriskToken) {
-    context.addError(expr, 'The * operator cannot be compiled to ASL (no States.MathMultiply intrinsic). Use a compile-time constant or a Lambda function instead', 'SS530');
+    context.addError(expr, 'The * operator cannot be compiled to ASL (no States.MathMultiply intrinsic). Use a compile-time constant or a Lambda function instead', ErrorCodes.Expr.MultiplyNotSupported.code);
     return { kind: 'unknown' };
   }
   if (op === ts.SyntaxKind.SlashToken) {
-    context.addError(expr, 'The / operator cannot be compiled to ASL (no States.MathDivide intrinsic). Use a compile-time constant or a Lambda function instead', 'SS531');
+    context.addError(expr, 'The / operator cannot be compiled to ASL (no States.MathDivide intrinsic). Use a compile-time constant or a Lambda function instead', ErrorCodes.Expr.DivideNotSupported.code);
     return { kind: 'unknown' };
   }
   if (op === ts.SyntaxKind.PercentToken) {
-    context.addError(expr, 'The % operator cannot be compiled to ASL (no States.MathModulo intrinsic). Use a compile-time constant or a Lambda function instead', 'SS532');
+    context.addError(expr, 'The % operator cannot be compiled to ASL (no States.MathModulo intrinsic). Use a compile-time constant or a Lambda function instead', ErrorCodes.Expr.ModuloNotSupported.code);
     return { kind: 'unknown' };
   }
 
@@ -635,7 +687,7 @@ function resolveBinaryExpression(
       return { kind: 'intrinsic', path: `States.MathAdd(${leftStr}, ${-right.value})` };
     }
     // Dynamic subtraction is not possible in ASL
-    context.addError(expr, 'Subtraction with a dynamic right-hand side cannot be compiled to ASL. Only `a - <literal>` is supported (compiled as States.MathAdd(a, -literal)). Use a compile-time constant or a Lambda function instead', 'SS533');
+    context.addError(expr, 'Subtraction with a dynamic right-hand side cannot be compiled to ASL. Only `a - <literal>` is supported (compiled as States.MathAdd(a, -literal)). Use a compile-time constant or a Lambda function instead', ErrorCodes.Expr.DynamicSubtraction.code);
     return { kind: 'unknown' };
   }
 

@@ -1,11 +1,13 @@
 import ts from 'typescript';
 import { CompilerContext, type CompilerDiagnostic } from './compiler/compilerContext.js';
+import { ErrorCodes } from './compiler/diagnosticCodes.js';
 import { loadIntrinsics } from './compiler/discovery/intrinsics.js';
 import { findCallSites } from './compiler/discovery/callSiteLocator.js';
 import { createCallGraph, type CallGraphNode } from './compiler/discovery/callGraph.js';
 import { discoverServices } from './compiler/discovery/serviceDiscovery.js';
 import { buildCFG } from './compiler/cfg/index.js';
 import { generateStateMachine, deriveStateMachineName } from './compiler/generation/index.js';
+import { WholeProgramAnalyzer } from './compiler/analysis/wholeProgramAnalyzer.js';
 
 // Re-export ASL types
 export type {
@@ -133,6 +135,39 @@ export type {
   ResolvedExpression,
 } from './compiler/analysis/index.js';
 
+// Re-export whole-program analysis types
+export {
+  WholeProgramAnalyzer,
+  ExpressionEvaluator,
+  ModuleEnvironment,
+  isEligibleForInlining,
+  top,
+  constant,
+  bottom,
+  meet,
+  isConstant,
+  isBottom,
+  isTop,
+} from './compiler/analysis/index.js';
+
+export type {
+  WholeProgramAnalyzerOptions,
+  LatticeValue,
+  TopValue,
+  ConstantValue,
+  BottomValue,
+  SymbolResolver,
+  ImportResolver,
+  NamespaceResolver,
+} from './compiler/analysis/index.js';
+
+// Re-export transformer
+export { createSimpleStepsTransformer } from './transformer/index.js';
+export { analyzeFreeVariables } from './transformer/dataFlow.js';
+export type { FreeVariable, FreeVariableClassification, ServiceInfo } from './transformer/dataFlow.js';
+export { compileVirtualWorkflow } from './transformer/virtualCompiler.js';
+export type { VirtualCompileResult } from './transformer/virtualCompiler.js';
+
 // ── Compile function ───────────────────────────────────────────────────
 
 /**
@@ -166,7 +201,7 @@ export function compile(options: CompileOptions): CompileResult {
           column: 1,
           message: ts.flattenDiagnosticMessageText(configFile.error.messageText, '\n'),
           severity: 'error',
-          code: 'SS000',
+          code: ErrorCodes.Config.InvalidConfig.code,
         }],
       };
     }
@@ -182,7 +217,7 @@ export function compile(options: CompileOptions): CompileResult {
         column: 0,
         message: 'Either tsconfigPath or sourceFiles must be provided',
         severity: 'error',
-        code: 'SS000',
+        code: ErrorCodes.Config.InvalidConfig.code,
       }],
     };
   }
@@ -199,6 +234,9 @@ export function compile(options: CompileOptions): CompileResult {
   }
 
   const serviceRegistry = discoverServices(context);
+
+  // ── Stage 1b: Create whole-program analyzer ───────────────────────
+  const analyzer = new WholeProgramAnalyzer(context, serviceRegistry);
 
   // ── Stage 2: Find call sites (Steps.createFunction, @stepFunction) ──
   const allCallSites = [];
@@ -248,7 +286,7 @@ export function compile(options: CompileOptions): CompileResult {
   // ── Stage 5: ASL generation ──────────────────────────────────────────
   const stateMachines: CompiledStateMachine[] = [];
   for (const { callSite, cfg } of compilationUnits) {
-    const definition = generateStateMachine(context, callSite, cfg, serviceRegistry, options.substitutions);
+    const definition = generateStateMachine(context, callSite, cfg, serviceRegistry, options.substitutions, analyzer);
     const name = deriveStateMachineName(callSite);
 
     // Collect service names used by this state machine
@@ -312,6 +350,9 @@ export function compileFromProgram(options: CompileFromProgramOptions): CompileR
 
   const serviceRegistry = discoverServices(context, servicesDir);
 
+  // Stage 1b: Create whole-program analyzer
+  const analyzer2 = new WholeProgramAnalyzer(context, serviceRegistry);
+
   // Stage 2: Find call sites
   const allCallSites = [];
   for (const sourceFile of program.getSourceFiles()) {
@@ -349,7 +390,7 @@ export function compileFromProgram(options: CompileFromProgramOptions): CompileR
   // Stage 5: ASL generation
   const stateMachines: CompiledStateMachine[] = [];
   for (const { callSite, cfg } of compilationUnits) {
-    const definition = generateStateMachine(context, callSite, cfg, serviceRegistry, options.substitutions);
+    const definition = generateStateMachine(context, callSite, cfg, serviceRegistry, options.substitutions, analyzer2);
     const name = deriveStateMachineName(callSite);
 
     const services: string[] = [];

@@ -1,0 +1,84 @@
+{
+  "StartAt": "Invoke_approvalQueue",
+  "States": {
+    "Invoke_approvalQueue": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::sqs:sendMessage.waitForTaskToken",
+      "Parameters": {
+        "QueueUrl": "https://sqs.us-east-1.amazonaws.com/123456789/ApprovalQueue",
+        "MessageBody": {
+          "requestId.$": "$.requestId",
+          "amount.$": "$.amount",
+          "requester.$": "$.requester"
+        }
+      },
+      "ResultPath": "$.approval",
+      "Next": "Check_decision"
+    },
+    "Invoke_processApproved": {
+      "Type": "Task",
+      "Resource": "arn:aws:lambda:us-east-1:123456789:function:ProcessApproved",
+      "Parameters": {
+        "requestId.$": "$.requestId",
+        "amount.$": "$.amount"
+      },
+      "ResultPath": "$.result",
+      "Next": "Invoke_notifyTopic"
+    },
+    "Invoke_notifyTopic": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::sns:publish",
+      "Parameters": {
+        "TopicArn": "arn:aws:sns:us-east-1:123456789:ApprovalNotifications",
+        "Message": {
+          "requestId.$": "$.requestId",
+          "status": "APPROVED",
+          "approver.$": "$.approval.approver"
+        }
+      },
+      "ResultPath": null,
+      "Next": "Return_Result"
+    },
+    "Return_Result": {
+      "Type": "Pass",
+      "Parameters": {
+        "status": "APPROVED",
+        "processed.$": "$.result.processed"
+      },
+      "End": true
+    },
+    "Invoke_notifyTopic_2": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::sns:publish",
+      "Parameters": {
+        "TopicArn": "arn:aws:sns:us-east-1:123456789:ApprovalNotifications",
+        "Message": {
+          "requestId.$": "$.requestId",
+          "status": "REJECTED",
+          "approver.$": "$.approval.approver"
+        }
+      },
+      "ResultPath": null,
+      "Next": "Return_Result_2"
+    },
+    "Return_Result_2": {
+      "Type": "Pass",
+      "Parameters": {
+        "status": "REJECTED",
+        "processed": false
+      },
+      "End": true
+    },
+    "Check_decision": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.approval.decision",
+          "StringEquals": "APPROVED",
+          "Next": "Invoke_processApproved"
+        }
+      ],
+      "Default": "Invoke_notifyTopic_2"
+    }
+  }
+}

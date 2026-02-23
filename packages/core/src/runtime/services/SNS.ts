@@ -12,9 +12,7 @@ export interface SnsPublishOptions {
 
 /** SNS topic binding for the SimpleSteps compiler. */
 export class SNS {
-  constructor(topicArn: string) {
-    throw new Error(BINDING_ERROR);
-  }
+  constructor(topicArn: string) {}
 
   publish(message: any, options?: SnsPublishOptions): Promise<void> {
     throw new Error(BINDING_ERROR);

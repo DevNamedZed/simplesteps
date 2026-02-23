@@ -2,9 +2,10 @@
 //
 // Distributed transaction with compensating actions: if any step fails,
 // previous steps are automatically rolled back via nested try/catch.
+// When installed via npm, use: import { Steps } from '@simplesteps/core/runtime'
 
-import { Steps, SimpleStepContext, StepException } from '@simplesteps/core/runtime';
-import { Lambda } from '@simplesteps/core/runtime/services';
+import { Steps, SimpleStepContext, StepException } from '../../../packages/core/src/runtime/index';
+import { Lambda } from '../../../packages/core/src/runtime/services/Lambda';
 
 const bookFlightFn = Lambda<
   { tripId: string; destination: string },

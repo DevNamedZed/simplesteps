@@ -1,0 +1,94 @@
+{
+  "StartAt": "Invoke_sourceBucket",
+  "States": {
+    "Invoke_sourceBucket": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::aws-sdk:s3:getObject",
+      "Parameters": {
+        "Bucket": "etl-source-bucket",
+        "Key.$": "$.sourceKey"
+      },
+      "ResultPath": "$.sourceData",
+      "Next": "Invoke_extractRecords"
+    },
+    "Invoke_extractRecords": {
+      "Type": "Task",
+      "Resource": "arn:aws:lambda:us-east-1:123456789:function:ExtractRecords",
+      "Parameters": {
+        "rawData.$": "$.sourceData.Body"
+      },
+      "ResultPath": "$.extracted",
+      "Next": "Map_items"
+    },
+    "Map_items": {
+      "Type": "Map",
+      "ItemsPath": "$.extracted.records",
+      "ItemProcessor": {
+        "StartAt": "Invoke_transformRecord",
+        "States": {
+          "Invoke_transformRecord": {
+            "Type": "Task",
+            "Resource": "arn:aws:lambda:us-east-1:123456789:function:TransformRecord",
+            "Parameters": {
+              "id.$": "$.id",
+              "data.$": "$.data"
+            },
+            "ResultPath": null
+          }
+        }
+      },
+      "ResultPath": null,
+      "Next": "Invoke_resultsTable"
+    },
+    "Invoke_resultsTable": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::dynamodb:putItem",
+      "Parameters": {
+        "TableName": "ETLResultsTable",
+        "Item": {
+          "batchId": {
+            "S.$": "$.batchId"
+          },
+          "status": {
+            "S": "COMPLETED"
+          }
+        }
+      },
+      "ResultPath": null,
+      "Next": "Invoke_outputBucket"
+    },
+    "Invoke_outputBucket": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::aws-sdk:s3:putObject",
+      "Parameters": {
+        "Bucket": "etl-output-bucket",
+        "Key.$": "States.Format('output/{}/results.json', $.batchId)",
+        "Body.$": "$.sourceKey",
+        "ContentType": "application/json"
+      },
+      "ResultPath": null,
+      "Next": "Invoke_notifications"
+    },
+    "Invoke_notifications": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::sns:publish",
+      "Parameters": {
+        "TopicArn": "arn:aws:sns:us-east-1:123456789:ETLNotifications",
+        "Message": {
+          "batchId.$": "$.batchId",
+          "status": "COMPLETED"
+        }
+      },
+      "ResultPath": null,
+      "Next": "Return_Result"
+    },
+    "Return_Result": {
+      "Type": "Pass",
+      "Parameters": {
+        "batchId.$": "$.batchId",
+        "status": "COMPLETED"
+      },
+      "End": true
+    }
+  }
+}

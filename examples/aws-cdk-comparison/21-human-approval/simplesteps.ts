@@ -2,11 +2,12 @@
 //
 // Pause workflow for human approval via SQS callback, then route
 // based on the decision.
+// When installed via npm, use: import { Steps } from '@simplesteps/core/runtime'
 
-import { Steps, SimpleStepContext } from '@simplesteps/core/runtime';
-import { Lambda } from '@simplesteps/core/runtime/services';
-import { SQS } from '@simplesteps/core/runtime/services';
-import { SNS } from '@simplesteps/core/runtime/services';
+import { Steps, SimpleStepContext } from '../../../packages/core/src/runtime/index';
+import { Lambda } from '../../../packages/core/src/runtime/services/Lambda';
+import { SQS } from '../../../packages/core/src/runtime/services/SimpleQueueService';
+import { SNS } from '../../../packages/core/src/runtime/services/SNS';
 
 const processApproved = Lambda<
   { requestId: string; amount: number },

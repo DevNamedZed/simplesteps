@@ -2,9 +2,10 @@
 //
 // Full DynamoDB integration: putItem with conditions, getItem with
 // consistent reads, updateItem with expressions, and query.
+// When installed via npm, use: import { Steps } from '@simplesteps/core/runtime'
 
-import { Steps, SimpleStepContext } from '@simplesteps/core/runtime';
-import { DynamoDB } from '@simplesteps/core/runtime/services';
+import { Steps, SimpleStepContext } from '../../../packages/core/src/runtime/index';
+import { DynamoDB } from '../../../packages/core/src/runtime/services/DynamoDB';
 
 const ordersTable = new DynamoDB('OrdersTable');
 

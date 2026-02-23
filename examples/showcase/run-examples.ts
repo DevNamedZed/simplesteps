@@ -36,6 +36,10 @@ const examples = [
   '23-s3.ts',
   '24-secrets-manager.ts',
   '25-ssm.ts',
+  '26-step-function-nested.ts',
+  '27-lambda-patterns.ts',
+  '28-aws-sdk-escape-hatch.ts',
+  '29-context-object.ts',
 ];
 
 fs.mkdirSync(OUTPUT_DIR, { recursive: true });

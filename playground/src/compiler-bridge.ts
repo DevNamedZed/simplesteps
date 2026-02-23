@@ -116,8 +116,8 @@ function createVirtualHost(files: Record<string, string>): ts.CompilerHost {
 
 // ── Public API ────────────────────────────────────────────────────────────
 
-export function compileFromString(code: string): CompileBridgeResult {
-  const files = buildVirtualFiles(code);
+export function compileFromFiles(userFiles: Record<string, string>): CompileBridgeResult {
+  const files = buildVirtualFiles(userFiles);
   const host = createVirtualHost(files);
 
   const compilerOptions: ts.CompilerOptions = {
@@ -140,7 +140,7 @@ export function compileFromString(code: string): CompileBridgeResult {
     program,
     runtimePath: RUNTIME_PATH,
     servicesDir: SERVICES_DIR,
-    skipPatterns: ['/virtual/runtime/', '/lib/'],
+    skipPatterns: ['/virtual/runtime/', '/lib/lib.shim'],
   });
 
   // Serialize each state machine and combine
@@ -165,4 +165,8 @@ export function compileFromString(code: string): CompileBridgeResult {
     errors: result.errors,
     stateMachineCount: result.stateMachines.length,
   };
+}
+
+export function compileFromString(code: string): CompileBridgeResult {
+  return compileFromFiles({ 'user.ts': code });
 }

@@ -10,9 +10,7 @@ export interface S3Options {
 
 /** S3 bucket binding for the SimpleSteps compiler. */
 export class S3 {
-  constructor(bucketName: string) {
-    throw new Error(BINDING_ERROR);
-  }
+  constructor(bucketName: string) {}
 
   getObject<T = any>(key: Record<string, any>, options?: S3Options): Promise<T> {
     throw new Error(BINDING_ERROR);

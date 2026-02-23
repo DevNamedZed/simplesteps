@@ -57,7 +57,9 @@ export class Steps {
   static createFunction<TInput, TOutput>(
     _factory: (context: SimpleStepContext, input: TInput) => Promise<TOutput>,
   ): StepFunctionDefinition<TInput, TOutput> {
-    throw new Error(RUNTIME_ERROR_MESSAGE);
+    // Return a stub — safe for CDK inline workflows where the transformer
+    // replaces this call before runtime. The stub is an opaque marker.
+    return _factory as unknown as StepFunctionDefinition<TInput, TOutput>;
   }
 
   static delay(_options: DelayOptions): void {
@@ -151,6 +153,24 @@ export class Steps {
   }
 
   static merge(_obj1: any, _obj2: any, _deep?: boolean): any {
+    throw new Error(RUNTIME_ERROR_MESSAGE);
+  }
+
+  // -- Compiler hints ------------------------------------------------------
+
+  /**
+   * Escape hatch for data flow analysis.
+   *
+   * Wraps a value that the compiler cannot prove is constant, but the
+   * developer knows will be available at runtime. The compiler emits a
+   * warning (SS708) instead of an error, and passes the value through
+   * unchanged to the ASL output.
+   *
+   * @example
+   *   const arn = getArnFromConfig();
+   *   const svc = Lambda<Req, Res>(Steps.safeVar(arn));
+   */
+  static safeVar<T>(_value: T): T {
     throw new Error(RUNTIME_ERROR_MESSAGE);
   }
 

@@ -1,0 +1,14 @@
+{
+  "name": "simplesteps-library-api-starter",
+  "private": true,
+  "version": "0.1.0",
+  "scripts": {
+    "compile": "tsx compile.ts"
+  },
+  "dependencies": {
+    "@simplesteps/core": "^0.1.0"
+  },
+  "devDependencies": {
+    "tsx": "^4.0.0"
+  }
+}

@@ -1,6 +1,22 @@
 {
   "name": "@simplesteps/core",
   "version": "0.1.0",
+  "description": "TypeScript-to-ASL compiler for AWS Step Functions",
+  "keywords": ["aws", "step-functions", "asl", "compiler", "typescript", "serverless", "state-machine"],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/DevNamedZed/simplesteps.git",
+    "directory": "packages/core"
+  },
+  "homepage": "https://github.com/DevNamedZed/simplesteps#readme",
+  "bugs": {
+    "url": "https://github.com/DevNamedZed/simplesteps/issues"
+  },
+  "files": [
+    "dist",
+    "LICENSE"
+  ],
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "bin": {
@@ -22,13 +38,28 @@
     "./asl": {
       "types": "./dist/asl/index.d.ts",
       "default": "./dist/asl/index.js"
+    },
+    "./transformer": {
+      "types": "./dist/transformer/index.d.ts",
+      "default": "./dist/transformer/index.js"
+    },
+    "./transformer/plugins/vite": {
+      "types": "./dist/transformer/plugins/vite.d.ts",
+      "default": "./dist/transformer/plugins/vite.js"
+    },
+    "./transformer/plugins/esbuild": {
+      "types": "./dist/transformer/plugins/esbuild.d.ts",
+      "default": "./dist/transformer/plugins/esbuild.js"
     }
   },
   "scripts": {
     "build": "tsc",
     "clean": "rm -rf dist"
   },
-  "dependencies": {
-    "typescript": "^5.4.3"
+  "peerDependencies": {
+    "typescript": ">=5.4.3"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3"
   }
 }

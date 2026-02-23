@@ -1,9 +1,10 @@
 // Job Poller — SimpleSteps
 //
 // Submit a job, poll for status in a loop, handle success or failure.
+// When installed via npm, use: import { Steps } from '@simplesteps/core/runtime'
 
-import { Steps, SimpleStepContext } from '@simplesteps/core/runtime';
-import { Lambda } from '@simplesteps/core/runtime/services';
+import { Steps, SimpleStepContext } from '../../../packages/core/src/runtime/index';
+import { Lambda } from '../../../packages/core/src/runtime/services/Lambda';
 
 const submitJob = Lambda<{ jobName: string }, { jobId: string }>(
   'arn:aws:lambda:us-east-1:123456789:function:SubmitJob',

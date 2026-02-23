@@ -1,0 +1,55 @@
+{
+  "StartAt": "Invoke_dataBucket",
+  "States": {
+    "Invoke_dataBucket": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::aws-sdk:s3:getObject",
+      "Parameters": {
+        "Bucket": "my-data-bucket",
+        "Key.$": "$.inputKey"
+      },
+      "ResultPath": "$.source",
+      "Next": "Invoke_transformData"
+    },
+    "Invoke_transformData": {
+      "Type": "Task",
+      "Resource": "arn:aws:lambda:us-east-1:123456789:function:TransformData",
+      "Parameters": {
+        "data.$": "$.source.Body"
+      },
+      "ResultPath": "$.transformed",
+      "Next": "Invoke_dataBucket_2"
+    },
+    "Invoke_dataBucket_2": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::aws-sdk:s3:putObject",
+      "Parameters": {
+        "Bucket": "my-data-bucket",
+        "Key.$": "$.outputKey",
+        "Body.$": "$.transformed.result",
+        "ContentType": "application/json"
+      },
+      "ResultPath": null,
+      "Next": "Invoke_dataBucket_3"
+    },
+    "Invoke_dataBucket_3": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::aws-sdk:s3:headObject",
+      "Parameters": {
+        "Bucket": "my-data-bucket",
+        "Key.$": "$.outputKey"
+      },
+      "ResultPath": "$.metadata",
+      "Next": "Return_Result"
+    },
+    "Return_Result": {
+      "Type": "Pass",
+      "Parameters": {
+        "inputKey.$": "$.inputKey",
+        "outputKey.$": "$.outputKey",
+        "size.$": "$.metadata.ContentLength"
+      },
+      "End": true
+    }
+  }
+}

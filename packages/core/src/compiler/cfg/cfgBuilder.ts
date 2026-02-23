@@ -1,5 +1,6 @@
 import ts from 'typescript';
 import { CompilerContext } from '../compilerContext.js';
+import { ErrorCodes } from '../diagnosticCodes.js';
 import type {
   BasicBlock,
   ControlFlowGraph,
@@ -103,7 +104,7 @@ function processStatements(
     if (ts.isBreakStatement(stmt)) {
       const loop = loopStack[loopStack.length - 1];
       if (!loop) {
-        context.addError(stmt, 'break statement outside of loop', 'SS400');
+        context.addError(stmt, 'break statement outside of loop', ErrorCodes.Cfg.BreakOutsideLoop.code);
         continue;
       }
       state.addBlock(currentBlockId, accumulated, {
@@ -117,7 +118,7 @@ function processStatements(
     if (ts.isContinueStatement(stmt)) {
       const loop = loopStack[loopStack.length - 1];
       if (!loop) {
-        context.addError(stmt, 'continue statement outside of loop', 'SS401');
+        context.addError(stmt, 'continue statement outside of loop', ErrorCodes.Cfg.ContinueOutsideLoop.code);
         continue;
       }
       state.addBlock(currentBlockId, accumulated, {
@@ -774,7 +775,7 @@ function processSwitchStatement(
           continue;
         }
       }
-      context.addError(clause, 'Switch case fall-through is not supported; each case must end with break, return, or throw', 'SS410');
+      context.addError(clause, 'Switch case fall-through is not supported; each case must end with break, return, or throw', ErrorCodes.Cfg.SwitchFallThrough.code);
     }
   }
 
@@ -941,7 +942,7 @@ function extractPromiseAll(
   // Extract array argument
   const arg = awaitedExpr.arguments[0];
   if (!arg || !ts.isArrayLiteralExpression(arg)) {
-    context.addError(awaitedExpr, 'Promise.all argument must be an array literal', 'SS420');
+    context.addError(awaitedExpr, 'Promise.all argument must be an array literal', ErrorCodes.Cfg.PromiseAllNotArray.code);
     return null;
   }
 

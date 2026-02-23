@@ -1,0 +1,89 @@
+{
+  "StartAt": "Invoke_ordersTable",
+  "States": {
+    "Invoke_ordersTable": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::dynamodb:putItem",
+      "Parameters": {
+        "TableName": "OrdersTable",
+        "Item": {
+          "id": {
+            "S.$": "$.orderId"
+          },
+          "customerId": {
+            "S.$": "$.customerId"
+          },
+          "status": {
+            "S": "PENDING"
+          }
+        },
+        "ConditionExpression": "attribute_not_exists(id)"
+      },
+      "ResultPath": null,
+      "Next": "Invoke_ordersTable_2"
+    },
+    "Invoke_ordersTable_2": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::dynamodb:getItem",
+      "Parameters": {
+        "TableName": "OrdersTable",
+        "Key": {
+          "id": {
+            "S.$": "$.orderId"
+          }
+        },
+        "ConsistentRead": true
+      },
+      "ResultPath": "$.order",
+      "Next": "Invoke_ordersTable_3"
+    },
+    "Invoke_ordersTable_3": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::dynamodb:updateItem",
+      "Parameters": {
+        "TableName": "OrdersTable",
+        "Key": {
+          "id": {
+            "S.$": "$.orderId"
+          }
+        },
+        "UpdateExpression": "SET #s = :status",
+        "ExpressionAttributeNames": {
+          "#s": "status"
+        },
+        "ExpressionAttributeValues": {
+          ":status": {
+            "S.$": "$.status"
+          }
+        },
+        "ReturnValues": "ALL_NEW"
+      },
+      "ResultPath": "$.updated",
+      "Next": "Invoke_ordersTable_4"
+    },
+    "Invoke_ordersTable_4": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::dynamodb:query",
+      "Parameters": {
+        "TableName": "OrdersTable",
+        "KeyConditionExpression": "customerId = :cid",
+        "ExpressionAttributeValues": {
+          ":cid": {
+            "S.$": "$.customerId"
+          }
+        }
+      },
+      "ResultPath": "$.customerOrders",
+      "Next": "Return_Result"
+    },
+    "Return_Result": {
+      "Type": "Pass",
+      "Parameters": {
+        "order.$": "$.order",
+        "updated.$": "$.updated",
+        "customerOrders.$": "$.customerOrders"
+      },
+      "End": true
+    }
+  }
+}

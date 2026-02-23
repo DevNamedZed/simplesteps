@@ -1,0 +1,66 @@
+{
+  "StartAt": "Parallel",
+  "States": {
+    "Parallel": {
+      "Type": "Parallel",
+      "Branches": [
+        {
+          "StartAt": "Invoke_getUserProfile",
+          "States": {
+            "Invoke_getUserProfile": {
+              "Type": "Task",
+              "Resource": "arn:aws:lambda:us-east-1:123456789:function:GetUserProfile",
+              "Parameters": {
+                "userId.$": "$.userId"
+              },
+              "End": true
+            }
+          }
+        },
+        {
+          "StartAt": "Invoke_getOrderHistory",
+          "States": {
+            "Invoke_getOrderHistory": {
+              "Type": "Task",
+              "Resource": "arn:aws:lambda:us-east-1:123456789:function:GetOrderHistory",
+              "Parameters": {
+                "userId.$": "$.userId"
+              },
+              "End": true
+            }
+          }
+        },
+        {
+          "StartAt": "Invoke_getRecommendations",
+          "States": {
+            "Invoke_getRecommendations": {
+              "Type": "Task",
+              "Resource": "arn:aws:lambda:us-east-1:123456789:function:GetRecommendations",
+              "Parameters": {
+                "userId.$": "$.userId"
+              },
+              "End": true
+            }
+          }
+        }
+      ],
+      "ResultSelector": {
+        "profile.$": "$[0]",
+        "history.$": "$[1]",
+        "recommendations.$": "$[2]"
+      },
+      "Next": "Return_Result"
+    },
+    "Return_Result": {
+      "Type": "Pass",
+      "Parameters": {
+        "user.$": "$.profile.name",
+        "email.$": "$.profile.email",
+        "tier.$": "$.profile.tier",
+        "orderCount.$": "$.history.totalSpent",
+        "recommendedItems.$": "$.recommendations.items"
+      },
+      "End": true
+    }
+  }
+}

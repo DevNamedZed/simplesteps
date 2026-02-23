@@ -64,6 +64,8 @@ const SERVICE_METHOD_MAPPINGS: Record<string, Record<string, ServiceMethodEntry>
   SimpleQueueService: {
     publish: { integration: 'sdk', sdkResource: 'arn:aws:states:::sqs:sendMessage', hasOutput: false },
     publishWithCallback: { integration: 'sdk', sdkResource: 'arn:aws:states:::sqs:sendMessage.waitForTaskToken', hasOutput: true },
+    receiveMessage: { integration: 'sdk', sdkResource: 'arn:aws:states:::aws-sdk:sqs:receiveMessage', hasOutput: true },
+    deleteMessage: { integration: 'sdk', sdkResource: 'arn:aws:states:::aws-sdk:sqs:deleteMessage', hasOutput: false },
   },
   DynamoDB: {
     getItem: { integration: 'sdk', sdkResource: 'arn:aws:states:::dynamodb:getItem', hasOutput: true },
@@ -76,6 +78,8 @@ const SERVICE_METHOD_MAPPINGS: Record<string, Record<string, ServiceMethodEntry>
     update: { aliasOf: 'updateItem' },
     query: { integration: 'sdk', sdkResource: 'arn:aws:states:::dynamodb:query', hasOutput: true },
     scan: { integration: 'sdk', sdkResource: 'arn:aws:states:::dynamodb:scan', hasOutput: true },
+    batchGetItem: { integration: 'sdk', sdkResource: 'arn:aws:states:::dynamodb:batchGetItem', hasOutput: true },
+    batchWriteItem: { integration: 'sdk', sdkResource: 'arn:aws:states:::dynamodb:batchWriteItem', hasOutput: false },
   },
   SNS: {
     publish: { integration: 'sdk', sdkResource: 'arn:aws:states:::sns:publish', hasOutput: false },
@@ -111,6 +115,30 @@ const SERVICE_METHOD_MAPPINGS: Record<string, Record<string, ServiceMethodEntry>
     getParametersByPath: { integration: 'sdk', sdkResource: 'arn:aws:states:::aws-sdk:ssm:getParametersByPath', hasOutput: true },
     deleteParameter: { integration: 'sdk', sdkResource: 'arn:aws:states:::aws-sdk:ssm:deleteParameter', hasOutput: false },
   },
+  ECS: {
+    runTask: { integration: 'sdk', sdkResource: 'arn:aws:states:::ecs:runTask.sync', hasOutput: true },
+    runTaskAsync: { integration: 'sdk', sdkResource: 'arn:aws:states:::ecs:runTask', hasOutput: false },
+  },
+  Bedrock: {
+    invokeModel: { integration: 'sdk', sdkResource: 'arn:aws:states:::bedrock:invokeModel', hasOutput: true },
+  },
+  Batch: {
+    submitJob: { integration: 'sdk', sdkResource: 'arn:aws:states:::batch:submitJob.sync', hasOutput: true },
+    submitJobAsync: { integration: 'sdk', sdkResource: 'arn:aws:states:::batch:submitJob', hasOutput: false },
+  },
+  Glue: {
+    startJobRun: { integration: 'sdk', sdkResource: 'arn:aws:states:::glue:startJobRun.sync', hasOutput: true },
+    startJobRunAsync: { integration: 'sdk', sdkResource: 'arn:aws:states:::glue:startJobRun', hasOutput: false },
+  },
+  CodeBuild: {
+    startBuild: { integration: 'sdk', sdkResource: 'arn:aws:states:::codebuild:startBuild.sync', hasOutput: true },
+    startBuildAsync: { integration: 'sdk', sdkResource: 'arn:aws:states:::codebuild:startBuild', hasOutput: false },
+  },
+  Athena: {
+    startQueryExecution: { integration: 'sdk', sdkResource: 'arn:aws:states:::athena:startQueryExecution.sync', hasOutput: true },
+    getQueryExecution: { integration: 'sdk', sdkResource: 'arn:aws:states:::athena:getQueryExecution', hasOutput: true },
+    getQueryResults: { integration: 'sdk', sdkResource: 'arn:aws:states:::athena:getQueryResults', hasOutput: true },
+  },
 };
 
 // ---------------------------------------------------------------------------
@@ -142,10 +170,11 @@ export function discoverServices(context: CompilerContext, servicesDirOverride?:
   for (const sourceFile of context.program.getSourceFiles()) {
     const filePath = sourceFile.fileName;
 
-    // Only scan files in the services directory (exclude types.ts and index.ts)
+    // Only scan files in the services directory (exclude types and index)
     if (!filePath.startsWith(servicesDir)) continue;
     const baseName = getBaseName(filePath);
-    if (baseName === 'types' || baseName === 'index') continue;
+    if (baseName === 'types' || baseName === 'index'
+        || baseName === 'types.d' || baseName === 'index.d') continue;
 
     // Look for exported classes and functions
     for (const stmt of sourceFile.statements) {
@@ -197,7 +226,13 @@ function matchClassBinding(
 
   const methods = new Map<string, ServiceMethodInfo>();
 
-  for (const member of classDecl.members) {
+  // Use index-based access instead of for-of to handle emit-phase nodes
+  // where members may not be iterable (ts-patch / ts-node compatibility).
+  const members = classDecl.members;
+  if (!members || typeof members.length !== 'number') return null;
+
+  for (let i = 0; i < members.length; i++) {
+    const member = members[i];
     if (!ts.isMethodDeclaration(member)) continue;
 
     const methodSymbol = context.checker.getSymbolAtLocation(member.name);

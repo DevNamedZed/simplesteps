@@ -78,8 +78,8 @@ describe('SimpleStepsStateMachine (unit — mocked compile)', () => {
     });
 
     expect(sm).toBeInstanceOf(sfn.StateMachine);
-    expect(sm.compileResult.stateMachines).toHaveLength(1);
-    expect(sm.compiledMachine.name).toBe('workflow');
+    expect(sm.compileResult!.stateMachines).toHaveLength(1);
+    expect(sm.compiledMachine!.name).toBe('workflow');
   });
 
   test('2. Named machine selection → correct machine selected', () => {
@@ -94,7 +94,7 @@ describe('SimpleStepsStateMachine (unit — mocked compile)', () => {
       stateMachineName: 'beta',
     });
 
-    expect(sm.compiledMachine.name).toBe('beta');
+    expect(sm.compiledMachine!.name).toBe('beta');
   });
 
   test('3. Bindings → substitutions mapping', () => {
@@ -202,6 +202,164 @@ describe('SimpleStepsStateMachine (unit — mocked compile)', () => {
   });
 });
 
+// ── Inline workflow tests (__compiledAsl path) ───────────────────────────
+//
+// These test the construct path used by the SimpleSteps transformer.
+// The transformer pre-compiles the workflow to ASL and injects __compiledAsl
+// + __runtimeBindings into the props. We simulate that here without needing
+// the actual transformer running.
+
+describe('SimpleStepsStateMachine (inline — __compiledAsl path)', () => {
+  const SIMPLE_ASL = JSON.stringify({
+    StartAt: 'Invoke',
+    States: {
+      Invoke: {
+        Type: 'Task',
+        Resource: 'arn:aws:lambda:us-east-1:123:function:MyFn',
+        End: true,
+      },
+    },
+  });
+
+  test('__compiledAsl without bindings → StateMachine created with literal ASL', () => {
+    const app = new cdk.App();
+    const stack = new cdk.Stack(app, 'InlineStack1');
+
+    new SimpleStepsStateMachine(stack, 'SM', {
+      __compiledAsl: SIMPLE_ASL,
+    } as any);
+
+    const template = Template.fromStack(stack);
+    template.hasResourceProperties('AWS::StepFunctions::StateMachine', {
+      DefinitionString: SIMPLE_ASL,
+    });
+  });
+
+  test('__compiledAsl with runtime bindings → placeholders substituted', () => {
+    const aslWithPlaceholders = JSON.stringify({
+      StartAt: 'Invoke',
+      States: {
+        Invoke: {
+          Type: 'Task',
+          Resource: '$$0$$',
+          Next: 'PutItem',
+        },
+        PutItem: {
+          Type: 'Task',
+          Resource: 'arn:aws:states:::dynamodb:putItem',
+          Parameters: { TableName: '$$1$$' },
+          End: true,
+        },
+      },
+    });
+
+    const app = new cdk.App();
+    const stack = new cdk.Stack(app, 'InlineStack2');
+
+    new SimpleStepsStateMachine(stack, 'SM', {
+      __compiledAsl: aslWithPlaceholders,
+      __runtimeBindings: [
+        'arn:aws:lambda:us-east-1:999:function:RealFn',
+        'production-orders-table',
+      ],
+    } as any);
+
+    const template = Template.fromStack(stack);
+    const resources = template.findResources('AWS::StepFunctions::StateMachine');
+    const smResource = Object.values(resources)[0];
+    const defString = smResource.Properties.DefinitionString;
+
+    expect(defString).toContain('arn:aws:lambda:us-east-1:999:function:RealFn');
+    expect(defString).toContain('production-orders-table');
+    expect(defString).not.toContain('$$0$$');
+    expect(defString).not.toContain('$$1$$');
+  });
+
+  test('multiple bindings → all placeholders replaced in order', () => {
+    const asl = '{"StartAt":"A","States":{"A":{"Type":"Task","Resource":"$$0$$","Next":"B"},"B":{"Type":"Task","Resource":"$$1$$","Next":"C"},"C":{"Type":"Task","Resource":"$$2$$","End":true}}}';
+
+    const app = new cdk.App();
+    const stack = new cdk.Stack(app, 'InlineStack3');
+
+    new SimpleStepsStateMachine(stack, 'SM', {
+      __compiledAsl: asl,
+      __runtimeBindings: ['arn:lambda:A', 'arn:lambda:B', 'arn:lambda:C'],
+    } as any);
+
+    const template = Template.fromStack(stack);
+    const resources = template.findResources('AWS::StepFunctions::StateMachine');
+    const defString = Object.values(resources)[0].Properties.DefinitionString;
+
+    expect(defString).toContain('arn:lambda:A');
+    expect(defString).toContain('arn:lambda:B');
+    expect(defString).toContain('arn:lambda:C');
+    expect(defString).not.toMatch(/\$\$\d+\$\$/);
+  });
+
+  test('empty runtime bindings → ASL passed through unchanged', () => {
+    const app = new cdk.App();
+    const stack = new cdk.Stack(app, 'InlineStack4');
+
+    new SimpleStepsStateMachine(stack, 'SM', {
+      __compiledAsl: SIMPLE_ASL,
+      __runtimeBindings: [],
+    } as any);
+
+    const template = Template.fromStack(stack);
+    template.hasResourceProperties('AWS::StepFunctions::StateMachine', {
+      DefinitionString: SIMPLE_ASL,
+    });
+  });
+
+  test('workflow prop without transformer → throws helpful error', () => {
+    const app = new cdk.App();
+    const stack = new cdk.Stack(app, 'InlineStack5');
+
+    expect(() => {
+      new SimpleStepsStateMachine(stack, 'SM', {
+        workflow: 'some-function-ref',
+      } as any);
+    }).toThrow(/transformer/i);
+  });
+
+  test('no sourceFile and no __compiledAsl → throws', () => {
+    const app = new cdk.App();
+    const stack = new cdk.Stack(app, 'InlineStack6');
+
+    expect(() => {
+      new SimpleStepsStateMachine(stack, 'SM', {} as any);
+    }).toThrow(/sourceFile.*workflow/i);
+  });
+
+  test('__compiledAsl takes precedence over sourceFile', () => {
+    const app = new cdk.App();
+    const stack = new cdk.Stack(app, 'InlineStack7');
+
+    // Even though sourceFile is set, __compiledAsl should be used
+    new SimpleStepsStateMachine(stack, 'SM', {
+      sourceFile: '/nonexistent/file.ts',
+      __compiledAsl: SIMPLE_ASL,
+    } as any);
+
+    const template = Template.fromStack(stack);
+    template.hasResourceProperties('AWS::StepFunctions::StateMachine', {
+      DefinitionString: SIMPLE_ASL,
+    });
+  });
+
+  test('inline path does not set compileResult or compiledMachine', () => {
+    const app = new cdk.App();
+    const stack = new cdk.Stack(app, 'InlineStack8');
+
+    const sm = new SimpleStepsStateMachine(stack, 'SM', {
+      __compiledAsl: SIMPLE_ASL,
+    } as any);
+
+    expect(sm.compileResult).toBeUndefined();
+    expect(sm.compiledMachine).toBeUndefined();
+  });
+});
+
 // ── Integration tests (real compile + CDK synthesis) ─────────────────────
 
 describe('SimpleStepsStateMachine (integration — real compile)', () => {
@@ -273,3 +431,373 @@ describe('SimpleStepsStateMachine (integration — real compile)', () => {
     expect(typeof body.bind).toBe('function');
   });
 });
+
+// ── CDK E2E tests (real compile + substitutions + CDK synthesis) ─────────
+
+const CDK_ORDER_FIXTURE = path.resolve(
+  __dirname, '../../core/test/fixtures/cfg/cdk-order.ts',
+);
+
+const CDK_NOTIFICATION_FIXTURE = path.resolve(
+  __dirname, '../../core/test/fixtures/cfg/cdk-notification.ts',
+);
+
+const CDK_DATA_PIPELINE_FIXTURE = path.resolve(
+  __dirname, '../../core/test/fixtures/cfg/cdk-data-pipeline.ts',
+);
+
+describe('CDK E2E: Order Processing (Lambda + DynamoDB)', () => {
+  let asl: any;
+  let definitionString: string;
+
+  beforeAll(() => {
+    const { compile: realCompile, AslSerializer } = jest.requireActual('@simplesteps/core');
+
+    const result = realCompile({
+      sourceFiles: [CDK_ORDER_FIXTURE],
+      substitutions: {
+        validateOrder: 'arn:aws:lambda:us-east-1:111:function:ValidateOrder',
+        ordersTable: 'prod-OrdersTable-ABC123',
+      },
+    });
+
+    expect(result.errors).toHaveLength(0);
+    expect(result.stateMachines).toHaveLength(1);
+    expect(result.stateMachines[0].name).toBe('orderWorkflow');
+
+    definitionString = AslSerializer.serialize(result.stateMachines[0].definition);
+    asl = JSON.parse(definitionString);
+  });
+
+  test('produces valid ASL with StartAt and States', () => {
+    expect(asl).toHaveProperty('StartAt');
+    expect(asl).toHaveProperty('States');
+    expect(Object.keys(asl.States).length).toBeGreaterThan(0);
+  });
+
+  test('substituted Lambda ARN appears in Task resource', () => {
+    expect(definitionString).toContain('arn:aws:lambda:us-east-1:111:function:ValidateOrder');
+  });
+
+  test('substituted DynamoDB table name appears in ASL', () => {
+    expect(definitionString).toContain('prod-OrdersTable-ABC123');
+  });
+
+  test('contains Lambda invoke task state', () => {
+    const tasks = Object.values(asl.States).filter((s: any) => s.Type === 'Task');
+    const lambdaTasks = tasks.filter((s: any) =>
+      typeof s.Resource === 'string' && s.Resource.includes(':lambda:'),
+    );
+    expect(lambdaTasks.length).toBeGreaterThanOrEqual(1);
+  });
+
+  test('contains DynamoDB putItem integration', () => {
+    const tasks = Object.values(asl.States).filter((s: any) => s.Type === 'Task');
+    const dynamoTasks = tasks.filter((s: any) =>
+      typeof s.Resource === 'string' && s.Resource.includes('dynamodb'),
+    );
+    expect(dynamoTasks.length).toBeGreaterThanOrEqual(1);
+  });
+
+  test('contains Choice state for order validation branch', () => {
+    const choices = Object.values(asl.States).filter((s: any) => s.Type === 'Choice');
+    expect(choices.length).toBeGreaterThanOrEqual(1);
+  });
+
+  test('has at least one terminal state', () => {
+    const states = Object.values(asl.States) as any[];
+    const hasTerminal = states.some(s => s.End === true || s.Type === 'Succeed' || s.Type === 'Fail');
+    expect(hasTerminal).toBe(true);
+  });
+
+  test('synthesizes to valid CloudFormation template', () => {
+    const app = new cdk.App();
+    const stack = new cdk.Stack(app, 'CdkOrderStack');
+
+    new sfn.StateMachine(stack, 'OrderMachine', {
+      definitionBody: sfn.DefinitionBody.fromString(definitionString),
+    });
+
+    const template = Template.fromStack(stack);
+    template.hasResourceProperties('AWS::StepFunctions::StateMachine', {
+      DefinitionString: definitionString,
+    });
+  });
+});
+
+describe('CDK E2E: Notification Pipeline (Lambda + DynamoDB + SNS + SQS)', () => {
+  let asl: any;
+  let definitionString: string;
+
+  beforeAll(() => {
+    const { compile: realCompile, AslSerializer } = jest.requireActual('@simplesteps/core');
+
+    const result = realCompile({
+      sourceFiles: [CDK_NOTIFICATION_FIXTURE],
+      substitutions: {
+        validateOrder: 'arn:aws:lambda:us-east-1:222:function:ValidateOrder',
+        ordersTable: 'prod-OrdersTable-DEF456',
+        notifications: 'arn:aws:sns:us-east-1:222:OrderNotifications',
+        taskQueue: 'https://sqs.us-east-1.amazonaws.com/222/OrderTasks',
+      },
+    });
+
+    expect(result.errors).toHaveLength(0);
+    expect(result.stateMachines).toHaveLength(1);
+    expect(result.stateMachines[0].name).toBe('notificationPipeline');
+
+    definitionString = AslSerializer.serialize(result.stateMachines[0].definition);
+    asl = JSON.parse(definitionString);
+  });
+
+  test('produces valid ASL with StartAt and States', () => {
+    expect(asl).toHaveProperty('StartAt');
+    expect(asl).toHaveProperty('States');
+    expect(Object.keys(asl.States).length).toBeGreaterThan(0);
+  });
+
+  test('all four substituted values appear in ASL', () => {
+    expect(definitionString).toContain('arn:aws:lambda:us-east-1:222:function:ValidateOrder');
+    expect(definitionString).toContain('prod-OrdersTable-DEF456');
+    expect(definitionString).toContain('arn:aws:sns:us-east-1:222:OrderNotifications');
+    expect(definitionString).toContain('https://sqs.us-east-1.amazonaws.com/222/OrderTasks');
+  });
+
+  test('contains Lambda invoke task', () => {
+    const tasks = Object.values(asl.States).filter((s: any) => s.Type === 'Task');
+    const lambdaTasks = tasks.filter((s: any) =>
+      typeof s.Resource === 'string' && s.Resource.includes(':lambda:'),
+    );
+    expect(lambdaTasks.length).toBeGreaterThanOrEqual(1);
+  });
+
+  test('contains DynamoDB integration', () => {
+    const tasks = Object.values(asl.States).filter((s: any) => s.Type === 'Task');
+    const dynamoTasks = tasks.filter((s: any) =>
+      typeof s.Resource === 'string' && s.Resource.includes('dynamodb'),
+    );
+    expect(dynamoTasks.length).toBeGreaterThanOrEqual(1);
+  });
+
+  test('contains SNS publish integration', () => {
+    const tasks = Object.values(asl.States).filter((s: any) => s.Type === 'Task');
+    const snsTasks = tasks.filter((s: any) =>
+      typeof s.Resource === 'string' && s.Resource.includes('sns'),
+    );
+    expect(snsTasks.length).toBeGreaterThanOrEqual(1);
+  });
+
+  test('contains SQS send integration', () => {
+    const tasks = Object.values(asl.States).filter((s: any) => s.Type === 'Task');
+    const sqsTasks = tasks.filter((s: any) =>
+      typeof s.Resource === 'string' && s.Resource.includes('sqs'),
+    );
+    expect(sqsTasks.length).toBeGreaterThanOrEqual(1);
+  });
+
+  test('contains Choice state for validation branch', () => {
+    const choices = Object.values(asl.States).filter((s: any) => s.Type === 'Choice');
+    expect(choices.length).toBeGreaterThanOrEqual(1);
+  });
+
+  test('synthesizes to valid CloudFormation template', () => {
+    const app = new cdk.App();
+    const stack = new cdk.Stack(app, 'CdkNotificationStack');
+
+    new sfn.StateMachine(stack, 'NotificationMachine', {
+      definitionBody: sfn.DefinitionBody.fromString(definitionString),
+    });
+
+    const template = Template.fromStack(stack);
+    template.hasResourceProperties('AWS::StepFunctions::StateMachine', {
+      DefinitionString: definitionString,
+    });
+  });
+});
+
+describe('CDK E2E: Data Pipeline (S3 + Lambda)', () => {
+  let asl: any;
+  let definitionString: string;
+
+  beforeAll(() => {
+    const { compile: realCompile, AslSerializer } = jest.requireActual('@simplesteps/core');
+
+    const result = realCompile({
+      sourceFiles: [CDK_DATA_PIPELINE_FIXTURE],
+      substitutions: {
+        transformFn: 'arn:aws:lambda:us-east-1:333:function:TransformData',
+        dataBucket: 'prod-data-pipeline-bucket',
+      },
+    });
+
+    expect(result.errors).toHaveLength(0);
+    expect(result.stateMachines).toHaveLength(1);
+    expect(result.stateMachines[0].name).toBe('dataPipeline');
+
+    definitionString = AslSerializer.serialize(result.stateMachines[0].definition);
+    asl = JSON.parse(definitionString);
+  });
+
+  test('produces valid ASL with StartAt and States', () => {
+    expect(asl).toHaveProperty('StartAt');
+    expect(asl).toHaveProperty('States');
+    expect(Object.keys(asl.States).length).toBeGreaterThan(0);
+  });
+
+  test('substituted Lambda ARN appears in ASL', () => {
+    expect(definitionString).toContain('arn:aws:lambda:us-east-1:333:function:TransformData');
+  });
+
+  test('substituted S3 bucket name appears in ASL', () => {
+    expect(definitionString).toContain('prod-data-pipeline-bucket');
+  });
+
+  test('contains Lambda invoke task', () => {
+    const tasks = Object.values(asl.States).filter((s: any) => s.Type === 'Task');
+    const lambdaTasks = tasks.filter((s: any) =>
+      typeof s.Resource === 'string' && s.Resource.includes(':lambda:'),
+    );
+    expect(lambdaTasks.length).toBeGreaterThanOrEqual(1);
+  });
+
+  test('contains S3 getObject integration', () => {
+    const tasks = Object.values(asl.States).filter((s: any) => s.Type === 'Task');
+    const s3GetTasks = tasks.filter((s: any) =>
+      typeof s.Resource === 'string' && s.Resource.includes('s3:getObject'),
+    );
+    expect(s3GetTasks.length).toBeGreaterThanOrEqual(1);
+  });
+
+  test('contains S3 putObject integration', () => {
+    const tasks = Object.values(asl.States).filter((s: any) => s.Type === 'Task');
+    const s3PutTasks = tasks.filter((s: any) =>
+      typeof s.Resource === 'string' && s.Resource.includes('s3:putObject'),
+    );
+    expect(s3PutTasks.length).toBeGreaterThanOrEqual(1);
+  });
+
+  test('has at least one terminal state', () => {
+    const states = Object.values(asl.States) as any[];
+    const hasTerminal = states.some(s => s.End === true || s.Type === 'Succeed' || s.Type === 'Fail');
+    expect(hasTerminal).toBe(true);
+  });
+
+  test('synthesizes to valid CloudFormation template', () => {
+    const app = new cdk.App();
+    const stack = new cdk.Stack(app, 'CdkDataPipelineStack');
+
+    new sfn.StateMachine(stack, 'PipelineMachine', {
+      definitionBody: sfn.DefinitionBody.fromString(definitionString),
+    });
+
+    const template = Template.fromStack(stack);
+    template.hasResourceProperties('AWS::StepFunctions::StateMachine', {
+      DefinitionString: definitionString,
+    });
+  });
+});
+
+// ── CDK E2E: Event-Driven (Lambda + EventBridge + StepFunction) ──────────
+
+const CDK_EVENT_DRIVEN_FIXTURE = path.resolve(
+  __dirname, '../../core/test/fixtures/cfg/cdk-event-driven.ts',
+);
+
+describe('CDK E2E: Event-Driven Payment (Lambda + EventBridge + StepFunction)', () => {
+  let asl: any;
+  let definitionString: string;
+
+  beforeAll(() => {
+    const { compile: realCompile, AslSerializer } = jest.requireActual('@simplesteps/core');
+
+    const result = realCompile({
+      sourceFiles: [CDK_EVENT_DRIVEN_FIXTURE],
+      substitutions: {
+        enrichPayment: 'arn:aws:lambda:us-east-1:444:function:EnrichPayment',
+        auditEvents: 'audit-event-bus',
+        fraudCheck: 'arn:aws:states:us-east-1:444:stateMachine:FraudCheck',
+      },
+    });
+
+    expect(result.errors).toHaveLength(0);
+    expect(result.stateMachines).toHaveLength(1);
+    expect(result.stateMachines[0].name).toBe('paymentWorkflow');
+
+    definitionString = AslSerializer.serialize(result.stateMachines[0].definition);
+    asl = JSON.parse(definitionString);
+  });
+
+  test('produces valid ASL with StartAt and States', () => {
+    expect(asl).toHaveProperty('StartAt');
+    expect(asl).toHaveProperty('States');
+    expect(Object.keys(asl.States).length).toBeGreaterThan(0);
+  });
+
+  test('substituted Lambda ARN appears in ASL', () => {
+    expect(definitionString).toContain('arn:aws:lambda:us-east-1:444:function:EnrichPayment');
+  });
+
+  test('substituted EventBridge bus name appears in ASL', () => {
+    expect(definitionString).toContain('audit-event-bus');
+  });
+
+  test('substituted StepFunction ARN appears in ASL', () => {
+    expect(definitionString).toContain('arn:aws:states:us-east-1:444:stateMachine:FraudCheck');
+  });
+
+  test('contains Lambda invoke task', () => {
+    const tasks = Object.values(asl.States).filter((s: any) => s.Type === 'Task');
+    const lambdaTasks = tasks.filter((s: any) =>
+      typeof s.Resource === 'string' && s.Resource.includes(':lambda:'),
+    );
+    expect(lambdaTasks.length).toBeGreaterThanOrEqual(1);
+  });
+
+  test('contains EventBridge putEvents integration', () => {
+    const tasks = Object.values(asl.States).filter((s: any) => s.Type === 'Task');
+    const ebTasks = tasks.filter((s: any) =>
+      typeof s.Resource === 'string' && s.Resource.includes('events'),
+    );
+    expect(ebTasks.length).toBeGreaterThanOrEqual(1);
+  });
+
+  test('contains StepFunction startExecution integration', () => {
+    const tasks = Object.values(asl.States).filter((s: any) => s.Type === 'Task');
+    const sfnTasks = tasks.filter((s: any) =>
+      typeof s.Resource === 'string' && s.Resource.includes('states'),
+    );
+    expect(sfnTasks.length).toBeGreaterThanOrEqual(1);
+  });
+
+  test('contains Choice state for fraud check branch', () => {
+    const choices = Object.values(asl.States).filter((s: any) => s.Type === 'Choice');
+    expect(choices.length).toBeGreaterThanOrEqual(1);
+  });
+
+  test('has at least one terminal state', () => {
+    const states = Object.values(asl.States) as any[];
+    const hasTerminal = states.some(s => s.End === true || s.Type === 'Succeed' || s.Type === 'Fail');
+    expect(hasTerminal).toBe(true);
+  });
+
+  test('synthesizes to valid CloudFormation template', () => {
+    const app = new cdk.App();
+    const stack = new cdk.Stack(app, 'CdkEventDrivenStack');
+
+    new sfn.StateMachine(stack, 'PaymentMachine', {
+      definitionBody: sfn.DefinitionBody.fromString(definitionString),
+    });
+
+    const template = Template.fromStack(stack);
+    template.hasResourceProperties('AWS::StepFunctions::StateMachine', {
+      DefinitionString: definitionString,
+    });
+  });
+});
+
+// ── CDK Starter coverage ─────────────────────────────────────────────────
+// The CDK starter (examples/starters/cdk) uses inline workflows with the
+// SimpleSteps transformer. The inline (__compiledAsl) path is tested above.
+// The cdk-order/notification/data-pipeline/event-driven fixtures test the
+// equivalent file-based compilation + substitution path.
+// Stack-level CDK assertion tests live in examples/starters/cdk/test/.

@@ -2,10 +2,11 @@
 //
 // Pause workflow until external system calls back with a result.
 // Uses SQS publishWithCallback() for the waitForTaskToken pattern.
+// When installed via npm, use: import { Steps } from '@simplesteps/core/runtime'
 
-import { Steps, SimpleStepContext } from '@simplesteps/core/runtime';
-import { Lambda } from '@simplesteps/core/runtime/services';
-import { SQS } from '@simplesteps/core/runtime/services';
+import { Steps, SimpleStepContext } from '../../../packages/core/src/runtime/index';
+import { Lambda } from '../../../packages/core/src/runtime/services/Lambda';
+import { SQS } from '../../../packages/core/src/runtime/services/SimpleQueueService';
 
 const validateOrder = Lambda<
   { orderId: string },

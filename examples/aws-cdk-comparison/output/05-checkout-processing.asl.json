@@ -1,0 +1,120 @@
+{
+  "StartAt": "Invoke_validateCart",
+  "States": {
+    "Invoke_validateCart": {
+      "Type": "Task",
+      "Resource": "arn:aws:lambda:us-east-1:123456789:function:ValidateCart",
+      "Parameters": {
+        "cartId.$": "$.cartId"
+      },
+      "ResultPath": "$.cart",
+      "Next": "Check_valid"
+    },
+    "Throw_Error": {
+      "Type": "Fail",
+      "Error": "States.ALL",
+      "Cause": "Cart validation failed"
+    },
+    "Invoke_processPayment": {
+      "Type": "Task",
+      "Resource": "arn:aws:lambda:us-east-1:123456789:function:ProcessPayment",
+      "Parameters": {
+        "cartId.$": "$.cartId",
+        "total.$": "$.cart.total"
+      },
+      "ResultPath": "$.payment",
+      "Next": "Check_status"
+    },
+    "Throw_Error_2": {
+      "Type": "Fail",
+      "Error": "States.ALL",
+      "Cause": "Payment declined"
+    },
+    "Invoke_ordersTable": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::dynamodb:putItem",
+      "Parameters": {
+        "TableName": "OrdersTable",
+        "Item": {
+          "orderId": {
+            "S.$": "$.cartId"
+          },
+          "customerId": {
+            "S.$": "$.customerId"
+          },
+          "paymentId": {
+            "S.$": "$.payment.paymentId"
+          },
+          "status": {
+            "S": "CONFIRMED"
+          }
+        }
+      },
+      "ResultPath": null,
+      "Next": "Invoke_fulfillmentQueue"
+    },
+    "Invoke_fulfillmentQueue": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::sqs:sendMessage",
+      "Parameters": {
+        "QueueUrl": "https://sqs.us-east-1.amazonaws.com/123456789/FulfillmentQueue",
+        "MessageBody": {
+          "orderId.$": "$.cartId",
+          "items.$": "$.cart.items"
+        }
+      },
+      "ResultPath": null,
+      "Next": "Invoke_notificationTopic"
+    },
+    "Invoke_notificationTopic": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::sns:publish",
+      "Parameters": {
+        "TopicArn": "arn:aws:sns:us-east-1:123456789:OrderNotifications",
+        "Message": {
+          "message": "Your order has been confirmed",
+          "orderId.$": "$.cartId"
+        }
+      },
+      "ResultPath": null,
+      "Next": "Return_Result"
+    },
+    "Return_Result": {
+      "Type": "Pass",
+      "Parameters": {
+        "orderId.$": "$.cartId",
+        "paymentId.$": "$.payment.paymentId",
+        "status": "CONFIRMED"
+      },
+      "End": true
+    },
+    "Check_status": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Not": {
+            "Variable": "$.payment.status",
+            "StringEquals": "approved",
+            "Next": ""
+          },
+          "Next": "Throw_Error_2"
+        }
+      ],
+      "Default": "Invoke_ordersTable"
+    },
+    "Check_valid": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Not": {
+            "Variable": "$.cart.valid",
+            "BooleanEquals": true,
+            "Next": ""
+          },
+          "Next": "Throw_Error"
+        }
+      ],
+      "Default": "Invoke_processPayment"
+    }
+  }
+}

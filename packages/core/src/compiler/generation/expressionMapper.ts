@@ -1,5 +1,6 @@
 import ts from 'typescript';
 import { CompilerContext } from '../compilerContext.js';
+import { ErrorCodes } from '../diagnosticCodes.js';
 import { resolveExpression, type VariableResolution } from '../analysis/variableResolver.js';
 import { StepVariableType } from '../analysis/types.js';
 import type { ChoiceRule, ComparisonRule, NotRule, AndRule, OrRule } from '../../asl/types.js';
@@ -57,7 +58,7 @@ export function buildParameters(
             `Cannot resolve '${exprText}' to an ASL value. ` +
             `Expressions must be input references (input.x), service call results, ` +
             `compile-time constants, or ASL intrinsic functions (Steps.format, Steps.add, etc.).`,
-            'SS502',
+            ErrorCodes.Expr.UncompilableExpression.code,
           );
           break;
         }
@@ -66,13 +67,13 @@ export function buildParameters(
     }
 
     if (!ts.isPropertyAssignment(prop)) {
-      context.addError(prop, 'Spread properties are not yet supported in ASL parameters', 'SS500');
+      context.addError(prop, 'Spread properties are not yet supported in ASL parameters', ErrorCodes.Expr.SpreadNotSupported.code);
       continue;
     }
 
     const propName = getPropertyName(prop.name);
     if (!propName) {
-      context.addError(prop, 'Computed property names are not supported in ASL parameters', 'SS501');
+      context.addError(prop, 'Computed property names are not supported in ASL parameters', ErrorCodes.Expr.ComputedPropertyName.code);
       continue;
     }
 
@@ -101,7 +102,7 @@ export function buildParameters(
           `Cannot resolve '${exprText}' to an ASL value. ` +
           `Expressions must be input references (input.x), service call results, ` +
           `compile-time constants, or ASL intrinsic functions (Steps.format, Steps.add, etc.).`,
-          'SS502',
+          ErrorCodes.Expr.UncompilableExpression.code,
         );
         break;
       }
@@ -172,7 +173,7 @@ export function buildChoiceRule(
     } as ComparisonRule;
   }
 
-  context.addError(expr, 'Cannot compile condition expression to ASL Choice rule', 'SS510');
+  context.addError(expr, 'Cannot compile condition expression to ASL Choice rule', ErrorCodes.Expr.UncompilableCondition.code);
   return { Variable: '$', BooleanEquals: true, Next: nextState } as ComparisonRule;
 }
 
@@ -234,7 +235,7 @@ function buildChoiceRuleFromBinary(
   }
 
   if (!variable || !comparand) {
-    context.addError(expr, 'Cannot compile comparison to ASL Choice rule', 'SS511');
+    context.addError(expr, 'Cannot compile comparison to ASL Choice rule', ErrorCodes.Expr.UncompilableComparison.code);
     return { Variable: '$', BooleanEquals: true, Next: nextState } as ComparisonRule;
   }
 
@@ -268,7 +269,7 @@ function buildChoiceRuleFromBinary(
     }
   }
 
-  context.addError(expr, 'Unsupported comparison operator for ASL Choice rule', 'SS512');
+  context.addError(expr, 'Unsupported comparison operator for ASL Choice rule', ErrorCodes.Expr.UnsupportedOperator.code);
   return { Variable: variable, BooleanEquals: true, Next: nextState } as ComparisonRule;
 }
 

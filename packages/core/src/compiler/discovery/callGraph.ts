@@ -1,5 +1,6 @@
 import ts from 'typescript';
 import { CompilerContext } from '../compilerContext.js';
+import { ErrorCodes } from '../diagnosticCodes.js';
 import { StepFunctionCallSite } from './callSiteLocator.js';
 import { getFunctionDeclarationFromSymbol } from './utils.js';
 
@@ -89,7 +90,7 @@ function parseFunctionEdges(
     context.addError(
       functionDecl,
       'Recursive function calls are not supported in step functions',
-      'SS100',
+      ErrorCodes.Discovery.RecursiveCall.code,
     );
     return edges;
   }

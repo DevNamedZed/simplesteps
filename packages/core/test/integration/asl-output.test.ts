@@ -454,6 +454,12 @@ describe('ASL output: all fixtures compile cleanly', () => {
     's3.ts',
     'secrets-manager.ts',
     'ssm.ts',
+    'ecs.ts',
+    'bedrock.ts',
+    'batch.ts',
+    'glue.ts',
+    'codebuild.ts',
+    'athena.ts',
   ];
 
   for (const fixture of fixtures) {
@@ -1403,5 +1409,164 @@ describe('ASL output: service features', () => {
       const tasks = getStatesByType(asls[10], 'Task');
       expect(tasks[0][1].Resource).toBe('arn:aws:states:::aws-sdk:ssm:getParameters');
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// ECS: run task with Cluster injection
+// ---------------------------------------------------------------------------
+
+describe('ASL output: ecs', () => {
+  let asl: any;
+  beforeAll(() => { asl = compileToJson('ecs.ts'); });
+
+  it('compiles without errors', () => {
+    const filePath = path.join(FIXTURES_DIR, 'ecs.ts');
+    const result = compile({ sourceFiles: [filePath] });
+    expect(result.errors).toHaveLength(0);
+    expect(result.stateMachines.length).toBe(1);
+  });
+
+  it('produces Task state with ECS runTask.sync resource', () => {
+    const tasks = getStatesByType(asl, 'Task');
+    expect(tasks.length).toBeGreaterThanOrEqual(1);
+    expect(tasks[0][1].Resource).toBe('arn:aws:states:::ecs:runTask.sync');
+  });
+
+  it('injects Cluster in Task Parameters', () => {
+    const tasks = getStatesByType(asl, 'Task');
+    expect(tasks[0][1].Parameters.Cluster).toBe('arn:aws:ecs:us-east-1:123456789:cluster/my-cluster');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Bedrock: invoke model with ModelId injection
+// ---------------------------------------------------------------------------
+
+describe('ASL output: bedrock', () => {
+  let asl: any;
+  beforeAll(() => { asl = compileToJson('bedrock.ts'); });
+
+  it('compiles without errors', () => {
+    const filePath = path.join(FIXTURES_DIR, 'bedrock.ts');
+    const result = compile({ sourceFiles: [filePath] });
+    expect(result.errors).toHaveLength(0);
+    expect(result.stateMachines.length).toBe(1);
+  });
+
+  it('produces Task state with bedrock:invokeModel resource', () => {
+    const tasks = getStatesByType(asl, 'Task');
+    expect(tasks.length).toBeGreaterThanOrEqual(1);
+    expect(tasks[0][1].Resource).toBe('arn:aws:states:::bedrock:invokeModel');
+  });
+
+  it('injects ModelId in Task Parameters', () => {
+    const tasks = getStatesByType(asl, 'Task');
+    expect(tasks[0][1].Parameters.ModelId).toBe('anthropic.claude-3-sonnet-20240229-v1:0');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Batch: submit job with JobQueue parameter shaping
+// ---------------------------------------------------------------------------
+
+describe('ASL output: batch', () => {
+  let asl: any;
+  beforeAll(() => { asl = compileToJson('batch.ts'); });
+
+  it('compiles without errors', () => {
+    const filePath = path.join(FIXTURES_DIR, 'batch.ts');
+    const result = compile({ sourceFiles: [filePath] });
+    expect(result.errors).toHaveLength(0);
+    expect(result.stateMachines.length).toBe(1);
+  });
+
+  it('produces Task state with batch:submitJob.sync resource', () => {
+    const tasks = getStatesByType(asl, 'Task');
+    expect(tasks.length).toBeGreaterThanOrEqual(1);
+    expect(tasks[0][1].Resource).toBe('arn:aws:states:::batch:submitJob.sync');
+  });
+
+  it('injects JobQueue in Task Parameters', () => {
+    const tasks = getStatesByType(asl, 'Task');
+    expect(tasks[0][1].Parameters.JobQueue).toBe('arn:aws:batch:us-east-1:123456789:job-queue/my-queue');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Glue: start job run with JobName injection
+// ---------------------------------------------------------------------------
+
+describe('ASL output: glue', () => {
+  let asl: any;
+  beforeAll(() => { asl = compileToJson('glue.ts'); });
+
+  it('compiles without errors', () => {
+    const filePath = path.join(FIXTURES_DIR, 'glue.ts');
+    const result = compile({ sourceFiles: [filePath] });
+    expect(result.errors).toHaveLength(0);
+    expect(result.stateMachines.length).toBe(1);
+  });
+
+  it('produces Task state with glue:startJobRun.sync resource', () => {
+    const tasks = getStatesByType(asl, 'Task');
+    expect(tasks.length).toBeGreaterThanOrEqual(1);
+    expect(tasks[0][1].Resource).toBe('arn:aws:states:::glue:startJobRun.sync');
+  });
+
+  it('injects JobName in Task Parameters', () => {
+    const tasks = getStatesByType(asl, 'Task');
+    expect(tasks[0][1].Parameters.JobName).toBe('my-etl-job');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// CodeBuild: start build with ProjectName injection
+// ---------------------------------------------------------------------------
+
+describe('ASL output: codebuild', () => {
+  let asl: any;
+  beforeAll(() => { asl = compileToJson('codebuild.ts'); });
+
+  it('compiles without errors', () => {
+    const filePath = path.join(FIXTURES_DIR, 'codebuild.ts');
+    const result = compile({ sourceFiles: [filePath] });
+    expect(result.errors).toHaveLength(0);
+    expect(result.stateMachines.length).toBe(1);
+  });
+
+  it('produces Task state with codebuild:startBuild.sync resource', () => {
+    const tasks = getStatesByType(asl, 'Task');
+    expect(tasks.length).toBeGreaterThanOrEqual(1);
+    expect(tasks[0][1].Resource).toBe('arn:aws:states:::codebuild:startBuild.sync');
+  });
+
+  it('injects ProjectName in Task Parameters', () => {
+    const tasks = getStatesByType(asl, 'Task');
+    expect(tasks[0][1].Parameters.ProjectName).toBe('my-build-project');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Athena: query workflow (stateless service)
+// ---------------------------------------------------------------------------
+
+describe('ASL output: athena', () => {
+  let asl: any;
+  beforeAll(() => { asl = compileToJson('athena.ts'); });
+
+  it('compiles without errors', () => {
+    const filePath = path.join(FIXTURES_DIR, 'athena.ts');
+    const result = compile({ sourceFiles: [filePath] });
+    expect(result.errors).toHaveLength(0);
+    expect(result.stateMachines.length).toBe(1);
+  });
+
+  it('produces Task states with Athena SDK resources', () => {
+    const tasks = getStatesByType(asl, 'Task');
+    expect(tasks.length).toBeGreaterThanOrEqual(2);
+    const resources = tasks.map(([, s]) => s.Resource);
+    expect(resources).toContain('arn:aws:states:::athena:startQueryExecution.sync');
+    expect(resources).toContain('arn:aws:states:::athena:getQueryResults');
   });
 });

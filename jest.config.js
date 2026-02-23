@@ -2,7 +2,11 @@
 module.exports = {
   preset: 'ts-jest',
   testEnvironment: 'node',
-  roots: ['<rootDir>/packages/core/test', '<rootDir>/packages/cdk/test'],
+  roots: [
+    '<rootDir>/packages/core/test',
+    '<rootDir>/packages/cdk/test',
+    '<rootDir>/examples/starters/cdk/test',
+  ],
   moduleNameMapper: {
     // Strip .js extensions from TypeScript ESM-style imports
     '^(\\.{1,2}/.*)\\.js$': '$1',

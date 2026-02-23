@@ -1,0 +1,105 @@
+{
+  "StartAt": "Invoke_callExternalApi",
+  "States": {
+    "Invoke_fallbackService": {
+      "Type": "Task",
+      "Resource": "arn:aws:lambda:us-east-1:123456789:function:FallbackService",
+      "Parameters": {
+        "endpoint.$": "$.endpoint"
+      },
+      "ResultPath": "$.fallback",
+      "Next": "Return_Result"
+    },
+    "Return_Result": {
+      "Type": "Pass",
+      "Parameters": {
+        "status": "FALLBACK",
+        "body.$": "$.fallback.body"
+      },
+      "End": true
+    },
+    "Invoke_alerts": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::sns:publish",
+      "Parameters": {
+        "TopicArn": "arn:aws:sns:us-east-1:123456789:OperationalAlerts",
+        "Message": {
+          "error": "PERMISSIONS",
+          "endpoint.$": "$.endpoint"
+        }
+      },
+      "ResultPath": null,
+      "Next": "Return_Result_2"
+    },
+    "Return_Result_2": {
+      "Type": "Pass",
+      "Parameters": {
+        "status": "PERMISSION_DENIED",
+        "body": ""
+      },
+      "End": true
+    },
+    "Invoke_alerts_2": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::sns:publish",
+      "Parameters": {
+        "TopicArn": "arn:aws:sns:us-east-1:123456789:OperationalAlerts",
+        "Message": {
+          "error": "UNKNOWN",
+          "endpoint.$": "$.endpoint"
+        }
+      },
+      "ResultPath": null,
+      "Next": "Return_Result_3"
+    },
+    "Return_Result_3": {
+      "Type": "Pass",
+      "Parameters": {
+        "status": "ERROR",
+        "body": ""
+      },
+      "End": true
+    },
+    "Invoke_callExternalApi": {
+      "Type": "Task",
+      "Resource": "arn:aws:lambda:us-east-1:123456789:function:CallExternalApi",
+      "Parameters": {
+        "endpoint.$": "$.endpoint",
+        "payload.$": "$.payload"
+      },
+      "ResultPath": "$.response",
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.Timeout"
+          ],
+          "Next": "Invoke_fallbackService",
+          "ResultPath": "$.e"
+        },
+        {
+          "ErrorEquals": [
+            "States.Permissions"
+          ],
+          "Next": "Invoke_alerts",
+          "ResultPath": "$.e"
+        },
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "Next": "Invoke_alerts_2",
+          "ResultPath": "$.e"
+        }
+      ],
+      "Next": "Return_Result_4"
+    },
+    "Return_Result_4": {
+      "Type": "Pass",
+      "Parameters": {
+        "status": "SUCCESS",
+        "body.$": "$.response.body"
+      },
+      "End": true
+    }
+  }
+}

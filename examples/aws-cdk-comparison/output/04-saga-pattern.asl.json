@@ -1,0 +1,119 @@
+{
+  "StartAt": "Invoke_bookFlightFn",
+  "States": {
+    "Invoke_bookFlightFn": {
+      "Type": "Task",
+      "Resource": "arn:aws:lambda:us-east-1:123456789:function:BookFlight",
+      "Parameters": {
+        "tripId.$": "$.tripId",
+        "destination.$": "$.destination"
+      },
+      "ResultPath": "$.flight",
+      "Next": "Invoke_bookHotelFn"
+    },
+    "Invoke_cancelFlightFn": {
+      "Type": "Task",
+      "Resource": "arn:aws:lambda:us-east-1:123456789:function:CancelFlight",
+      "Parameters": {
+        "flightId.$": "$.flight.flightId"
+      },
+      "ResultPath": null,
+      "Next": "Throw_Error"
+    },
+    "Throw_Error": {
+      "Type": "Fail",
+      "Error": "States.ALL",
+      "Cause": "Hotel booking failed, flight cancelled"
+    },
+    "Invoke_bookHotelFn": {
+      "Type": "Task",
+      "Resource": "arn:aws:lambda:us-east-1:123456789:function:BookHotel",
+      "Parameters": {
+        "tripId.$": "$.tripId",
+        "destination.$": "$.destination"
+      },
+      "ResultPath": "$.hotel",
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "Next": "Invoke_cancelFlightFn",
+          "ResultPath": "$.e"
+        }
+      ],
+      "Next": "Invoke_chargeCardFn"
+    },
+    "Invoke_cancelHotelFn": {
+      "Type": "Task",
+      "Resource": "arn:aws:lambda:us-east-1:123456789:function:CancelHotel",
+      "Parameters": {
+        "hotelId.$": "$.hotel.hotelId"
+      },
+      "ResultPath": null,
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "Next": "Invoke_cancelFlightFn",
+          "ResultPath": "$.e"
+        }
+      ],
+      "Next": "Invoke_cancelFlightFn_2"
+    },
+    "Invoke_cancelFlightFn_2": {
+      "Type": "Task",
+      "Resource": "arn:aws:lambda:us-east-1:123456789:function:CancelFlight",
+      "Parameters": {
+        "flightId.$": "$.flight.flightId"
+      },
+      "ResultPath": null,
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "Next": "Invoke_cancelFlightFn",
+          "ResultPath": "$.e"
+        }
+      ],
+      "Next": "Throw_Error_2"
+    },
+    "Throw_Error_2": {
+      "Type": "Fail",
+      "Error": "States.ALL",
+      "Cause": "Payment failed, bookings cancelled"
+    },
+    "Invoke_chargeCardFn": {
+      "Type": "Task",
+      "Resource": "arn:aws:lambda:us-east-1:123456789:function:ChargeCard",
+      "Parameters": {
+        "tripId.$": "$.tripId",
+        "amount.$": "$.amount"
+      },
+      "ResultPath": "$.charge",
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "Next": "Invoke_cancelHotelFn",
+          "ResultPath": "$.e"
+        }
+      ],
+      "Next": "Return_Result"
+    },
+    "Return_Result": {
+      "Type": "Pass",
+      "Parameters": {
+        "tripId.$": "$.tripId",
+        "flightId.$": "$.flight.flightId",
+        "hotelId.$": "$.hotel.hotelId",
+        "chargeId.$": "$.charge.chargeId",
+        "status": "CONFIRMED"
+      },
+      "End": true
+    }
+  }
+}

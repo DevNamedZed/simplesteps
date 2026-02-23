@@ -1,9 +1,10 @@
 // Hello World — SimpleSteps
 //
 // The simplest Step Functions example: invoke a Lambda and return the result.
+// When installed via npm, use: import { Steps } from '@simplesteps/core/runtime'
 
-import { Steps, SimpleStepContext } from '@simplesteps/core/runtime';
-import { Lambda } from '@simplesteps/core/runtime/services';
+import { Steps, SimpleStepContext } from '../../../packages/core/src/runtime/index';
+import { Lambda } from '../../../packages/core/src/runtime/services/Lambda';
 
 const helloFn = Lambda<{ name: string }, { greeting: string }>(
   'arn:aws:lambda:us-east-1:123456789:function:Hello',

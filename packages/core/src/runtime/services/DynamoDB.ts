@@ -11,7 +11,7 @@ export interface DynamoDbOptions {
 /** DynamoDB table binding for the SimpleSteps compiler. */
 export class DynamoDB {
   constructor(tableName: string) {
-    throw new Error(BINDING_ERROR);
+    // No-op: safe for CDK inline workflows where the transformer replaces usage
   }
 
   getItem<T>(params: Record<string, any>, options?: DynamoDbOptions): Promise<T> {
@@ -51,6 +51,14 @@ export class DynamoDB {
   }
 
   scan<T>(params: Record<string, any>, options?: DynamoDbOptions): Promise<T> {
+    throw new Error(BINDING_ERROR);
+  }
+
+  batchGetItem<T>(params: Record<string, any>, options?: DynamoDbOptions): Promise<T> {
+    throw new Error(BINDING_ERROR);
+  }
+
+  batchWriteItem(params: Record<string, any>, options?: DynamoDbOptions): Promise<void> {
     throw new Error(BINDING_ERROR);
   }
 }

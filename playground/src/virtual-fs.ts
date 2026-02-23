@@ -12,6 +12,12 @@ import servicesEventBridge from '../../packages/core/src/runtime/services/EventB
 import servicesS3 from '../../packages/core/src/runtime/services/S3.ts?raw';
 import servicesSecretsManager from '../../packages/core/src/runtime/services/SecretsManager.ts?raw';
 import servicesSSM from '../../packages/core/src/runtime/services/SSM.ts?raw';
+import servicesECS from '../../packages/core/src/runtime/services/ECS.ts?raw';
+import servicesBedrock from '../../packages/core/src/runtime/services/Bedrock.ts?raw';
+import servicesBatch from '../../packages/core/src/runtime/services/Batch.ts?raw';
+import servicesGlue from '../../packages/core/src/runtime/services/Glue.ts?raw';
+import servicesCodeBuild from '../../packages/core/src/runtime/services/CodeBuild.ts?raw';
+import servicesAthena from '../../packages/core/src/runtime/services/Athena.ts?raw';
 import servicesIndex from '../../packages/core/src/runtime/services/index.ts?raw';
 
 /** Minimal lib shim — just enough for the compiler's symbol resolution. */
@@ -63,11 +69,11 @@ export const SERVICES_DIR = '/virtual/runtime/services';
 
 /**
  * Build the virtual file map for the compiler.
- * The user's code import paths should use './runtime/index' (not '../../packages/...').
+ * Accepts a map of user files (e.g. { 'workflow.ts': '...' }) which are
+ * placed under /virtual/. Import paths should use './runtime/index'.
  */
-export function buildVirtualFiles(userCode: string): Record<string, string> {
-  return {
-    '/virtual/user.ts': userCode,
+export function buildVirtualFiles(userFiles: Record<string, string>): Record<string, string> {
+  const files: Record<string, string> = {
     '/virtual/runtime/index.ts': runtimeIndex,
     '/virtual/runtime/services/types.ts': servicesTypes,
     '/virtual/runtime/services/Lambda.ts': servicesLambda,
@@ -79,9 +85,19 @@ export function buildVirtualFiles(userCode: string): Record<string, string> {
     '/virtual/runtime/services/S3.ts': servicesS3,
     '/virtual/runtime/services/SecretsManager.ts': servicesSecretsManager,
     '/virtual/runtime/services/SSM.ts': servicesSSM,
+    '/virtual/runtime/services/ECS.ts': servicesECS,
+    '/virtual/runtime/services/Bedrock.ts': servicesBedrock,
+    '/virtual/runtime/services/Batch.ts': servicesBatch,
+    '/virtual/runtime/services/Glue.ts': servicesGlue,
+    '/virtual/runtime/services/CodeBuild.ts': servicesCodeBuild,
+    '/virtual/runtime/services/Athena.ts': servicesAthena,
     '/virtual/runtime/services/index.ts': servicesIndex,
     '/lib/lib.shim.d.ts': LIB_SHIM,
   };
+  for (const [name, content] of Object.entries(userFiles)) {
+    files[`/virtual/${name}`] = content;
+  }
+  return files;
 }
 
 /** Get the raw runtime source for Monaco autocomplete registration. */
@@ -97,6 +113,12 @@ export function getRuntimeSources(): Record<string, string> {
     'runtime/services/S3.ts': servicesS3,
     'runtime/services/SecretsManager.ts': servicesSecretsManager,
     'runtime/services/SSM.ts': servicesSSM,
+    'runtime/services/ECS.ts': servicesECS,
+    'runtime/services/Bedrock.ts': servicesBedrock,
+    'runtime/services/Batch.ts': servicesBatch,
+    'runtime/services/Glue.ts': servicesGlue,
+    'runtime/services/CodeBuild.ts': servicesCodeBuild,
+    'runtime/services/Athena.ts': servicesAthena,
     'runtime/services/index.ts': servicesIndex,
   };
 }

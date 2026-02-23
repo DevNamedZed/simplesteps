@@ -2,11 +2,12 @@
 //
 // Retrieve secrets from Secrets Manager and config from SSM Parameter Store,
 // then use them in a Lambda call.
+// When installed via npm, use: import { Steps } from '@simplesteps/core/runtime'
 
-import { Steps, SimpleStepContext } from '@simplesteps/core/runtime';
-import { Lambda } from '@simplesteps/core/runtime/services';
-import { SecretsManager } from '@simplesteps/core/runtime/services';
-import { SSM } from '@simplesteps/core/runtime/services';
+import { Steps, SimpleStepContext } from '../../../packages/core/src/runtime/index';
+import { Lambda } from '../../../packages/core/src/runtime/services/Lambda';
+import { SecretsManager } from '../../../packages/core/src/runtime/services/SecretsManager';
+import { SSM } from '../../../packages/core/src/runtime/services/SSM';
 
 const callExternalApi = Lambda<
   { apiKey: string; endpoint: string },

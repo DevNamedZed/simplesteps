@@ -1,0 +1,81 @@
+{
+  "StartAt": "Invoke_submitJob",
+  "States": {
+    "Invoke_submitJob": {
+      "Type": "Task",
+      "Resource": "arn:aws:lambda:us-east-1:123456789:function:SubmitJob",
+      "Parameters": {
+        "jobName.$": "$.jobName"
+      },
+      "ResultPath": "$.job",
+      "Next": "Invoke_getJobStatus"
+    },
+    "Invoke_getJobStatus": {
+      "Type": "Task",
+      "Resource": "arn:aws:lambda:us-east-1:123456789:function:GetJobStatus",
+      "Parameters": {
+        "jobId.$": "$.job.jobId"
+      },
+      "ResultPath": "$.status",
+      "Next": "Choice"
+    },
+    "Invoke_getJobStatus_2": {
+      "Type": "Task",
+      "Resource": "arn:aws:lambda:us-east-1:123456789:function:GetJobStatus",
+      "Parameters": {
+        "jobId.$": "$.job.jobId"
+      },
+      "ResultPath": "$.status",
+      "Next": "Choice"
+    },
+    "Throw_Error": {
+      "Type": "Fail",
+      "Error": "Error",
+      "Cause": "Job failed"
+    },
+    "Return_Result": {
+      "Type": "Pass",
+      "Parameters": {
+        "jobId.$": "$.job.jobId",
+        "finalStatus.$": "$.status.status"
+      },
+      "End": true
+    },
+    "Check_status": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.status.status",
+          "StringEquals": "FAILED",
+          "Next": "Throw_Error"
+        }
+      ],
+      "Default": "Return_Result"
+    },
+    "Choice": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "And": [
+            {
+              "Not": {
+                "Variable": "$.status.status",
+                "StringEquals": "SUCCEEDED",
+                "Next": ""
+              }
+            },
+            {
+              "Not": {
+                "Variable": "$.status.status",
+                "StringEquals": "FAILED",
+                "Next": ""
+              }
+            }
+          ],
+          "Next": "Invoke_getJobStatus_2"
+        }
+      ],
+      "Default": "Check_status"
+    }
+  }
+}

@@ -17,9 +17,7 @@ export interface EventBridgeOptions {
 
 /** EventBridge binding for the SimpleSteps compiler. */
 export class EventBridge {
-  constructor(eventBusName: string) {
-    throw new Error(BINDING_ERROR);
-  }
+  constructor(eventBusName: string) {}
 
   putEvent(event: EventBridgeEvent, options?: EventBridgeOptions): Promise<void> {
     throw new Error(BINDING_ERROR);

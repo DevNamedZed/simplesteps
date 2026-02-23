@@ -1,9 +1,10 @@
 // Parallel Processing — SimpleSteps
 //
 // Run three independent lookups in parallel and combine results.
+// When installed via npm, use: import { Steps } from '@simplesteps/core/runtime'
 
-import { Steps, SimpleStepContext } from '@simplesteps/core/runtime';
-import { Lambda } from '@simplesteps/core/runtime/services';
+import { Steps, SimpleStepContext } from '../../../packages/core/src/runtime/index';
+import { Lambda } from '../../../packages/core/src/runtime/services/Lambda';
 
 const getUserProfile = Lambda<
   { userId: string },

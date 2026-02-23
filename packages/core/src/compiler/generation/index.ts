@@ -4,6 +4,7 @@ import type { ControlFlowGraph } from '../cfg/types.js';
 import type { ServiceRegistry } from '../discovery/serviceDiscovery.js';
 import type { StepFunctionCallSite } from '../discovery/callSiteLocator.js';
 import { resolveVariables } from '../analysis/variableResolver.js';
+import type { WholeProgramAnalyzer } from '../analysis/wholeProgramAnalyzer.js';
 import { buildStateMachine } from './stateBuilder.js';
 import type { StateMachineDefinition } from '../../asl/types.js';
 
@@ -20,8 +21,9 @@ export function generateStateMachine(
   cfg: ControlFlowGraph,
   serviceRegistry: ServiceRegistry,
   substitutions?: Readonly<Record<string, unknown>>,
+  analyzer?: WholeProgramAnalyzer,
 ): StateMachineDefinition {
-  const variables = resolveVariables(context, callSite, serviceRegistry, substitutions);
+  const variables = resolveVariables(context, callSite, serviceRegistry, substitutions, analyzer);
   return buildStateMachine(context, cfg, callSite, serviceRegistry, variables);
 }
 

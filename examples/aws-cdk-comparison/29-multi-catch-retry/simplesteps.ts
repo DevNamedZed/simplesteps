@@ -2,6 +2,7 @@
 //
 // Typed error handling with retry policies and different recovery
 // strategies per error type.
+// When installed via npm, use: import { Steps } from '@simplesteps/core/runtime'
 
 import {
   Steps,
@@ -9,9 +10,9 @@ import {
   TimeoutError,
   TaskFailedError,
   PermissionsError,
-} from '@simplesteps/core/runtime';
-import { Lambda } from '@simplesteps/core/runtime/services';
-import { SNS } from '@simplesteps/core/runtime/services';
+} from '../../../packages/core/src/runtime/index';
+import { Lambda } from '../../../packages/core/src/runtime/services/Lambda';
+import { SNS } from '../../../packages/core/src/runtime/services/SNS';
 
 const callExternalApi = Lambda<
   { endpoint: string; payload: string },

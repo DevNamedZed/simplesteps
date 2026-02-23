@@ -2,12 +2,13 @@
 //
 // Extract from S3, transform each record with Lambda, load to DynamoDB,
 // write output to S3, notify completion.
+// When installed via npm, use: import { Steps } from '@simplesteps/core/runtime'
 
-import { Steps, SimpleStepContext } from '@simplesteps/core/runtime';
-import { Lambda } from '@simplesteps/core/runtime/services';
-import { S3 } from '@simplesteps/core/runtime/services';
-import { DynamoDB } from '@simplesteps/core/runtime/services';
-import { SNS } from '@simplesteps/core/runtime/services';
+import { Steps, SimpleStepContext } from '../../../packages/core/src/runtime/index';
+import { Lambda } from '../../../packages/core/src/runtime/services/Lambda';
+import { S3 } from '../../../packages/core/src/runtime/services/S3';
+import { DynamoDB } from '../../../packages/core/src/runtime/services/DynamoDB';
+import { SNS } from '../../../packages/core/src/runtime/services/SNS';
 
 const extractRecords = Lambda<
   { rawData: string },

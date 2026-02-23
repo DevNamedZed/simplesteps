@@ -14,8 +14,9 @@ export interface SimpleStepsStateMachineProps
 
   /**
    * Path to the TypeScript source file containing the step function definition.
+   * Used for file-based compilation mode.
    */
-  readonly sourceFile: string;
+  readonly sourceFile?: string;
 
   /**
    * Map of variable names (as they appear in the source) to CDK resource
@@ -41,6 +42,29 @@ export interface SimpleStepsStateMachineProps
    * produces multiple machines and this is not specified.
    */
   readonly stateMachineName?: string;
+
+  /**
+   * Inline workflow definition using `Steps.createFunction()`.
+   *
+   * Requires the SimpleSteps TypeScript transformer to be active at build time.
+   * The transformer will compile this to ASL and replace it with `__compiledAsl`
+   * before CDK synthesis.
+   */
+  readonly workflow?: unknown;
+
+  /**
+   * @internal
+   * Pre-compiled ASL JSON string, injected by the SimpleSteps transformer.
+   * Contains `$$N$$` placeholders that get replaced by `__runtimeBindings` values.
+   */
+  readonly __compiledAsl?: string;
+
+  /**
+   * @internal
+   * Array of CDK expressions that replace `$$N$$` placeholders in `__compiledAsl`.
+   * Injected by the SimpleSteps transformer.
+   */
+  readonly __runtimeBindings?: unknown[];
 }
 
 // ── Construct ────────────────────────────────────────────────────────────
@@ -63,73 +87,111 @@ export interface SimpleStepsStateMachineProps
  * ```
  */
 export class SimpleStepsStateMachine extends sfn.StateMachine {
-  /** The full compile result from @simplesteps/core. */
-  readonly compileResult: CompileResult;
+  /** The full compile result from @simplesteps/core (file-based mode only). */
+  readonly compileResult?: CompileResult;
 
-  /** The specific CompiledStateMachine that was selected. */
-  readonly compiledMachine: CompiledStateMachine;
+  /** The specific CompiledStateMachine that was selected (file-based mode only). */
+  readonly compiledMachine?: CompiledStateMachine;
 
   constructor(scope: Construct, id: string, props: SimpleStepsStateMachineProps) {
-    const { sourceFile, bindings, stateMachineName, ...sfnProps } = props;
+    const {
+      sourceFile, bindings, stateMachineName,
+      workflow, __compiledAsl, __runtimeBindings,
+      ...sfnProps
+    } = props;
 
-    // 1. Build substitutions from bindings
-    const substitutions: Record<string, unknown> = {};
-    if (bindings) {
-      for (const [varName, value] of Object.entries(bindings)) {
-        substitutions[varName] = value;
+    // ── Path A: Transformer output — pre-compiled ASL with runtime bindings ──
+    if (__compiledAsl != null) {
+      let asl = __compiledAsl;
+      const runtimeBindings = __runtimeBindings ?? [];
+      for (let i = 0; i < runtimeBindings.length; i++) {
+        asl = asl.split(`$$${i}$$`).join(String(runtimeBindings[i]));
       }
+
+      super(scope, id, {
+        ...sfnProps,
+        definitionBody: sfn.DefinitionBody.fromString(asl),
+      });
+      return;
     }
 
-    // 2. Compile
-    const result = compile({
-      sourceFiles: [sourceFile],
-      substitutions,
-    });
+    // ── Path B: File-based compilation (existing behavior) ──────────────────
+    if (sourceFile) {
+      // 1. Build substitutions from bindings
+      const substitutions: Record<string, unknown> = {};
+      if (bindings) {
+        for (const [varName, value] of Object.entries(bindings)) {
+          substitutions[varName] = value;
+        }
+      }
 
-    if (result.errors.length > 0) {
-      const messages = result.errors.map(e => `${e.file}:${e.line} - ${e.message}`);
-      throw new Error(
-        `SimpleSteps compilation failed:\n${messages.join('\n')}`,
-      );
-    }
+      // 2. Compile
+      const result = compile({
+        sourceFiles: [sourceFile],
+        substitutions,
+      });
 
-    if (result.stateMachines.length === 0) {
-      throw new Error(
-        `No state machines found in ${sourceFile}`,
-      );
-    }
-
-    // 3. Select the target state machine
-    let selected: CompiledStateMachine;
-    if (stateMachineName) {
-      const match = result.stateMachines.find(m => m.name === stateMachineName);
-      if (!match) {
-        const available = result.stateMachines.map(m => m.name).join(', ');
+      if (result.errors.length > 0) {
+        const messages = result.errors.map(e => `${e.file}:${e.line} - ${e.message}`);
         throw new Error(
-          `State machine "${stateMachineName}" not found. Available: ${available}`,
+          `SimpleSteps compilation failed:\n${messages.join('\n')}`,
         );
       }
-      selected = match;
-    } else if (result.stateMachines.length === 1) {
-      selected = result.stateMachines[0];
-    } else {
-      const available = result.stateMachines.map(m => m.name).join(', ');
+
+      if (result.stateMachines.length === 0) {
+        throw new Error(
+          `No state machines found in ${sourceFile}`,
+        );
+      }
+
+      // 3. Select the target state machine
+      let selected: CompiledStateMachine;
+      if (stateMachineName) {
+        const match = result.stateMachines.find(m => m.name === stateMachineName);
+        if (!match) {
+          const available = result.stateMachines.map(m => m.name).join(', ');
+          throw new Error(
+            `State machine "${stateMachineName}" not found. Available: ${available}`,
+          );
+        }
+        selected = match;
+      } else if (result.stateMachines.length === 1) {
+        selected = result.stateMachines[0];
+      } else {
+        const available = result.stateMachines.map(m => m.name).join(', ');
+        throw new Error(
+          `Source file produces ${result.stateMachines.length} state machines (${available}). ` +
+          `Specify stateMachineName to select one.`,
+        );
+      }
+
+      // 4. Create CDK StateMachine with compiled ASL
+      const definitionString = AslSerializer.serialize(selected.definition);
+
+      super(scope, id, {
+        ...sfnProps,
+        definitionBody: sfn.DefinitionBody.fromString(definitionString),
+      });
+
+      this.compileResult = result;
+      this.compiledMachine = selected;
+      return;
+    }
+
+    // ── Path C: Inline workflow without transformer — error ─────────────────
+    if (workflow != null) {
       throw new Error(
-        `Source file produces ${result.stateMachines.length} state machines (${available}). ` +
-        `Specify stateMachineName to select one.`,
+        'Inline workflows require the SimpleSteps TypeScript transformer. ' +
+        'Add the transformer to your build pipeline. ' +
+        'See: https://github.com/DevNamedZed/simplesteps#transformer-setup',
       );
     }
 
-    // 4. Create CDK StateMachine with compiled ASL
-    const definitionString = AslSerializer.serialize(selected.definition);
-
-    super(scope, id, {
-      ...sfnProps,
-      definitionBody: sfn.DefinitionBody.fromString(definitionString),
-    });
-
-    this.compileResult = result;
-    this.compiledMachine = selected;
+    // ── No valid input ─────────────────────────────────────────────────────
+    throw new Error(
+      'SimpleStepsStateMachine requires either `sourceFile` (file-based) ' +
+      'or `workflow` (inline with transformer) to be specified.',
+    );
   }
 }
 

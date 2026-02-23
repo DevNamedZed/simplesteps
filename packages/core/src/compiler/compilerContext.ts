@@ -1,5 +1,6 @@
 import ts from 'typescript';
 import { Logger, LogLevel } from './logger.js';
+import type { DiagnosticCode } from './diagnosticCodes.js';
 
 /**
  * Severity level for compiler diagnostics.
@@ -90,15 +91,17 @@ export class CompilerContext {
   /**
    * Convenience: add an error diagnostic from an AST node.
    */
-  addError(node: ts.Node, message: string, code: string): void {
-    this.addDiagnostic(node, message, 'error', code);
+  addError(node: ts.Node, message: string, code: DiagnosticCode | string): void {
+    const codeStr = typeof code === 'string' ? code : code.code;
+    this.addDiagnostic(node, message, 'error', codeStr);
   }
 
   /**
    * Convenience: add a warning diagnostic from an AST node.
    */
-  addWarning(node: ts.Node, message: string, code: string): void {
-    this.addDiagnostic(node, message, 'warning', code);
+  addWarning(node: ts.Node, message: string, code: DiagnosticCode | string): void {
+    const codeStr = typeof code === 'string' ? code : code.code;
+    this.addDiagnostic(node, message, 'warning', codeStr);
   }
 
   hasErrors(): boolean {

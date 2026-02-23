@@ -10,9 +10,7 @@ export interface SSMOptions {
 
 /** SSM Parameter Store binding for the SimpleSteps compiler. */
 export class SSM {
-  constructor() {
-    throw new Error(BINDING_ERROR);
-  }
+  constructor() {}
 
   getParameter<T = any>(params: Record<string, any>, options?: SSMOptions): Promise<T> {
     throw new Error(BINDING_ERROR);
