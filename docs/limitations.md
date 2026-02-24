@@ -23,6 +23,29 @@ count -= 3;                 // OK
 
 Workaround: Use compile-time constants (`const TIMEOUT = 30 * 1000` is folded at compile time), or delegate the calculation to a Lambda.
 
+## Conditions
+
+Conditions in `if`, `while`, and `switch` statements compile to ASL Choice rules. Only simple comparisons are supported:
+
+```typescript
+// OK — simple comparisons
+if (input.status === 'ACTIVE') { ... }
+if (input.count > 0) { ... }
+if (a > 0 && b < 10) { ... }
+if (!input.disabled) { ... }
+
+// NOT OK — method calls in conditions
+if (input.items.includes(target)) { ... }  // SS510
+
+// NOT OK — function calls in conditions
+if (isValid(input)) { ... }                // SS510
+
+// NOT OK — bitwise operators
+if (flags & MASK) { ... }                  // SS512
+```
+
+Workaround: Compute the condition result in a previous step (e.g., via Lambda), then branch on the result.
+
 ## Substeps
 
 The compiler supports two kinds of inlineable functions:
@@ -133,6 +156,40 @@ for (const item of items) {
 
 Array methods that **are** supported via ASL intrinsics: `.includes()`, `.length`, `[index]`, `.split()` (on strings).
 
+## Promise.all
+
+`Promise.all` compiles to an ASL Parallel state, but the argument **must** be an inline array literal:
+
+```typescript
+// OK — array literal with service calls
+const [order, payment] = await Promise.all([
+  orderFn.call({ id: input.orderId }),
+  paymentFn.call({ amount: input.amount }),
+]);
+
+// NOT OK — variable reference
+const promises = [orderFn.call({ id: input.orderId })];
+await Promise.all(promises);  // SS420
+```
+
+Each element of the array becomes a parallel branch. The compiler needs to see the branches at compile time.
+
+## Destructuring
+
+Object destructuring of **service call results** is not supported. The state builder only registers simple variable names:
+
+```typescript
+// NOT OK — destructuring silently ignored
+const { name, count } = await myLambda.call(input);
+
+// OK — assign to a variable, then access properties
+const result = await myLambda.call(input);
+const name = result.name;    // → $.result.name
+const count = result.count;  // → $.result.count
+```
+
+Array destructuring **is** supported for `Promise.all` results (see above). Destructured **function parameters** in substeps also work (e.g., `async function process({ id, name }: Input)`).
+
 ## Classes
 
 Class instantiation is not supported inside workflow bodies. You cannot create class instances at runtime.
@@ -224,6 +281,31 @@ const MAX_RETRIES = 3;    // OK — folded
 let retryCount = 3;        // OK — folded (warning SS709: prefer const)
 let x = 1; x = 2;         // NOT OK — reassigned, not foldable
 ```
+
+## Escape Hatches
+
+### `Steps.safeVar(value)`
+
+When the compiler cannot prove a variable is constant but you know it will be available at runtime, wrap it with `Steps.safeVar()`. This emits warning SS708 instead of error SS700:
+
+```typescript
+const arn = getArnFromConfig();                        // → SS700 error
+const svc = Lambda<Req, Res>(Steps.safeVar(arn));      // → SS708 warning (OK)
+```
+
+Use this only when you are certain the value will be resolved before the state machine executes (e.g., CDK synth-time values the compiler can't trace).
+
+### `Steps.awsSdk(service, action, params)`
+
+For AWS services not covered by the built-in bindings:
+
+```typescript
+const obj = await Steps.awsSdk<{ Bucket: string; Key: string }, { Body: string }>(
+  'S3', 'GetObject', { Bucket: 'my-bucket', Key: input.key }
+);
+```
+
+Compiles to `Resource: "arn:aws:states:::aws-sdk:s3:GetObject"`.
 
 ## General Rule
 

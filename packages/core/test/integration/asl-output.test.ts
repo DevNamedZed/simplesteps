@@ -1839,6 +1839,131 @@ describe('Error-path diagnostics', () => {
       expect(result.stateMachines.length).toBeGreaterThanOrEqual(1);
     }
   });
+
+  // SS400: break outside of loop
+  it('SS400: break outside loop emits BreakOutsideLoop', () => {
+    const result = writeAndCompile('__test_ss400.ts', `
+      import { Steps, SimpleStepContext } from '../../../src/runtime/index';
+      import { Lambda } from '../../../src/runtime/services/Lambda';
+      const svc = Lambda<any, any>('arn:aws:lambda:us-east-1:123:function:Fn');
+      export const test = Steps.createFunction(
+        async (context: SimpleStepContext, input: { x: number }) => {
+          const r = await svc.call({ x: input.x });
+          if (r.done) {
+            break;
+          }
+          return { result: r };
+        },
+      );
+    `);
+    const err = result.errors.find(e => e.code === 'SS400');
+    expect(err).toBeDefined();
+  });
+
+  // SS401: continue outside of loop
+  it('SS401: continue outside loop emits ContinueOutsideLoop', () => {
+    const result = writeAndCompile('__test_ss401.ts', `
+      import { Steps, SimpleStepContext } from '../../../src/runtime/index';
+      import { Lambda } from '../../../src/runtime/services/Lambda';
+      const svc = Lambda<any, any>('arn:aws:lambda:us-east-1:123:function:Fn');
+      export const test = Steps.createFunction(
+        async (context: SimpleStepContext, input: { x: number }) => {
+          const r = await svc.call({ x: input.x });
+          if (r.done) {
+            continue;
+          }
+          return { result: r };
+        },
+      );
+    `);
+    const err = result.errors.find(e => e.code === 'SS401');
+    expect(err).toBeDefined();
+  });
+
+  // SS410: switch case fall-through
+  it('SS410: switch fall-through emits SwitchFallThrough', () => {
+    const result = writeAndCompile('__test_ss410.ts', `
+      import { Steps, SimpleStepContext } from '../../../src/runtime/index';
+      import { Lambda } from '../../../src/runtime/services/Lambda';
+      const svc = Lambda<any, any>('arn:aws:lambda:us-east-1:123:function:Fn');
+      export const test = Steps.createFunction(
+        async (context: SimpleStepContext, input: { status: string }) => {
+          switch (input.status) {
+            case 'a':
+              await svc.call({ action: 'a' });
+            case 'b':
+              await svc.call({ action: 'b' });
+              break;
+          }
+          return { done: true };
+        },
+      );
+    `);
+    const err = result.errors.find(e => e.code === 'SS410');
+    expect(err).toBeDefined();
+  });
+
+  // SS800: substep argument count mismatch
+  it('SS800: argument count mismatch emits UninlinableFunction', () => {
+    const result = writeAndCompile('__test_ss800.ts', `
+      import { Steps, SimpleStepContext } from '../../../src/runtime/index';
+      import { Lambda } from '../../../src/runtime/services/Lambda';
+      const svc = Lambda<{ id: string }, { ok: boolean }>('arn:aws:lambda:us-east-1:123:function:Fn');
+      async function myHelper(id: string, name: string) {
+        await svc.call({ id });
+      }
+      export const test = Steps.createFunction(
+        async (context: SimpleStepContext, input: { id: string }) => {
+          await myHelper(input.id, 'test', 'extra' as any);
+          return { done: true };
+        },
+      );
+    `);
+    const err = result.errors.find(e => e.code === 'SS800');
+    expect(err).toBeDefined();
+  });
+
+  // SS805: async helper called without await
+  it('SS805: non-awaited helper call emits HelperNotAwaited', () => {
+    const result = writeAndCompile('__test_ss805.ts', `
+      import { Steps, SimpleStepContext } from '../../../src/runtime/index';
+      import { Lambda } from '../../../src/runtime/services/Lambda';
+      const svc = Lambda<{ id: string }, { ok: boolean }>('arn:aws:lambda:us-east-1:123:function:Fn');
+      async function myHelper(id: string) {
+        await svc.call({ id });
+      }
+      export const test = Steps.createFunction(
+        async (context: SimpleStepContext, input: { id: string }) => {
+          myHelper(input.id);
+          return { done: true };
+        },
+      );
+    `);
+    const err = result.errors.find(e => e.code === 'SS805');
+    expect(err).toBeDefined();
+  });
+
+  // SS804: rest params in substep
+  it('SS804: rest params in substep emits HelperDestructuringParam', () => {
+    const result = writeAndCompile('__test_ss804.ts', `
+      import { Steps, SimpleStepContext } from '../../../src/runtime/index';
+      import { Lambda } from '../../../src/runtime/services/Lambda';
+      const svc = Lambda<{ id: string }, { ok: boolean }>('arn:aws:lambda:us-east-1:123:function:Fn');
+      async function processAll(...ids: string[]) {
+        for (const id of ids) {
+          await svc.call({ id });
+        }
+      }
+      export const test = Steps.createFunction(
+        async (context: SimpleStepContext, input: { id: string }) => {
+          await processAll(input.id);
+          return { done: true };
+        },
+      );
+    `);
+    const err = result.errors.find(e => e.code === 'SS804');
+    expect(err).toBeDefined();
+  });
 });
 
 // ===========================================================================

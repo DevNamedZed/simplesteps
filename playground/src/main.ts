@@ -110,7 +110,12 @@ const EXAMPLE_CATEGORIES: ExampleCategory[] = [
     keys: [
       'limit-arithmetic', 'limit-dynamic-expressions', 'limit-array-methods',
       'limit-recursive', 'limit-substep-constraints', 'limit-variable-capture',
-      'limit-substep-await', 'limit-workarounds',
+      'limit-substep-await',
+      'limit-switch-fallthrough', 'limit-promise-all', 'limit-spread',
+      'limit-conditions',
+      'limit-map-isolation', 'limit-module-scope', 'limit-variable-shadowing',
+      'limit-substep-edge-cases', 'limit-runtime-expressions',
+      'limit-workarounds',
     ],
   },
 ];
@@ -1919,17 +1924,17 @@ export const dynamicLimits = Steps.createFunction(
     // ✅ Ternary — compiles to Choice + Pass states
     const label = result.count > 5 ? 'large' : 'small';
 
-    // ❌ SS502: String() coercion — no ASL equivalent
-    const countStr = String(result.count);
-
-    // ❌ SS510: Complex condition — can't compile to ASL Choice rule
+    // ✅ AND/OR conditions work — compiles to And/Or choice rules
     if (result.count > 0 && label === 'large') {
       return { status: 'matched' };
     }
 
+    // ❌ SS502: String() coercion in service call — no ASL equivalent
+    await storeFn.call({ value: String(result.count), flag: true });
+
     // ❌ SS501: Computed property name — JSONPath needs static keys
     const key = 'dynamicKey';
-    await storeFn.call({ value: input.data, flag: true });
+    await storeFn.call({ [key]: input.data, flag: true });
 
     return { status: 'done', count: result.count };
   },
@@ -1952,7 +1957,7 @@ const enrichFn = Lambda<
 >('arn:aws:lambda:us-east-1:123456789:function:Enrich');
 
 export const arrayLimits = Steps.createFunction(
-  async (context: SimpleStepContext, input: { items: { id: string; value: number }[] }) => {
+  async (context: SimpleStepContext, input: { items: { id: string; value: number }[]; tags: string[] }) => {
     // ❌ .map() — not compilable to ASL
     // const ids = input.items.map(item => item.id);
 
@@ -1974,9 +1979,9 @@ export const arrayLimits = Steps.createFunction(
     const count = input.items.length;
 
     // ✅ .includes() works — compiles to States.ArrayContains
-    // (only on jsonpath values, shown here conceptually)
+    const hasSpecial = input.tags.includes('priority');
 
-    return { processedCount: count };
+    return { processedCount: count, hasSpecial };
   },
 );
 ` }] },
@@ -2180,6 +2185,495 @@ export const helperNesting = Steps.createFunction(
     await notifyFn.call({ id: input.id, message: 'done' });
 
     return { status: 'complete' };
+  },
+);
+` }] },
+
+  'limit-switch-fallthrough': { description: 'Switch cases must end with break, return, or throw (SS410).', services: ['Lambda'], files: [{ name: 'workflow.ts', content: `import { Steps, SimpleStepContext } from './runtime/index';
+import { Lambda } from './runtime/services/Lambda';
+
+// ASL switch compilation requires each case to have a definite exit.
+// Fall-through between cases cannot be expressed in Choice states.
+// Each case must end with break, return, or throw.
+
+const processFn = Lambda<
+  { action: string },
+  { result: string }
+>('arn:aws:lambda:us-east-1:123456789:function:Process');
+
+// ❌ SS410: Fall-through — this case doesn't end with break/return/throw
+//
+// export const fallThrough = Steps.createFunction(
+//   async (context: SimpleStepContext, input: { status: string }) => {
+//     switch (input.status) {
+//       case 'active':
+//         await processFn.call({ action: 'activate' });
+//         // Missing break! Falls through to next case — SS410
+//       case 'pending':
+//         await processFn.call({ action: 'pend' });
+//         break;
+//       default:
+//         break;
+//     }
+//     return { done: true };
+//   },
+// );
+
+// ✅ Correct: every case ends with break or return
+export const switchCorrect = Steps.createFunction(
+  async (context: SimpleStepContext, input: { status: string }) => {
+    switch (input.status) {
+      case 'active':
+        await processFn.call({ action: 'activate' });
+        break;
+      case 'pending':
+        await processFn.call({ action: 'pend' });
+        break;
+      default:
+        await processFn.call({ action: 'default' });
+        break;
+    }
+    return { done: true };
+  },
+);
+` }] },
+
+  'limit-promise-all': { description: 'Promise.all() argument must be an array literal (SS420).', services: ['Lambda'], files: [{ name: 'workflow.ts', content: `import { Steps, SimpleStepContext } from './runtime/index';
+import { Lambda } from './runtime/services/Lambda';
+
+// Promise.all() compiles to an ASL Parallel state. The compiler needs
+// to see the individual branches at compile time, so the argument
+// must be an array literal — not a variable or expression.
+
+const fetchUser = Lambda<
+  { id: string },
+  { name: string }
+>('arn:aws:lambda:us-east-1:123456789:function:FetchUser');
+
+const fetchOrders = Lambda<
+  { userId: string },
+  { orders: string[] }
+>('arn:aws:lambda:us-east-1:123456789:function:FetchOrders');
+
+// ❌ SS420: Promise.all with a variable — compiler can't see the branches
+//
+// export const promiseAllVar = Steps.createFunction(
+//   async (context: SimpleStepContext, input: { id: string }) => {
+//     const tasks = [
+//       fetchUser.call({ id: input.id }),
+//       fetchOrders.call({ userId: input.id }),
+//     ];
+//     const results = await Promise.all(tasks);
+//     return { results };
+//   },
+// );
+
+// ✅ Correct: array literal directly inside Promise.all()
+export const promiseAllCorrect = Steps.createFunction(
+  async (context: SimpleStepContext, input: { id: string }) => {
+    const [user, orders] = await Promise.all([
+      fetchUser.call({ id: input.id }),
+      fetchOrders.call({ userId: input.id }),
+    ]);
+    return { userName: user.name, orderCount: orders.orders.length };
+  },
+);
+` }] },
+
+  'limit-spread': { description: 'Spread in service call parameters is not supported (SS500).', services: ['Lambda'], files: [{ name: 'workflow.ts', content: `import { Steps, SimpleStepContext } from './runtime/index';
+import { Lambda } from './runtime/services/Lambda';
+
+// ASL Parameters require explicit key-value mappings. Spread
+// properties in service call arguments cannot be compiled because
+// the compiler needs to know all keys at compile time.
+//
+// Pure spread ({ ...a, ...b }) in general expressions IS supported
+// — it compiles to States.JsonMerge.
+
+const processFn = Lambda<
+  { id: string; region: string; mode: string },
+  { result: string }
+>('arn:aws:lambda:us-east-1:123456789:function:Process');
+
+// ❌ SS500: Spread in service call parameters
+//
+// export const spreadInCall = Steps.createFunction(
+//   async (context: SimpleStepContext, input: { id: string; region: string }) => {
+//     const result = await processFn.call({ ...input, mode: 'fast' });
+//     return { result: result.result };
+//   },
+// );
+
+// ✅ Workaround: spell out properties explicitly
+export const spreadWorkaround = Steps.createFunction(
+  async (context: SimpleStepContext, input: { id: string; region: string }) => {
+    const result = await processFn.call({
+      id: input.id,
+      region: input.region,
+      mode: 'fast',
+    });
+    return { result: result.result };
+  },
+);
+` }] },
+
+  'limit-conditions': { description: 'Complex conditions must be simple comparisons (SS510/SS512).', services: ['Lambda'], files: [{ name: 'workflow.ts', content: `import { Steps, SimpleStepContext } from './runtime/index';
+import { Lambda } from './runtime/services/Lambda';
+
+// Conditions in if/while compile to ASL Choice rules.
+// Choice rules only support: ===, !==, >, >=, <, <=, &&, ||, !
+// applied to JSONPath variables and literal values.
+//
+// Method calls, function calls, and bitwise operators in
+// conditions cannot be compiled.
+
+const processFn = Lambda<
+  { action: string },
+  { result: string }
+>('arn:aws:lambda:us-east-1:123456789:function:Process');
+
+// ❌ SS510: Method call in condition — not a simple comparison
+//
+// export const methodInCondition = Steps.createFunction(
+//   async (context: SimpleStepContext, input: { items: string[] }) => {
+//     if (input.items.includes('special')) {
+//       await processFn.call({ action: 'found' });
+//     }
+//     return { done: true };
+//   },
+// );
+
+// ❌ SS512: Bitwise operator in condition — no ASL equivalent
+//
+// export const bitwiseInCondition = Steps.createFunction(
+//   async (context: SimpleStepContext, input: { flags: number }) => {
+//     if (input.flags & 4) {
+//       await processFn.call({ action: 'flagged' });
+//     }
+//     return { done: true };
+//   },
+// );
+
+// ✅ Supported conditions: comparisons, &&, ||, !
+export const conditionsCorrect = Steps.createFunction(
+  async (context: SimpleStepContext, input: { count: number; status: string; active: boolean }) => {
+    // ✅ Simple comparison
+    if (input.count > 0) {
+      await processFn.call({ action: 'has-items' });
+    }
+
+    // ✅ Compound condition with &&
+    if (input.status === 'ready' && input.count > 5) {
+      await processFn.call({ action: 'ready-and-large' });
+    }
+
+    // ✅ Negation
+    if (!input.active) {
+      await processFn.call({ action: 'inactive' });
+    }
+
+    // ✅ OR condition
+    if (input.status === 'error' || input.count === 0) {
+      await processFn.call({ action: 'problem' });
+    }
+
+    return { done: true };
+  },
+);
+` }] },
+
+  'limit-map-isolation': { description: 'Runtime variables can\'t be accessed inside for...of loops (Map state isolation).', services: ['Lambda'], files: [{ name: 'workflow.ts', content: `import { Steps, SimpleStepContext } from './runtime/index';
+import { Lambda } from './runtime/services/Lambda';
+
+// for...of compiles to an ASL Map state. Map state iterations
+// run in isolated state — they cannot access runtime variables
+// (service call results) from the outer scope.
+//
+// Compile-time constants and service bindings ARE accessible.
+// Use Steps.sequential() if you need outer variable access.
+
+const CONFIG_PREFIX = 'item';
+
+const lookupFn = Lambda<
+  { id: string },
+  { prefix: string }
+>('arn:aws:lambda:us-east-1:123456789:function:Lookup');
+
+const processFn = Lambda<
+  { key: string },
+  { done: boolean }
+>('arn:aws:lambda:us-east-1:123456789:function:Process');
+
+export const mapIsolation = Steps.createFunction(
+  async (context: SimpleStepContext, input: { id: string; items: string[] }) => {
+    const lookup = await lookupFn.call({ id: input.id });
+
+    // ❌ Runtime variable not accessible inside Map state
+    // for (const item of input.items) {
+    //   await processFn.call({ key: lookup.prefix + item });
+    // }
+
+    // ✅ Compile-time constants work inside Map state
+    for (const item of input.items) {
+      await processFn.call({ key: CONFIG_PREFIX + item });
+    }
+
+    // ✅ Steps.sequential() allows outer variable access
+    for (const item of Steps.sequential(input.items)) {
+      await processFn.call({ key: lookup.prefix + item });
+    }
+
+    return { done: true };
+  },
+);
+` }] },
+
+  'limit-module-scope': { description: 'Module-scope variables must be resolvable at compile time.', services: ['Lambda'], files: [{ name: 'workflow.ts', content: `import { Steps, SimpleStepContext } from './runtime/index';
+import { Lambda } from './runtime/services/Lambda';
+
+// Module-scope variables used inside a workflow must be compile-time
+// constants. The compiler's Whole-Program Analyzer tries to fold
+// each variable to a known value. If it can't, the variable is
+// unresolvable and you'll get an error.
+
+// ✅ Literal — always foldable
+const API_VERSION = 'v2';
+
+// ✅ Computed from constants — folded at compile time
+const TIMEOUT_MS = 30 * 1000;
+
+// ✅ Pure function result on constants — inlined and folded
+const formatArn = (name: string) => \`arn:aws:lambda:us-east-1:123456789:function:\${name}\`;
+const PROCESS_ARN = formatArn('Process');
+
+// ❌ Impure function call — Date.now() has side effects, can't fold
+const TIMESTAMP = Date.now();
+
+// ❌ Reassigned variable — compiler can't determine final value
+let counter = 0;
+counter += 1;
+
+// ⚠️ Steps.safeVar() — suppresses error, emits SS708 warning instead
+// Use when YOU know the value will be available at runtime (e.g., CDK tokens)
+// const EXTERNAL_ARN = Steps.safeVar(getArnFromConfig());
+
+const processFn = Lambda<
+  { data: string; version: string },
+  { result: string }
+>(PROCESS_ARN);
+
+export const moduleScopeRules = Steps.createFunction(
+  async (context: SimpleStepContext, input: { data: string }) => {
+    // ✅ All these work — they reference foldable constants
+    const result = await processFn.call({
+      data: input.data,
+      version: API_VERSION,
+    });
+
+    const timeout = TIMEOUT_MS;
+
+    // ❌ These would fail — uncomment to see errors:
+    // const ts = TIMESTAMP;         // TIMESTAMP is unresolvable
+    // const count = counter;         // counter is reassigned (unresolvable)
+
+    return { result: result.result, timeout };
+  },
+);
+` }] },
+
+  'limit-variable-shadowing': { description: 'Variable shadowing in nested scopes overwrites values in ASL\'s flat namespace.', services: ['Lambda'], files: [{ name: 'workflow.ts', content: `import { Steps, SimpleStepContext } from './runtime/index';
+import { Lambda } from './runtime/services/Lambda';
+
+// ASL uses a flat JSONPath namespace ($.variableName). When you
+// redeclare a variable in a nested scope, it overwrites the
+// outer variable's value in the state data.
+//
+// This is a silent footgun — no compiler error, but unexpected
+// behavior at runtime. Avoid reusing variable names in nested scopes.
+
+const processFn = Lambda<
+  { status: string },
+  { ok: boolean }
+>('arn:aws:lambda:us-east-1:123456789:function:Process');
+
+export const shadowingDemo = Steps.createFunction(
+  async (context: SimpleStepContext, input: { flag: boolean }) => {
+    const status = 'active';
+
+    if (input.flag) {
+      // ⚠️ This shadows the outer status — both map to $.status
+      // After this block, the outer status is 'processing', not 'active'
+      const status = 'processing';
+      await processFn.call({ status });
+    }
+
+    // ⚠️ status here may be 'processing' instead of 'active'
+    // because ASL's flat namespace was overwritten
+    await processFn.call({ status });
+
+    // ✅ Use unique names to avoid shadowing
+    const outerStatus = 'active';
+    if (input.flag) {
+      const innerStatus = 'processing';
+      await processFn.call({ status: innerStatus });
+    }
+    await processFn.call({ status: outerStatus });
+
+    return { done: true };
+  },
+);
+` }] },
+
+  'limit-substep-edge-cases': { description: 'Substep edge cases: return values, try/catch, non-eligible callees.', services: ['Lambda'], files: [{ name: 'workflow.ts', content: `import { Steps, SimpleStepContext } from './runtime/index';
+import { Lambda } from './runtime/services/Lambda';
+
+// Substeps (module-scope async functions) are inlined into the
+// caller's state machine. Most patterns work, but some edge
+// cases are worth knowing about.
+
+const fetchFn = Lambda<
+  { id: string },
+  { name: string; status: string }
+>('arn:aws:lambda:us-east-1:123456789:function:Fetch');
+
+const saveFn = Lambda<
+  { id: string; name: string },
+  { saved: boolean }
+>('arn:aws:lambda:us-east-1:123456789:function:Save');
+
+const rollbackFn = Lambda<
+  { id: string },
+  { ok: boolean }
+>('arn:aws:lambda:us-east-1:123456789:function:Rollback');
+
+// ✅ Substep with return value — result is captured at call site
+async function fetchUser(id: string) {
+  return await fetchFn.call({ id });
+}
+
+// ✅ Substep with try/catch — error handling is inlined
+async function saveWithRollback(id: string, name: string) {
+  try {
+    await saveFn.call({ id, name });
+  } catch (e) {
+    await rollbackFn.call({ id });
+    throw e;
+  }
+}
+
+// ✅ Substep with default params — trailing defaults work
+async function fetchWithRetry(id: string, retries: number = 3) {
+  return await fetchFn.call({ id });
+}
+
+// ✅ Substep with destructured + renamed params
+async function processItem({ userId: id, userName: name }: { userId: string; userName: string }) {
+  await saveFn.call({ id, name });
+}
+
+// ❌ SS800: Wrong number of arguments
+// async function twoParams(a: string, b: string) {
+//   await saveFn.call({ id: a, name: b });
+// }
+// await twoParams(input.id, input.name, 'extra');  // Too many args
+
+export const substepEdgeCases = Steps.createFunction(
+  async (context: SimpleStepContext, input: { id: string; name: string }) => {
+    // ✅ Capture return value from substep
+    const user = await fetchUser(input.id);
+
+    // ✅ Try/catch in substep — Catch rules inlined
+    await saveWithRollback(input.id, user.name);
+
+    // ✅ Omit default param — uses default value
+    const retry = await fetchWithRetry(input.id);
+
+    // ✅ Pass with default param — overrides default
+    const retry2 = await fetchWithRetry(input.id, 5);
+
+    // ✅ Destructured + renamed params
+    await processItem({ userId: input.id, userName: user.name });
+
+    return { status: user.status };
+  },
+);
+` }] },
+
+  'limit-runtime-expressions': { description: 'Which expressions work at runtime vs require compile-time constants.', services: ['Lambda'], files: [{ name: 'workflow.ts', content: `import { Steps, SimpleStepContext } from './runtime/index';
+import { Lambda } from './runtime/services/Lambda';
+
+// Inside a workflow body, expressions operate on two kinds of values:
+//
+// 1. COMPILE-TIME constants — literals, folded math, module-scope const
+//    These become literal values in ASL.
+//
+// 2. RUNTIME values — service call results (JSONPath: $.result.field),
+//    input parameters ($.input.field). These become JSONPath references.
+//
+// Some operations work on both. Some only work on one or the other.
+
+const processFn = Lambda<
+  { message: string },
+  { count: number; name: string; data: any }
+>('arn:aws:lambda:us-east-1:123456789:function:Process');
+
+export const runtimeExpressions = Steps.createFunction(
+  async (context: SimpleStepContext, input: { id: string; items: string[] }) => {
+    const result = await processFn.call({ message: input.id });
+
+    // ── String operations ─────────────────────────────────
+
+    // ✅ Template literals — compile to States.Format
+    const greeting = \`Hello \${result.name}\`;
+
+    // ✅ String + concatenation — also compiles to States.Format
+    const label = 'item-' + result.name;
+
+    // ❌ String() on runtime value — no ASL intrinsic
+    // const countStr = String(result.count);  // SS502
+
+    // ✅ Workaround: use template literal instead of String()
+    const countStr = \`\${result.count}\`;
+
+    // ── JSON operations ───────────────────────────────────
+
+    // ✅ JSON.stringify() on runtime value — States.JsonToString
+    const json = JSON.stringify(result.data);
+
+    // ✅ JSON.parse() on runtime string — States.StringToJson
+    // const parsed = JSON.parse(someString);
+
+    // ── Array operations ──────────────────────────────────
+
+    // ✅ .length on runtime array — States.ArrayLength
+    const count = input.items.length;
+
+    // ── Arithmetic ────────────────────────────────────────
+
+    // ✅ Addition with runtime values — States.MathAdd
+    const incremented = result.count + 1;
+
+    // ✅ Subtraction by literal — States.MathAdd(x, -N)
+    const decremented = result.count - 1;
+
+    // ❌ Multiplication — no ASL intrinsic
+    // const doubled = result.count * 2;  // SS530
+
+    // ── Ternary on runtime condition ──────────────────────
+
+    // ✅ Ternary with runtime condition — Choice + Pass states
+    const size = result.count > 10 ? 'large' : 'small';
+
+    // ── Property access ──────────────────────────────────
+
+    // ❌ Object destructuring of service results — NOT supported
+    // const { name, count: itemCount } = result;  // silently ignored
+
+    // ✅ Access properties directly via dot notation
+    const name = result.name;        // → $.result.name
+    const itemCount = result.count;  // → $.result.count
+
+    return { greeting, label, countStr, json, count, incremented, size, name, itemCount };
   },
 );
 ` }] },

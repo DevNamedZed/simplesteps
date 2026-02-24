@@ -16,60 +16,18 @@ npm install @simplesteps/core @simplesteps/cdk aws-cdk-lib constructs
 npm install @simplesteps/core
 ```
 
-## The Workflow File
+## Your First Workflow
 
-Create `workflows/order.ts` in your CDK project. This file contains only business logic -- no infrastructure, no ARNs:
-
-```typescript
-import { Steps, SimpleStepContext } from '@simplesteps/core/runtime';
-import { Lambda } from '@simplesteps/core/runtime/services';
-import { DynamoDB } from '@simplesteps/core/runtime/services';
-
-declare const validateOrderArn: string;
-declare const ordersTableName: string;
-
-const validateOrder = Lambda<{ orderId: string }, { valid: boolean; total: number }>(
-  validateOrderArn,
-);
-const ordersTable = new DynamoDB(ordersTableName);
-
-export const orderWorkflow = Steps.createFunction(
-  async (context: SimpleStepContext, input: { orderId: string; customerId: string }) => {
-    const order = await validateOrder.call({ orderId: input.orderId });
-
-    if (!order.valid) {
-      throw new Error('Invalid order');
-    }
-
-    await ordersTable.putItem({
-      Item: {
-        id: { S: input.orderId },
-        customerId: { S: input.customerId },
-        total: { N: String(order.total) },
-        status: { S: 'CONFIRMED' },
-      },
-    });
-
-    return { orderId: input.orderId, status: 'CONFIRMED' };
-  },
-);
-```
-
-The `declare const` variables are placeholders. They get replaced with real values via bindings at compile time. The workflow doesn't know or care whether it's deployed with CDK, the library API, or the CLI.
-
-The `context: SimpleStepContext` parameter provides execution metadata — the current execution ID, start time, state name, and retry count. See the [Context Object](./language-reference.md#context-object) section in the Language Reference for the full list.
-
-## The CDK Stack
-
-Create `lib/stack.ts`. This is where infrastructure and the workflow come together:
+Create `lib/stack.ts`. Everything lives in one file — infrastructure, service bindings, and workflow logic:
 
 ```typescript
-import * as path from 'path';
 import * as cdk from 'aws-cdk-lib';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import { Construct } from 'constructs';
 import { SimpleStepsStateMachine } from '@simplesteps/cdk';
+import { Steps, SimpleStepContext } from '@simplesteps/core/runtime';
+import { Lambda, DynamoDB } from '@simplesteps/core/runtime/services';
 
 export class OrderStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props?: cdk.StackProps) {
@@ -87,13 +45,34 @@ export class OrderStack extends cdk.Stack {
       removalPolicy: cdk.RemovalPolicy.DESTROY,
     });
 
-    // Workflow
+    // Service bindings — reference CDK resources directly
+    const validateOrder = Lambda<{ orderId: string }, { valid: boolean; total: number }>(
+      validateFn.functionArn,
+    );
+    const orders = new DynamoDB(ordersTable.tableName);
+
+    // Workflow — defined inline, compiled to ASL at build time
     const machine = new SimpleStepsStateMachine(this, 'OrderWorkflow', {
-      sourceFile: path.join(__dirname, '../workflows/order.ts'),
-      bindings: {
-        validateOrderArn: validateFn.functionArn,
-        ordersTableName: ordersTable.tableName,
-      },
+      workflow: Steps.createFunction(
+        async (context: SimpleStepContext, input: { orderId: string; customerId: string }) => {
+          const order = await validateOrder.call({ orderId: input.orderId });
+
+          if (!order.valid) {
+            throw new Error('Invalid order');
+          }
+
+          await orders.putItem({
+            Item: {
+              id: { S: input.orderId },
+              customerId: { S: input.customerId },
+              total: { N: String(order.total) },
+              status: { S: 'CONFIRMED' },
+            },
+          });
+
+          return { orderId: input.orderId, status: 'CONFIRMED' };
+        },
+      ),
     });
 
     // Permissions
@@ -103,7 +82,7 @@ export class OrderStack extends cdk.Stack {
 }
 ```
 
-The `bindings` map connects the `declare const` names in the workflow to CDK resource references. CDK Tokens flow through the compiler into ASL as-is -- CloudFormation resolves them to actual ARNs at deploy time.
+The `context: SimpleStepContext` parameter provides execution metadata — the current execution ID, start time, state name, and retry count. See the [Context Object](./language-reference.md#context-object) section in the Language Reference for the full list.
 
 ## Deploy
 
@@ -116,24 +95,41 @@ cdk deploy
 The compiler:
 
 1. Found the `Steps.createFunction()` call and identified it as a state machine entry point
-2. Resolved `validateOrder` as a Lambda service binding and `ordersTable` as a DynamoDB binding
-3. Replaced `declare const` variables with the bound CDK Token values
-4. Converted the function body to ASL: a Task state for the Lambda call, a Choice state for the `if` branch, a Fail state for the error, a Task state for the DynamoDB put, and a Succeed state
+2. Resolved `validateOrder` and `orders` as service bindings — free variables captured from the surrounding scope
+3. Converted the function body to ASL: a Task state for the Lambda call, a Choice state for the `if` branch, a Fail state for the error, a Task state for the DynamoDB put, and a Succeed state
+4. CDK Token strings (`validateFn.functionArn`, `ordersTable.tableName`) flow through the compiler into ASL as-is — CloudFormation resolves them to actual ARNs at deploy time
 5. Embedded the ASL in the CloudFormation template via `SimpleStepsStateMachine`
 
 ## Compile Locally (for testing)
 
-You can also compile workflows locally to inspect the generated ASL without deploying:
+You can also compile standalone workflow files to inspect the generated ASL without deploying:
+
+```typescript
+// workflows/order.ts
+import { Steps, SimpleStepContext } from '@simplesteps/core/runtime';
+import { Lambda } from '@simplesteps/core/runtime/services';
+
+const validateOrder = Lambda<{ orderId: string }, { valid: boolean; total: number }>(
+  'arn:aws:lambda:us-east-1:123456789:function:ValidateOrder',
+);
+
+export const orderWorkflow = Steps.createFunction(
+  async (context: SimpleStepContext, input: { orderId: string }) => {
+    const order = await validateOrder.call({ orderId: input.orderId });
+    return { valid: order.valid, total: order.total };
+  },
+);
+```
 
 ```bash
 npx simplesteps compile workflows/order.ts -o output/
 ```
 
-This produces `output/orderWorkflow.asl.json` -- useful for reviewing the generated state machine before deploying. When compiling locally, any `declare const` variables without bindings are left as literal placeholder strings.
+This produces `output/orderWorkflow.asl.json` — useful for reviewing the generated state machine before deploying.
 
 ## Next Steps
 
-- [CDK Integration](./cdk-integration.md) -- `SimpleStepsStateMachine` construct, bindings, tokens
+- [CDK Integration](./cdk-integration.md) -- `SimpleStepsStateMachine` construct, multiple workflows, file-based mode
 - [Library API](./library-api.md) -- use the compiler programmatically for custom pipelines
 - [CLI Reference](./cli.md) -- all compiler flags
 - [Services](./services.md) -- all 10 supported AWS services

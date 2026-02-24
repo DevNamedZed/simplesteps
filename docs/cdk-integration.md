@@ -10,15 +10,16 @@ npm install @simplesteps/core @simplesteps/cdk aws-cdk-lib constructs
 
 ## `SimpleStepsStateMachine`
 
-An L3 CDK construct that compiles a TypeScript source file to a Step Functions state machine at synth time. Here's a complete stack:
+An L3 CDK construct that compiles a `Steps.createFunction()` workflow to a Step Functions state machine at synth time. Define your workflow inline — service bindings reference CDK resources directly:
 
 ```typescript
-import * as path from 'path';
 import * as cdk from 'aws-cdk-lib';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import { Construct } from 'constructs';
 import { SimpleStepsStateMachine } from '@simplesteps/cdk';
+import { Steps, SimpleStepContext } from '@simplesteps/core/runtime';
+import { Lambda, DynamoDB } from '@simplesteps/core/runtime/services';
 
 export class OrderStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props?: cdk.StackProps) {
@@ -35,12 +36,33 @@ export class OrderStack extends cdk.Stack {
       removalPolicy: cdk.RemovalPolicy.DESTROY,
     });
 
+    // Service bindings — reference CDK constructs directly
+    const validateOrder = Lambda<{ orderId: string }, { valid: boolean; total: number }>(
+      validateFn.functionArn,
+    );
+    const orders = new DynamoDB(ordersTable.tableName);
+
     const machine = new SimpleStepsStateMachine(this, 'OrderWorkflow', {
-      sourceFile: path.join(__dirname, '../workflows/order.ts'),
-      bindings: {
-        validateOrderArn: validateFn.functionArn,
-        ordersTableName: ordersTable.tableName,
-      },
+      workflow: Steps.createFunction(
+        async (context: SimpleStepContext, input: { orderId: string; customerId: string }) => {
+          const order = await validateOrder.call({ orderId: input.orderId });
+
+          if (!order.valid) {
+            throw new Error('Invalid order');
+          }
+
+          await orders.putItem({
+            Item: {
+              id: { S: input.orderId },
+              customerId: { S: input.customerId },
+              total: { N: String(order.total) },
+              status: { S: 'CONFIRMED' },
+            },
+          });
+
+          return { orderId: input.orderId, status: 'CONFIRMED' };
+        },
+      ),
     });
 
     validateFn.grantInvoke(machine);
@@ -49,53 +71,39 @@ export class OrderStack extends cdk.Stack {
 }
 ```
 
-## Why Separate Workflow Files?
+## How CDK Tokens Flow Through
 
-Workflow code lives in its own file (e.g., `workflows/order.ts`) rather than inline in the CDK stack. This is a deliberate design choice:
+1. `validateFn.functionArn` returns a CDK Token string (e.g., `"${Token[TOKEN.123]}"`)
+2. The compiler places this string in the ASL `Resource` field as-is
+3. CDK serializes the Token to `Fn::GetAtt` in the CloudFormation template
+4. CloudFormation resolves the actual ARN at deploy time
 
-**The compiler needs a standalone file to parse.** SimpleSteps analyzes the TypeScript AST to generate ASL. It needs a file it can parse in isolation -- mixing workflow logic with CDK infrastructure code would make the AST analysis ambiguous and fragile.
+No special handling needed. Service bindings accept plain `string` — CDK Tokens are strings.
 
-**Separation of concerns.** Workflow files contain only business logic -- no infrastructure definitions, no CDK imports, no construct trees. This keeps them readable and focused. You can understand what a workflow does without knowing how it's deployed.
+## Multiple Workflows
 
-**`declare const` + bindings is dependency injection.** The workflow declares what it needs (`declare const validateOrderArn: string`), and the deployment layer provides it (`bindings: { validateOrderArn: validateFn.functionArn }`). The workflow doesn't know where values come from -- same pattern as constructor injection in application code.
-
-**No lock-in to a single deployment method.** The same workflow file works with CDK, the library API, or the CLI. Switching deployment methods means changing how you call the compiler, not rewriting your workflows.
-
-### Props
-
-```typescript
-interface SimpleStepsStateMachineProps {
-  sourceFile: string;                    // Path to .ts file
-  bindings?: Record<string, unknown>;    // Variable name -> CDK resource reference
-  stateMachineName?: string;             // Override name (required if file has multiple machines)
-  stateMachineType?: sfn.StateMachineType;
-  role?: iam.IRole;
-  timeout?: cdk.Duration;
-  logs?: sfn.LogOptions;
-  tracingEnabled?: boolean;
-  removalPolicy?: cdk.RemovalPolicy;
-}
-```
-
-### Bindings
-
-The `bindings` map connects variable names in your workflow source to CDK resource references:
+A single stack can define multiple state machines:
 
 ```typescript
-// In your workflow (workflows/checkout.ts):
-const validateOrder = Lambda<Req, Res>(validateOrderArn);
-const ordersTable = new DynamoDB(ordersTableName);
+const createOrder = Lambda<CreateReq, CreateRes>(createFn.functionArn);
+const cancelOrder = Lambda<CancelReq, CancelRes>(cancelFn.functionArn);
 
-// In your CDK stack:
-bindings: {
-  validateOrderArn: validateFn.functionArn,   // CDK Token -> CloudFormation resolves at deploy
-  ordersTableName: table.tableName,
-}
+const createMachine = new SimpleStepsStateMachine(this, 'CreateOrder', {
+  workflow: Steps.createFunction(async (context, input: CreateInput) => {
+    const result = await createOrder.call(input);
+    return { orderId: result.id };
+  }),
+});
+
+const cancelMachine = new SimpleStepsStateMachine(this, 'CancelOrder', {
+  workflow: Steps.createFunction(async (context, input: CancelInput) => {
+    await cancelOrder.call({ orderId: input.orderId });
+    return { cancelled: true };
+  }),
+});
 ```
 
-CDK Token strings pass through the compiler into ASL as-is. CloudFormation resolves them to actual ARNs at deploy time.
-
-### Accessing the Underlying State Machine
+## Accessing the Underlying State Machine
 
 ```typescript
 machine.stateMachineArn;              // State machine ARN
@@ -105,53 +113,22 @@ machine.compileResult;                // Full CompileResult
 machine.compiledMachine;              // Selected CompiledStateMachine
 ```
 
-## Workflow File Conventions
-
-Workflow files use `declare const` to define variables that will be supplied via `bindings` at compile time:
+## Props
 
 ```typescript
-// workflows/checkout.ts
-import { Lambda } from '@simplesteps/core/runtime/services';
-import { DynamoDB } from '@simplesteps/core/runtime/services';
-
-// These are binding placeholders -- names must match the keys in `bindings`
-declare const validateOrderArn: string;
-declare const ordersTableName: string;
-
-const validateOrder = Lambda<Req, Res>(validateOrderArn);
-const ordersTable = new DynamoDB(ordersTableName);
+interface SimpleStepsStateMachineProps {
+  workflow?: unknown;                    // Inline Steps.createFunction() definition
+  sourceFile?: string;                   // Path to .ts file (file-based mode)
+  bindings?: Record<string, unknown>;    // Variable name -> value (file-based mode)
+  stateMachineName?: string;             // Override name (required if file has multiple machines)
+  stateMachineType?: sfn.StateMachineType;
+  role?: iam.IRole;
+  timeout?: cdk.Duration;
+  logs?: sfn.LogOptions;
+  tracingEnabled?: boolean;
+  removalPolicy?: cdk.RemovalPolicy;
+}
 ```
-
-The variable names (`validateOrderArn`, `ordersTableName`) must match the keys you pass in `bindings`. The compiler replaces them with the bound values at synth time.
-
-This means the same workflow file works with any deployment method -- CDK, library API, or CLI. The file itself has no hardcoded ARNs or resource names.
-
-## Multiple Workflows
-
-A single source file can export multiple state machines. Use `stateMachineName` to select which one to deploy:
-
-```typescript
-// workflows/orders.ts
-export const createOrder = Steps.createFunction(async (context, input) => { /* ... */ });
-export const cancelOrder = Steps.createFunction(async (context, input) => { /* ... */ });
-```
-
-```typescript
-// In your CDK stack
-const createMachine = new SimpleStepsStateMachine(this, 'CreateOrder', {
-  sourceFile: path.join(__dirname, '../workflows/orders.ts'),
-  stateMachineName: 'createOrder',
-  bindings: { /* ... */ },
-});
-
-const cancelMachine = new SimpleStepsStateMachine(this, 'CancelOrder', {
-  sourceFile: path.join(__dirname, '../workflows/orders.ts'),
-  stateMachineName: 'cancelOrder',
-  bindings: { /* ... */ },
-});
-```
-
-If the file exports only one state machine, `stateMachineName` is optional.
 
 ## `compileDefinitionBody()`
 
@@ -170,15 +147,96 @@ const machine = new sfn.StateMachine(this, 'Checkout', {
 });
 ```
 
-## How CDK Tokens Flow Through
+## Alternative: Separate Workflow Files
 
-1. `validateFn.functionArn` returns a CDK Token string (e.g., `"${Token[TOKEN.123]}"`)
-2. The compiler places this string in the ASL `Resource` field as-is
-3. CDK serializes the Token to `Fn::GetAtt` in the CloudFormation template
-4. CloudFormation resolves the actual ARN at deploy time
+For users who prefer to separate business logic from infrastructure, the construct also supports a file-based mode using `sourceFile` + `bindings`.
 
-No special handling needed. Service bindings accept plain `string` -- CDK Tokens are strings.
+### The Workflow File
+
+Create a standalone TypeScript file with `declare const` placeholders for values that will be supplied at compile time:
+
+```typescript
+// workflows/order.ts
+import { Steps, SimpleStepContext } from '@simplesteps/core/runtime';
+import { Lambda } from '@simplesteps/core/runtime/services';
+import { DynamoDB } from '@simplesteps/core/runtime/services';
+
+declare const validateOrderArn: string;
+declare const ordersTableName: string;
+
+const validateOrder = Lambda<{ orderId: string }, { valid: boolean; total: number }>(
+  validateOrderArn,
+);
+const ordersTable = new DynamoDB(ordersTableName);
+
+export const orderWorkflow = Steps.createFunction(
+  async (context: SimpleStepContext, input: { orderId: string; customerId: string }) => {
+    const order = await validateOrder.call({ orderId: input.orderId });
+
+    if (!order.valid) {
+      throw new Error('Invalid order');
+    }
+
+    await ordersTable.putItem({
+      Item: {
+        id: { S: input.orderId },
+        customerId: { S: input.customerId },
+        total: { N: String(order.total) },
+        status: { S: 'CONFIRMED' },
+      },
+    });
+
+    return { orderId: input.orderId, status: 'CONFIRMED' };
+  },
+);
+```
+
+### The CDK Stack
+
+Use `sourceFile` and `bindings` to connect the workflow to CDK resources:
+
+```typescript
+const machine = new SimpleStepsStateMachine(this, 'OrderWorkflow', {
+  sourceFile: path.join(__dirname, '../workflows/order.ts'),
+  bindings: {
+    validateOrderArn: validateFn.functionArn,
+    ordersTableName: ordersTable.tableName,
+  },
+});
+```
+
+The `bindings` map connects the `declare const` names in the workflow to CDK resource references. CDK Tokens flow through the compiler into ASL as-is — CloudFormation resolves them to actual ARNs at deploy time.
+
+### Multiple Workflows (file-based)
+
+A single source file can export multiple state machines. Use `stateMachineName` to select which one to deploy:
+
+```typescript
+// workflows/orders.ts
+export const createOrder = Steps.createFunction(async (context, input) => { /* ... */ });
+export const cancelOrder = Steps.createFunction(async (context, input) => { /* ... */ });
+```
+
+```typescript
+const createMachine = new SimpleStepsStateMachine(this, 'CreateOrder', {
+  sourceFile: path.join(__dirname, '../workflows/orders.ts'),
+  stateMachineName: 'createOrder',
+  bindings: { /* ... */ },
+});
+
+const cancelMachine = new SimpleStepsStateMachine(this, 'CancelOrder', {
+  sourceFile: path.join(__dirname, '../workflows/orders.ts'),
+  stateMachineName: 'cancelOrder',
+  bindings: { /* ... */ },
+});
+```
+
+### When to Use Separate Files
+
+- The same workflow is reused across multiple stacks or accounts
+- You want to compile and inspect ASL via the CLI without CDK
+- Team preference for separating business logic from infrastructure
 
 ## Starter Project
 
-See [`examples/starters/cdk/`](../examples/starters/cdk/) for a complete, runnable CDK project.
+See [`examples/starters/cdk/`](../examples/starters/cdk/) for a complete, runnable CDK project using inline workflows.

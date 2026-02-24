@@ -10,7 +10,7 @@
 //
 // Constraints:
 //   - Substeps must be module-scope async functions
-//   - Simple identifier parameters only (no destructuring)
+//   - Parameters: identifiers, object destructuring, or defaults (no rest params)
 //   - Must be awaited at the call site
 //   - Substeps can call other substeps (the compiler inlines transitively)
 //
