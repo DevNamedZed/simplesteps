@@ -131,7 +131,20 @@ export function resolveVariables(
         const serviceMatch = matchServiceBinding(context, decl.initializer, serviceRegistry);
         if (serviceMatch) {
           const varName = decl.name.text;
-          const resourceValue = substitutions?.[varName] ?? serviceMatch.resourceArn;
+          let resourceValue: unknown = substitutions?.[varName] ?? serviceMatch.resourceArn;
+
+          // If simple ARN extraction failed, try WPA evaluation (supports
+          // pure function inlining, e.g. Lambda(makeArn('ProcessOrder')))
+          if (resourceValue === undefined) {
+            const arnArg = getServiceArnArgument(decl.initializer);
+            if (arnArg) {
+              const latticeVal = analyzer.evaluateExpression(arnArg, sourceFile);
+              if (isConstant(latticeVal) && typeof latticeVal.value === 'string') {
+                resourceValue = latticeVal.value;
+              }
+            }
+          }
+
           builder.addVariable(sym, {
             symbol: sym,
             type: StepVariableType.External,
@@ -144,6 +157,16 @@ export function resolveVariables(
           // Use lattice value from whole-program analysis
           const latticeVal = env.resolve(sym);
           if (isConstant(latticeVal)) {
+            // Warn if let/var is used when const would suffice
+            const isConst = !!(stmt.declarationList.flags & ts.NodeFlags.Const);
+            if (!isConst) {
+              const keyword = stmt.declarationList.flags & ts.NodeFlags.Let ? 'let' : 'var';
+              context.addWarning(
+                decl.name,
+                `Variable '${decl.name.text}' is declared with '${keyword}' but has a compile-time constant value. Consider using 'const' for clarity and to prevent accidental reassignment.`,
+                ErrorCodes.DataFlow.PreferConst,
+              );
+            }
             builder.addVariable(sym, {
               symbol: sym,
               type: StepVariableType.Constant,
@@ -337,7 +360,7 @@ export function extractResourceArn(
   const decl = declarations[0];
   if (!ts.isVariableDeclaration(decl) || !decl.initializer) return undefined;
 
-  return extractArnFromExpression(decl.initializer);
+  return extractArnFromExpression(decl.initializer, context.checker);
 }
 
 // ---------------------------------------------------------------------------
@@ -885,23 +908,62 @@ function foldBinaryLiterals(
 // Internal helpers
 // ---------------------------------------------------------------------------
 
-function extractArnFromExpression(expr: ts.Expression): string | undefined {
-  // Lambda('arn:...') — CallExpression
+function extractArnFromExpression(expr: ts.Expression, checker?: ts.TypeChecker): string | undefined {
+  // Lambda('arn:...') or Lambda(arnVariable) — CallExpression
   if (ts.isCallExpression(expr)) {
     const arg = expr.arguments[0];
-    if (arg && ts.isStringLiteral(arg)) {
-      return arg.text;
+    if (arg) {
+      const resolved = resolveToStringLiteral(arg, checker);
+      if (resolved !== undefined) return resolved;
     }
   }
 
-  // new DynamoDB('TableName') — NewExpression
+  // new DynamoDB('TableName') or new DynamoDB(tableNameVar) — NewExpression
   if (ts.isNewExpression(expr)) {
     const arg = expr.arguments?.[0];
-    if (arg && ts.isStringLiteral(arg)) {
-      return arg.text;
+    if (arg) {
+      const resolved = resolveToStringLiteral(arg, checker);
+      if (resolved !== undefined) return resolved;
     }
   }
 
+  return undefined;
+}
+
+/**
+ * Resolve an expression to a string literal value, following identifier
+ * references through const declarations (e.g. `const arn = 'arn:...'; Lambda(arn)`).
+ */
+function resolveToStringLiteral(expr: ts.Expression, checker?: ts.TypeChecker, depth = 0): string | undefined {
+  if (depth > 5) return undefined;
+
+  if (ts.isStringLiteral(expr) || ts.isNoSubstitutionTemplateLiteral(expr)) {
+    return expr.text;
+  }
+
+  if (ts.isIdentifier(expr) && checker) {
+    const sym = checker.getSymbolAtLocation(expr);
+    if (!sym?.declarations?.length) return undefined;
+    const decl = sym.declarations[0];
+    if (ts.isVariableDeclaration(decl) && decl.initializer) {
+      return resolveToStringLiteral(decl.initializer, checker, depth + 1);
+    }
+  }
+
+  return undefined;
+}
+
+/**
+ * Extract the ARN/resource-name argument expression from a service binding
+ * constructor call (e.g. the `makeArn('X')` in `Lambda(makeArn('X'))`).
+ */
+function getServiceArnArgument(expr: ts.Expression): ts.Expression | undefined {
+  if (ts.isCallExpression(expr)) {
+    return expr.arguments[0];
+  }
+  if (ts.isNewExpression(expr)) {
+    return expr.arguments?.[0];
+  }
   return undefined;
 }
 
@@ -915,26 +977,26 @@ function matchServiceBinding(
   initializer: ts.Expression,
   serviceRegistry: ServiceRegistry,
 ): ServiceMatch | null {
-  // Match call expressions: Lambda('arn:...')
+  // Match call expressions: Lambda('arn:...') or Lambda(arnVariable)
   if (ts.isCallExpression(initializer)) {
     const calleeSym = resolveAliasedSymbol(context, initializer.expression);
     if (calleeSym) {
       for (const [name, binding] of serviceRegistry.bindings) {
         if (calleeSym === binding.symbol) {
-          const arn = extractArnFromExpression(initializer);
+          const arn = extractArnFromExpression(initializer, context.checker);
           return { serviceName: name, resourceArn: arn };
         }
       }
     }
   }
 
-  // Match new expressions: new DynamoDB('TableName') or new SecretsManager()
+  // Match new expressions: new DynamoDB('TableName') or new DynamoDB(tableNameVar)
   if (ts.isNewExpression(initializer)) {
     const calleeSym = resolveAliasedSymbol(context, initializer.expression);
     if (calleeSym) {
       for (const [name, binding] of serviceRegistry.bindings) {
         if (calleeSym === binding.symbol) {
-          const arn = extractArnFromExpression(initializer);
+          const arn = extractArnFromExpression(initializer, context.checker);
           return { serviceName: name, resourceArn: arn };
         }
       }

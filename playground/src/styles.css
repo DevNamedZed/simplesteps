@@ -67,17 +67,33 @@ select {
 }
 
 #examples-btn {
-  padding: 6px 16px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 14px;
   background: #3c3c3c;
   color: #d4d4d4;
   border: 1px solid #555;
   border-radius: 4px;
   cursor: pointer;
   font-size: 13px;
+  transition: all 0.15s;
+  white-space: nowrap;
 }
 
 #examples-btn:hover {
   background: #505050;
+  border-color: #666;
+}
+
+#currentExample {
+  color: #6cb6ff;
+  font-weight: 500;
+}
+
+.examples-arrow {
+  font-size: 10px;
+  opacity: 0.6;
 }
 
 /* ── Examples Modal ───────────────────────────────────── */
@@ -86,25 +102,34 @@ select {
   background: #252526;
   color: #d4d4d4;
   border: 1px solid #555;
-  border-radius: 8px;
+  border-radius: 12px;
   padding: 0;
   width: min(720px, 90vw);
   max-height: 80vh;
   overflow: hidden;
+  box-shadow: 0 24px 48px rgba(0, 0, 0, 0.4);
+  /* Override the global * { margin: 0 } reset — the browser needs
+     margin: auto on <dialog> to center it in the viewport. */
+  margin: auto;
+}
+
+#examples-modal[open] {
   display: flex;
   flex-direction: column;
 }
 
 #examples-modal::backdrop {
   background: rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(4px);
 }
 
 .modal-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 16px 20px 12px;
+  padding: 20px 24px 16px;
   border-bottom: 1px solid #404040;
+  flex-shrink: 0;
 }
 
 .modal-header h2 {
@@ -129,15 +154,21 @@ select {
 }
 
 #examples-search {
-  margin: 12px 20px;
+  width: calc(100% - 48px);
+  margin: 12px 24px;
   padding: 8px 12px;
   background: #1e1e1e;
   color: #d4d4d4;
   border: 1px solid #555;
-  border-radius: 4px;
-  font-size: 13px;
+  border-radius: 6px;
+  font-size: 14px;
   outline: none;
   flex-shrink: 0;
+  transition: border-color 0.15s;
+}
+
+#examples-search::placeholder {
+  color: #666;
 }
 
 #examples-search:focus {
@@ -146,59 +177,84 @@ select {
 
 #examples-list {
   overflow-y: auto;
-  padding: 0 20px 16px;
+  padding: 0 24px 24px;
   flex: 1;
   min-height: 0;
 }
 
 .example-category {
-  margin-top: 16px;
+  margin-bottom: 20px;
 }
 
-.example-category:first-child {
-  margin-top: 8px;
+.example-category:last-child {
+  margin-bottom: 0;
 }
 
 .example-category-label {
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 600;
   text-transform: uppercase;
-  letter-spacing: 0.5px;
+  letter-spacing: 0.8px;
   color: #999;
-  padding: 4px 0;
-  margin-bottom: 6px;
+  margin-bottom: 8px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid #333;
+}
+
+.example-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 8px;
 }
 
 .example-card {
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  padding: 8px 12px;
-  border-radius: 4px;
+  align-items: flex-start;
+  padding: 10px 14px;
+  border-radius: 8px;
+  border: 1px solid #333;
+  background: #1e1e1e;
+  color: #d4d4d4;
   cursor: pointer;
-  transition: background 0.1s;
+  transition: all 0.15s;
+  text-align: left;
+  font-family: inherit;
+  font-size: inherit;
 }
 
 .example-card:hover {
-  background: #37373d;
+  background: #2a2d2e;
+  border-color: #555;
+}
+
+.example-card.active {
+  border-color: #0e639c;
+  background: #0e639c22;
 }
 
 .example-card-title {
   font-size: 13px;
-  font-weight: 500;
+  font-weight: 600;
   color: #e0e0e0;
+  margin-bottom: 2px;
 }
 
 .example-card-desc {
-  font-size: 12px;
-  color: #999;
+  font-size: 11px;
+  color: #888;
+  line-height: 1.4;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  width: 100%;
 }
 
 .example-card-services {
   display: flex;
   gap: 4px;
   flex-wrap: wrap;
-  margin-top: 2px;
+  margin-top: 4px;
 }
 
 .service-pill {

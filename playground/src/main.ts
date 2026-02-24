@@ -43,6 +43,16 @@ interface ExampleCategory {
   keys: string[];
 }
 
+const CATEGORY_ICONS: Record<string, string> = {
+  'Control Flow': '\u{1F500}',
+  'Services': '\u{2601}\uFE0F',
+  'JS Features': '\u{1F4DD}',
+  'Inline & Data Flow': '\u{1F517}',
+  'CDK Patterns': '\u{1F4E6}',
+  'Multi-Service Patterns': '\u{26A1}',
+  'Limitations': '\u{1F6A7}',
+};
+
 const EXAMPLE_CATEGORIES: ExampleCategory[] = [
   {
     label: 'Control Flow',
@@ -86,6 +96,14 @@ const EXAMPLE_CATEGORIES: ExampleCategory[] = [
     keys: [
       'ecs-s3-pipeline', 'bedrock-dynamodb-ai', 'error-handling-retry',
       'batch-fan-out',
+    ],
+  },
+  {
+    label: 'Limitations',
+    keys: [
+      'limit-arithmetic', 'limit-dynamic-expressions', 'limit-array-methods',
+      'limit-recursive', 'limit-helper-constraints', 'limit-variable-capture',
+      'limit-helper-nesting', 'limit-workarounds',
     ],
   },
 ];
@@ -1624,6 +1642,406 @@ export const batchFanOut = Steps.createFunction(
   },
 );
 ` }] },
+
+  // ── Limitations ────────────────────────────────────────────────────────
+
+  'limit-arithmetic': { description: 'Multiply, divide, and modulo have no ASL intrinsic.', services: ['Lambda'], files: [{ name: 'workflow.ts', content: `import { Steps, SimpleStepContext } from './runtime/index';
+import { Lambda } from './runtime/services/Lambda';
+
+// ASL only provides States.MathAdd — there is no States.MathMultiply,
+// States.MathDivide, or States.MathModulo. The compiler will emit
+// helpful errors for each unsupported operator.
+
+const priceFn = Lambda<
+  { productId: string },
+  { price: number; quantity: number }
+>('arn:aws:lambda:us-east-1:123456789:function:GetPrice');
+
+export const arithmeticLimits = Steps.createFunction(
+  async (context: SimpleStepContext, input: { productId: string }) => {
+    const item = await priceFn.call({ productId: input.productId });
+
+    // ✅ Addition works — compiles to States.MathAdd
+    const withTax = item.price + 5;
+
+    // ✅ Subtraction by a literal works — compiles to States.MathAdd(x, -10)
+    const discounted = item.price - 10;
+
+    // ❌ SS530: Multiplication — no ASL intrinsic
+    const total = item.price * item.quantity;
+
+    // ❌ SS531: Division — no ASL intrinsic
+    const half = item.price / 2;
+
+    // ❌ SS532: Modulo — no ASL intrinsic
+    const remainder = item.quantity % 3;
+
+    // ❌ SS533: Dynamic subtraction — right side must be a literal
+    const diff = item.price - item.quantity;
+
+    return { withTax, discounted, total, half, remainder, diff };
+  },
+);
+` }] },
+
+  'limit-dynamic-expressions': { description: 'Expressions that cannot be resolved to ASL values.', services: ['Lambda'], files: [{ name: 'workflow.ts', content: `import { Steps, SimpleStepContext } from './runtime/index';
+import { Lambda } from './runtime/services/Lambda';
+
+// ASL parameters must be: input references ($.field), service call
+// results, compile-time constants, or ASL intrinsic functions.
+// Anything else produces an SS502 "Cannot resolve to ASL value" error.
+
+const processFn = Lambda<
+  { data: string },
+  { items: string[]; count: number }
+>('arn:aws:lambda:us-east-1:123456789:function:Process');
+
+const storeFn = Lambda<
+  { value: string; flag: boolean },
+  { ok: boolean }
+>('arn:aws:lambda:us-east-1:123456789:function:Store');
+
+export const dynamicLimits = Steps.createFunction(
+  async (context: SimpleStepContext, input: { data: string; threshold: number }) => {
+    const result = await processFn.call({ data: input.data });
+
+    // ❌ SS502: Ternary with runtime values — ASL has no conditional expression
+    const label = result.count > 5 ? 'large' : 'small';
+
+    // ❌ SS502: String() coercion — no ASL equivalent
+    const countStr = String(result.count);
+
+    // ❌ SS510: Complex condition — can't compile to ASL Choice rule
+    if (result.count > 0 && label === 'large') {
+      return { status: 'matched' };
+    }
+
+    // ❌ SS501: Computed property name — JSONPath needs static keys
+    const key = 'dynamicKey';
+    await storeFn.call({ value: input.data, flag: true });
+
+    return { status: 'done', count: result.count };
+  },
+);
+` }] },
+
+  'limit-array-methods': { description: 'Array .map(), .filter(), .reduce() have no ASL equivalent.', services: ['Lambda'], files: [{ name: 'workflow.ts', content: `import { Steps, SimpleStepContext } from './runtime/index';
+import { Lambda } from './runtime/services/Lambda';
+
+// ASL has no runtime array transformation primitives. Methods like
+// .map(), .filter(), and .reduce() require arbitrary code execution
+// that Step Functions can't express.
+//
+// Workaround: Use for...of loops (compiled to Map states) or
+// delegate to a Lambda function.
+
+const enrichFn = Lambda<
+  { id: string },
+  { enriched: string }
+>('arn:aws:lambda:us-east-1:123456789:function:Enrich');
+
+export const arrayLimits = Steps.createFunction(
+  async (context: SimpleStepContext, input: { items: { id: string; value: number }[] }) => {
+    // ❌ .map() — not compilable to ASL
+    // const ids = input.items.map(item => item.id);
+
+    // ❌ .filter() — not compilable to ASL
+    // const big = input.items.filter(item => item.value > 100);
+
+    // ❌ .reduce() — not compilable to ASL
+    // const total = input.items.reduce((sum, item) => sum + item.value, 0);
+
+    // ❌ .forEach() — not compilable to ASL
+    // input.items.forEach(item => console.log(item));
+
+    // ✅ for...of compiles to a Map state — the ASL way to iterate
+    for (const item of input.items) {
+      await enrichFn.call({ id: item.id });
+    }
+
+    // ✅ .length works — compiles to States.ArrayLength
+    const count = input.items.length;
+
+    // ✅ .includes() works — compiles to States.ArrayContains
+    // (only on jsonpath values, shown here conceptually)
+
+    return { processedCount: count };
+  },
+);
+` }] },
+
+  'limit-recursive': { description: 'Recursive calls and runtime function references are not supported.', services: ['Lambda'], files: [{ name: 'workflow.ts', content: `import { Steps, SimpleStepContext } from './runtime/index';
+import { Lambda } from './runtime/services/Lambda';
+
+// ASL state machines cannot call themselves. There is no way to
+// express recursion in the Step Functions state language.
+//
+// Workaround: Restructure as a while loop, or use a Lambda
+// function for recursive logic.
+
+const fetchFn = Lambda<
+  { pageToken: string },
+  { items: string[]; nextToken: string }
+>('arn:aws:lambda:us-east-1:123456789:function:FetchPage');
+
+// ❌ SS100: Recursive function — would produce infinite ASL states
+//
+// async function fetchAllPages(token: string): Promise<string[]> {
+//   const page = await fetchFn.call({ pageToken: token });
+//   if (!page.nextToken) return page.items;
+//   const rest = await fetchAllPages(page.nextToken);  // ← recursion
+//   return [...page.items, ...rest];
+// }
+
+// ✅ Workaround: Use a while loop instead of recursion
+export const paginationWorkflow = Steps.createFunction(
+  async (context: SimpleStepContext, input: { startToken: string }) => {
+    let page = await fetchFn.call({ pageToken: input.startToken });
+
+    while (page.nextToken !== '') {
+      page = await fetchFn.call({ pageToken: page.nextToken });
+    }
+
+    return { lastPage: page.items };
+  },
+);
+` }] },
+
+  'limit-helper-constraints': { description: 'SS804: Destructured, rest, and default parameters are not supported.', services: ['Lambda'], files: [{ name: 'workflow.ts', content: `import { Steps, SimpleStepContext } from './runtime/index';
+import { Lambda } from './runtime/services/Lambda';
+
+// Helper function parameters must be simple identifiers.
+// Destructuring, rest params, and default values are not
+// supported for inlined helpers — the compiler emits SS804.
+//
+// Why? The compiler binds each parameter symbol to the caller's
+// argument expression. Destructuring creates multiple symbols
+// from one argument, which the v1 binder can't handle.
+
+const notifyFn = Lambda<
+  { userId: string; message: string },
+  { sent: boolean }
+>('arn:aws:lambda:us-east-1:123456789:function:Notify');
+
+// ✅ Simple identifier parameters — works
+async function sendSimple(userId: string, message: string) {
+  await notifyFn.call({ userId, message });
+}
+
+// ❌ SS804: Destructured parameter
+async function sendDestructured({ userId, message }: { userId: string; message: string }) {
+  await notifyFn.call({ userId, message });
+}
+
+// ❌ SS804: Default parameter value
+async function sendWithDefault(userId: string, message: string = 'Hello') {
+  await notifyFn.call({ userId, message });
+}
+
+// ❌ SS804: Rest parameter
+async function sendToMany(...userIds: string[]) {
+  for (const userId of userIds) {
+    await notifyFn.call({ userId, message: 'bulk' });
+  }
+}
+
+export const helperParams = Steps.createFunction(
+  async (context: SimpleStepContext, input: { userId: string }) => {
+    // ✅ Works
+    await sendSimple(input.userId, 'Welcome!');
+
+    // ❌ Each of these triggers SS804
+    await sendDestructured({ userId: input.userId, message: 'hi' });
+    await sendWithDefault(input.userId);
+    await sendToMany(input.userId);
+
+    return { status: 'done' };
+  },
+);
+` }] },
+
+  'limit-variable-capture': { description: 'How const, let, and var are captured — and when warnings or errors appear.', services: ['Lambda'], files: [{ name: 'workflow.ts', content: `import { Steps, SimpleStepContext } from './runtime/index';
+import { Lambda } from './runtime/services/Lambda';
+
+// The compiler's Whole-Program Analyzer classifies module-level variables:
+//   const + literal  → compile-time constant (folded into ASL)
+//   const + service  → service binding (Lambda, DynamoDB, etc.)
+//   let/var + literal (single assignment) → constant, but SS709 warning
+//   const + pure expr → folded if all operands are constants
+//   const + impure call → ❌ not foldable (e.g. Date.now())
+//   let/var reassigned → ❌ Bottom — multiple assignments
+
+// ✅ const with string literal — folded, no warnings
+const API_VERSION = 'v2';
+
+// ✅ const with number literal — folded, no warnings
+const MAX_RETRIES = 3;
+
+// ✅ const with computed literal — folded (compiler evaluates 60 * 5)
+const TIMEOUT_SECONDS = 60 * 5;
+
+// ⚠️ let with literal — works but emits SS709: prefer const
+let baseUrl = 'https://api.example.com';
+
+// ⚠️ var with literal — works but emits SS709: prefer const
+var defaultRegion = 'us-east-1';
+
+// ❌ const with impure function call — Date.now() is not foldable
+const timestamp = Date.now();
+
+const processFn = Lambda<
+  { data: string; version: string },
+  { result: string }
+>('arn:aws:lambda:us-east-1:123456789:function:Process');
+
+export const variableCapture = Steps.createFunction(
+  async (context: SimpleStepContext, input: { data: string }) => {
+    // ✅ Works — API_VERSION is a folded constant
+    const result = await processFn.call({
+      data: input.data,
+      version: API_VERSION,
+    });
+
+    // ✅ Works — MAX_RETRIES is a folded constant
+    const retries = MAX_RETRIES;
+
+    // ⚠️ Works with SS709 warning — baseUrl resolves but is declared with let
+    await processFn.call({ data: baseUrl, version: API_VERSION });
+
+    // ⚠️ Works with SS709 warning — defaultRegion resolves but is declared with var
+    await processFn.call({ data: defaultRegion, version: API_VERSION });
+
+    // ❌ SS502: timestamp is not a foldable constant (Date.now() is impure)
+    // Uncomment to see the error:
+    // await processFn.call({ data: input.data, version: String(timestamp) });
+
+    return { result: result.result, retries };
+  },
+);
+` }] },
+
+  'limit-helper-nesting': { description: 'Helpers cannot call other helpers and must be awaited.', services: ['Lambda'], files: [{ name: 'workflow.ts', content: `import { Steps, SimpleStepContext } from './runtime/index';
+import { Lambda } from './runtime/services/Lambda';
+
+// Helper function inlining has a "v1" restriction: each helper
+// is inlined independently. A helper CANNOT call another helper
+// because the compiler only inlines one level deep.
+//
+// Additionally, helpers with service calls MUST be awaited —
+// a bare call like \`doWork(id)\` without await is an error.
+
+const validateFn = Lambda<
+  { id: string },
+  { valid: boolean }
+>('arn:aws:lambda:us-east-1:123456789:function:Validate');
+
+const enrichFn = Lambda<
+  { id: string },
+  { data: string }
+>('arn:aws:lambda:us-east-1:123456789:function:Enrich');
+
+const notifyFn = Lambda<
+  { id: string; message: string },
+  { sent: boolean }
+>('arn:aws:lambda:us-east-1:123456789:function:Notify');
+
+// ✅ Simple helper — inlines correctly
+async function validate(id: string) {
+  await validateFn.call({ id });
+}
+
+// ✅ Another simple helper — also inlines correctly
+async function enrich(id: string) {
+  await enrichFn.call({ id });
+}
+
+// ❌ SS803: Calls validate() which is another user-defined helper
+async function validateAndEnrich(id: string) {
+  await validate(id);
+  await enrich(id);
+}
+
+// ❌ SS805: Helper with service calls must be awaited
+// (uncomment the bare call in the workflow below to see the error)
+
+export const helperNesting = Steps.createFunction(
+  async (context: SimpleStepContext, input: { id: string }) => {
+    // ✅ These work — direct calls to simple helpers
+    await validate(input.id);
+    await enrich(input.id);
+
+    // ❌ SS803: This triggers the nested-helper error
+    await validateAndEnrich(input.id);
+
+    // ❌ SS805: Missing await — helper contains service calls
+    // validate(input.id);
+
+    await notifyFn.call({ id: input.id, message: 'done' });
+
+    return { status: 'complete' };
+  },
+);
+` }] },
+
+  'limit-workarounds': { description: 'Common patterns and their ASL-compatible workarounds.', services: ['Lambda', 'DynamoDB'], files: [{ name: 'workflow.ts', content: `import { Steps, SimpleStepContext } from './runtime/index';
+import { Lambda } from './runtime/services/Lambda';
+import { DynamoDB } from './runtime/services/DynamoDB';
+
+// This example compiles successfully. It shows the recommended
+// workarounds for common limitations.
+
+const computeFn = Lambda<
+  { a: number; b: number; op: string },
+  { result: number }
+>('arn:aws:lambda:us-east-1:123456789:function:Compute');
+
+const db = new DynamoDB('ResultsTable');
+
+export const workarounds = Steps.createFunction(
+  async (context: SimpleStepContext, input: { x: number; y: number; items: string[] }) => {
+    // LIMITATION: No multiply/divide/modulo in ASL
+    // WORKAROUND: Delegate complex math to a Lambda function
+    const product = await computeFn.call({ a: input.x, b: input.y, op: 'multiply' });
+
+    // LIMITATION: No .map() / .filter()
+    // WORKAROUND: Use for...of (compiles to Map state)
+    for (const item of input.items) {
+      await computeFn.call({ a: input.x, b: 0, op: item });
+    }
+
+    // LIMITATION: No ternary expressions at runtime
+    // WORKAROUND: Use if/else (compiles to Choice state)
+    let status: string;
+    if (product.result > 100) {
+      status = 'high';
+    } else {
+      status = 'low';
+    }
+
+    // LIMITATION: No string concatenation with + on runtime values
+    // WORKAROUND: Use template literals (compile to States.Format)
+    const label = \`result-\${status}\`;
+
+    // LIMITATION: No Date.now() or Math.random()
+    // WORKAROUND: Use context metadata and Steps intrinsics
+    const id = Steps.uuid();
+    const startTime = context.execution.startTime;
+
+    // LIMITATION: Compile-time constants only at module scope
+    // WORKAROUND: Use const (not let/var) for values the compiler can fold
+    const VERSION = 'v2';
+
+    await db.putItem({
+      id,
+      result: product.result,
+      label,
+      version: VERSION,
+    });
+
+    return { id, result: product.result, label };
+  },
+);
+` }] },
 };
 
 const DEFAULT_EXAMPLE = 'sequential';
@@ -1705,6 +2123,10 @@ function loadExample(key: string) {
 
   renderFileTree();
   switchToFile(0, true);  // skipSave=true: don't save empty editor content
+
+  // Update button label to show current example name
+  const label = document.getElementById('currentExample');
+  if (label) label.textContent = formatExampleName(key);
 
   // For multi-file examples, auto-expand the file tree
   if (files.length > 1) {
@@ -1946,8 +2368,12 @@ function renderModal(filter: string) {
 
     const label = document.createElement('div');
     label.className = 'example-category-label';
-    label.textContent = category.label;
+    const icon = CATEGORY_ICONS[category.label] ?? '';
+    label.textContent = icon ? `${icon}  ${category.label}` : category.label;
     section.appendChild(label);
+
+    const grid = document.createElement('div');
+    grid.className = 'example-grid';
 
     let visibleCount = 0;
     for (const key of category.keys) {
@@ -1957,13 +2383,14 @@ function renderModal(filter: string) {
       const name = formatExampleName(key);
       const desc = example.description ?? '';
       const services = example.services ?? [];
-      const searchText = `${name} ${desc} ${services.join(' ')}`.toLowerCase();
+      const searchText = `${name} ${desc} ${services.join(' ')} ${category.label}`.toLowerCase();
 
       if (lowerFilter && !searchText.includes(lowerFilter)) continue;
       visibleCount++;
 
-      const card = document.createElement('div');
+      const card = document.createElement('button');
       card.className = 'example-card';
+      if (key === currentExampleKey) card.classList.add('active');
 
       const title = document.createElement('div');
       title.className = 'example-card-title';
@@ -1998,8 +2425,10 @@ function renderModal(filter: string) {
         }
       });
 
-      section.appendChild(card);
+      grid.appendChild(card);
     }
+
+    section.appendChild(grid);
 
     if (visibleCount > 0) {
       examplesList.appendChild(section);

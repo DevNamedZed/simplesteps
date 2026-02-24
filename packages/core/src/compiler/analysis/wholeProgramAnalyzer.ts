@@ -18,9 +18,11 @@ import {
 import {
   ModuleEnvironment,
   analyzeModule,
+  tryInlineCall,
   type ImportResolver,
   type NamespaceResolver,
 } from './moduleAnalyzer.js';
+import { ExpressionEvaluator } from './expressionEvaluator.js';
 
 // ---------------------------------------------------------------------------
 // Options
@@ -125,6 +127,21 @@ export class WholeProgramAnalyzer {
 
     const env = this.analyzeFile(sourceFile);
     return env.resolve(symbol);
+  }
+
+  /**
+   * Evaluate an arbitrary expression using the module's environment.
+   * Supports pure function inlining and cross-module resolution.
+   */
+  evaluateExpression(expr: ts.Expression, sourceFile: ts.SourceFile): LatticeValue {
+    const env = this.analyzeFile(sourceFile);
+    const callResolver = this.inliningDepth > 0
+      ? (callExpr: ts.CallExpression, evaluator: ExpressionEvaluator) => {
+          return tryInlineCall(callExpr, evaluator, env, this.checker, this.inliningDepth);
+        }
+      : undefined;
+    const evaluator = new ExpressionEvaluator(this.checker, (sym) => env.resolve(sym), callResolver);
+    return evaluator.evaluate(expr);
   }
 
   /**

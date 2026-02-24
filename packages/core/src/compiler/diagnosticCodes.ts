@@ -84,5 +84,6 @@ export class ErrorCodes {
     static readonly UnanalyzableImport = error('SS706', 'data-flow');
     static readonly ComplexFunction = warning('SS707', 'data-flow');
     static readonly SafeVarEscapeHatch = warning('SS708', 'data-flow');
+    static readonly PreferConst = warning('SS709', 'data-flow');
   };
 }

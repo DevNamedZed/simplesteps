@@ -594,7 +594,7 @@ function processExportDeclaration(
 // Pure function inlining callback
 // ---------------------------------------------------------------------------
 
-function tryInlineCall(
+export function tryInlineCall(
   expr: ts.CallExpression,
   evaluator: ExpressionEvaluator,
   env: ModuleEnvironment,

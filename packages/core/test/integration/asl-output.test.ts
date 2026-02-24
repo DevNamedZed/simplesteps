@@ -412,6 +412,39 @@ describe('ASL output: multi-service', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Service bindings with ARN via identifier reference (not string literal)
+// ---------------------------------------------------------------------------
+
+describe('ASL output: indirect ARN references', () => {
+  let asl: any;
+  beforeAll(() => { asl = compileToJson('cdk-order-indirect-arn.ts'); });
+
+  it('resolves Lambda ARN from const identifier', () => {
+    const tasks = getStatesByType(asl, 'Task');
+    const lambdaTask = tasks.find(([, s]) =>
+      typeof s.Resource === 'string' && s.Resource.includes('lambda'));
+    expect(lambdaTask).toBeDefined();
+    expect(lambdaTask![1].Resource).toBe('arn:aws:lambda:us-east-1:123456789:function:ValidateOrder');
+  });
+
+  it('resolves DynamoDB table name from const identifier', () => {
+    const tasks = getStatesByType(asl, 'Task');
+    const dynamoTask = tasks.find(([, s]) =>
+      typeof s.Resource === 'string' && s.Resource.includes('dynamodb'));
+    expect(dynamoTask).toBeDefined();
+    // Table name should be injected into parameters
+    const params = dynamoTask![1].Parameters;
+    expect(params.TableName).toBe('OrdersTable');
+  });
+
+  it('resolves service call result properties (order.total, order.valid)', () => {
+    // The condition check on !order.valid should produce a Choice state
+    const choices = getStatesByType(asl, 'Choice');
+    expect(choices.length).toBeGreaterThanOrEqual(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Nested control flow: if inside while, try inside if, etc.
 // ---------------------------------------------------------------------------
 
@@ -463,6 +496,7 @@ describe('ASL output: all fixtures compile cleanly', () => {
     'helper-basic.ts',
     'helper-trycatch.ts',
     'helper-multiple.ts',
+    'cdk-order-indirect-arn.ts',
   ];
 
   for (const fixture of fixtures) {
@@ -2163,5 +2197,91 @@ describe('Value-returning helper inlining', () => {
     ) as any;
     expect(passState).toBeDefined();
     expect(passState.Parameters['name.$']).toBe('$.result.name');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// let/var variable capture with SS709 warnings
+// ---------------------------------------------------------------------------
+
+describe('ASL output: let/var capture (SS709)', () => {
+  it('compiles let/var with single-assignment literals and emits SS709 warnings', () => {
+    const filePath = path.join(FIXTURES_DIR, 'let-var-capture.ts');
+    const result = compile({ sourceFiles: [filePath] });
+
+    // Should have no errors (only warnings)
+    const errors = result.errors.filter(d => d.severity === 'error');
+    expect(errors).toHaveLength(0);
+
+    // Should produce at least one state machine
+    expect(result.stateMachines.length).toBe(1);
+
+    // Should have SS709 warnings for baseUrl and defaultRegion
+    const warnings = result.errors.filter(d => d.severity === 'warning');
+    const ss709 = warnings.filter(w => w.code === 'SS709');
+    expect(ss709.length).toBe(2);
+
+    const messages = ss709.map(w => w.message);
+    expect(messages.some(m => m.includes("'baseUrl'"))).toBe(true);
+    expect(messages.some(m => m.includes("'defaultRegion'"))).toBe(true);
+  });
+
+  it('does not emit SS709 for const declarations', () => {
+    const filePath = path.join(FIXTURES_DIR, 'let-var-capture.ts');
+    const result = compile({ sourceFiles: [filePath] });
+
+    const ss709 = result.errors.filter(d => d.code === 'SS709');
+    // Only baseUrl (let) and defaultRegion (var) — not API_VERSION (const)
+    for (const w of ss709) {
+      expect(w.message).not.toContain("'API_VERSION'");
+    }
+  });
+
+  it('resolves let/var values correctly in ASL output', () => {
+    const filePath = path.join(FIXTURES_DIR, 'let-var-capture.ts');
+    const result = compile({ sourceFiles: [filePath] });
+
+    const errors = result.errors.filter(d => d.severity === 'error');
+    expect(errors).toHaveLength(0);
+
+    const def = result.stateMachines[0].definition;
+    const json = JSON.parse(AslSerializer.serialize(def));
+
+    // The let/var values should be inlined as literals in the Task parameters
+    const tasks = getStatesByType(json, 'Task');
+    expect(tasks.length).toBeGreaterThanOrEqual(1);
+
+    const taskState = tasks[0][1];
+    expect(taskState.Parameters.url).toBe('https://api.example.com');
+    expect(taskState.Parameters.region).toBe('us-east-1');
+    expect(taskState.Parameters.version).toBe('v2');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Pure function ARN resolution (Lambda(makeArn('X')))
+// ---------------------------------------------------------------------------
+
+describe('ASL output: pure function ARN resolution', () => {
+  it('resolves Lambda ARN from pure function call', () => {
+    const filePath = path.join(FIXTURES_DIR, 'pure-fn-arn.ts');
+    const result = compile({ sourceFiles: [filePath] });
+
+    const errors = result.errors.filter(d => d.severity === 'error');
+    expect(errors).toHaveLength(0);
+    expect(result.stateMachines.length).toBe(1);
+
+    const def = result.stateMachines[0].definition;
+    const json = JSON.parse(AslSerializer.serialize(def));
+
+    // Both Lambda bindings should have resolved ARNs
+    const tasks = getStatesByType(json, 'Task');
+    const lambdaTasks = tasks.filter(([, s]) =>
+      typeof s.Resource === 'string' && s.Resource.includes('lambda'));
+    expect(lambdaTasks.length).toBe(2);
+
+    const resources = lambdaTasks.map(([, s]) => s.Resource).sort();
+    expect(resources).toContain('arn:aws:lambda:us-east-1:123456789:function:ProcessOrder');
+    expect(resources).toContain('arn:aws:lambda:us-east-1:123456789:function:ValidateOrder');
   });
 });
