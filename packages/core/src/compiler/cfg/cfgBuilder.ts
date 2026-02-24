@@ -325,6 +325,34 @@ function processStatements(
       }
     }
 
+    // --- Ternary variable declaration → Choice + Pass desugaring ---
+    if (ts.isVariableStatement(stmt)) {
+      const decls = stmt.declarationList.declarations;
+      if (decls.length === 1 && decls[0].initializer &&
+          ts.isConditionalExpression(decls[0].initializer) &&
+          ts.isIdentifier(decls[0].name)) {
+        const decl = decls[0];
+        const ternary = decl.initializer as ts.ConditionalExpression;
+        const varSym = context.checker.getSymbolAtLocation(decl.name);
+        if (varSym) {
+          const continuationId = state.newBlockId('after_ternary');
+          state.addBlock(currentBlockId, accumulated, {
+            kind: 'ternaryAssign',
+            condition: ternary.condition,
+            variableName: (decl.name as ts.Identifier).text,
+            variableSymbol: varSym,
+            thenExpression: ternary.whenTrue,
+            elseExpression: ternary.whenFalse,
+            continuation: continuationId,
+          });
+          if (remaining.length > 0) {
+            return processStatements(state, context, remaining, continuationId, loopStack, inlining);
+          }
+          return continuationId;
+        }
+      }
+    }
+
     // --- Sequential: accumulate non-branching statements ---
     accumulated.push(stmt);
   }
@@ -1061,11 +1089,13 @@ function tryInlineHelperCall(
   const helper = helperRegistry.get(resolvedSym);
   if (!helper) return undefined;
 
-  // Validate argument count
-  if (callExpr.arguments.length !== helper.parameters.length) {
+  // Validate argument count (allow fewer args when trailing params have defaults)
+  const requiredCount = helper.parameters.filter(p => !p.initializer).length;
+  if (callExpr.arguments.length > helper.parameters.length ||
+      callExpr.arguments.length < requiredCount) {
     context.addError(
       callExpr,
-      `Helper function '${helper.symbol.getName()}' expects ${helper.parameters.length} arguments but got ${callExpr.arguments.length}`,
+      `Substep '${helper.symbol.getName()}' expects ${requiredCount === helper.parameters.length ? String(helper.parameters.length) : `${requiredCount}-${helper.parameters.length}`} arguments but got ${callExpr.arguments.length}`,
       ErrorCodes.Inlining.UninlinableFunction.code,
     );
     return undefined;
@@ -1074,12 +1104,52 @@ function tryInlineHelperCall(
   // Record parameter-to-argument bindings for the variable resolver
   for (let p = 0; p < helper.parameters.length; p++) {
     const param = helper.parameters[p];
-    const paramSym = context.checker.getSymbolAtLocation(param.name);
-    if (paramSym) {
-      inlineBindings.push({
-        paramSymbol: paramSym,
-        argExpression: callExpr.arguments[p],
-      });
+    // Use call-site argument if provided, otherwise fall back to default value
+    const argExpr = p < callExpr.arguments.length
+      ? callExpr.arguments[p]
+      : param.initializer!; // guaranteed present by requiredCount check
+
+    if (ts.isIdentifier(param.name)) {
+      // Simple identifier parameter — one binding
+      const paramSym = context.checker.getSymbolAtLocation(param.name);
+      if (paramSym) {
+        inlineBindings.push({ paramSymbol: paramSym, argExpression: argExpr });
+      }
+    } else if (ts.isObjectBindingPattern(param.name)) {
+      // Destructured parameter — one binding per element.
+      // If the argument is an object literal, extract property values directly.
+      // Otherwise, create synthetic property access expressions (for variable args).
+      for (const element of param.name.elements) {
+        const elemSym = context.checker.getSymbolAtLocation(element.name);
+        if (!elemSym) continue;
+        // Property name: explicit rename ({ userId: id }) or same as binding name
+        const propName = element.propertyName
+          ? (element.propertyName as ts.Identifier).text
+          : (element.name as ts.Identifier).text;
+
+        let bindingExpr: ts.Expression | undefined;
+
+        // Try to extract directly from object literal argument
+        if (ts.isObjectLiteralExpression(argExpr)) {
+          const prop = argExpr.properties.find(p => {
+            if (ts.isPropertyAssignment(p) && ts.isIdentifier(p.name)) return p.name.text === propName;
+            if (ts.isShorthandPropertyAssignment(p)) return p.name.text === propName;
+            return false;
+          });
+          if (prop) {
+            bindingExpr = ts.isPropertyAssignment(prop)
+              ? prop.initializer
+              : (prop as ts.ShorthandPropertyAssignment).name;
+          }
+        }
+
+        // Fallback: synthetic property access (for variable/identifier args)
+        if (!bindingExpr) {
+          bindingExpr = ts.factory.createPropertyAccessExpression(argExpr, propName);
+        }
+
+        inlineBindings.push({ paramSymbol: elemSym, argExpression: bindingExpr });
+      }
     }
   }
 

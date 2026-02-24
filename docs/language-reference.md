@@ -142,7 +142,7 @@ if (!order.valid) {
 
 `return` in a branch produces an End state at that point.
 
-## Helper Functions
+## Substeps
 
 Extract parts of a workflow into named async functions. The compiler inlines them at compile time — no nested executions, no runtime cost.
 
@@ -154,9 +154,9 @@ Simple expression functions are inlined as values:
 const formatKey = (id: string) => `order-${id}`;
 ```
 
-### Async helpers
+### Async substeps
 
-Module-scope `async` functions that make service calls are inlined at the CFG level. The helper's body is spliced into the caller's state machine:
+Module-scope `async` functions that make service calls are inlined at the CFG level. The substep's body is spliced into the caller's state machine:
 
 ```typescript
 async function provisionWithRollback(id: string, networkId: string) {
@@ -175,9 +175,9 @@ export const workflow = Steps.createFunction(async (ctx, input) => {
 });
 ```
 
-Helpers can contain any supported control flow: `if/else`, `try/catch`, loops, `Promise.all`. Parameters can be input references, service call results, or constants.
+Substeps can contain any supported control flow: `if/else`, `try/catch`, loops, `Promise.all`. Substeps can also call other substeps — the compiler inlines them transitively. Parameters can be input references, service call results, or constants.
 
-See [Limitations](./limitations.md#helper-functions) for v1 constraints.
+See [Limitations](./limitations.md#substeps) for constraints.
 
 ## Automatic Data Flow (No JSONPath)
 
@@ -224,7 +224,6 @@ const workflow = Steps.createFunction(async (context, input) => {
 | `context.stateMachine.id` | `$$.StateMachine.Id` | State machine ARN |
 
 The context object is optional — if your workflow doesn't need execution metadata, you can omit it and use only the input parameter.
-```
 
 ## Comparison Operators
 
@@ -248,4 +247,3 @@ See [Error Handling](./error-handling.md) for try/catch, retry, and custom error
 
 See [Constants](./constants.md) for compile-time constant folding.
 
-For the exhaustive ASL/CDK/SimpleSteps cross-reference, see [`spec/feature-mapping.md`](../spec/feature-mapping.md).

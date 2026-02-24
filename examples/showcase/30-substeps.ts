@@ -1,18 +1,18 @@
-// Helper Functions — Async Inlining
+// Substeps — Async Inlining
 //
-// Extract parts of a workflow into named async helper functions.
+// Extract parts of a workflow into named async functions (substeps).
 // The compiler inlines them at compile time, producing a flat state
 // machine. No runtime cost, no nested executions — just cleaner code.
 //
 // This example shows a resource provisioning saga with rollback.
-// Without helpers, this would be 4 levels of nested try/catch.
-// With helpers, each concern reads independently.
+// Without substeps, this would be 4 levels of nested try/catch.
+// With substeps, each concern reads independently.
 //
-// Constraints (v1):
-//   - Helpers must be module-scope async functions
+// Constraints:
+//   - Substeps must be module-scope async functions
 //   - Simple identifier parameters only (no destructuring)
-//   - Single-level: helpers can call services, but not other helpers
 //   - Must be awaited at the call site
+//   - Substeps can call other substeps (the compiler inlines transitively)
 //
 // ASL output:
 //   Invoke_validateRequest (Task)
@@ -62,7 +62,7 @@ const computeRollback = Lambda<{ instanceId: string }, void>(
   'arn:aws:lambda:us-east-1:123:function:ComputeRollback',
 );
 
-// ── Helper functions (inlined by the compiler) ──────────────────────
+// ── Substeps (inlined by the compiler) ──────────────────────────────
 
 // Provision security with rollback on failure
 async function provisionSecurity(requestId: string, networkId: string) {
@@ -131,7 +131,7 @@ export const provisionResources = Steps.createFunction(
       { retry: { maxAttempts: 2, intervalSeconds: 5, backoffRate: 2 } },
     );
 
-    // Each step handles its own rollback via helper functions
+    // Each step handles its own rollback via substeps
     const security = await provisionSecurity(input.requestId, network.networkId);
     const compute = await provisionCompute(input.requestId, security.roleArn, network.networkId);
     await configureWithRollback(input.requestId, network.networkId, security.roleArn, compute.instanceId);

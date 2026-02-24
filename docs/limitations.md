@@ -23,9 +23,9 @@ count -= 3;                 // OK
 
 Workaround: Use compile-time constants (`const TIMEOUT = 30 * 1000` is folded at compile time), or delegate the calculation to a Lambda.
 
-## Helper Functions
+## Substeps
 
-The compiler supports two kinds of inlineable helper functions:
+The compiler supports two kinds of inlineable functions:
 
 ### Pure functions (expression inlining)
 
@@ -36,12 +36,12 @@ Simple pure functions with a single `return` statement are inlined as expression
 const formatKey = (id: string) => `order-${id}`;
 ```
 
-### Async helpers (CFG-level inlining)
+### Async substeps (CFG-level inlining)
 
-Module-scope `async` functions that make service calls can be inlined at the call site. The compiler splices the helper's body into the main workflow's state machine — no nested executions, no runtime cost.
+Module-scope `async` functions that make service calls can be inlined at the call site. The compiler splices the substep's body into the main workflow's state machine — no nested executions, no runtime cost.
 
 ```typescript
-// OK — async helper, inlined into the caller's state machine
+// OK — async substep, inlined into the caller's state machine
 async function provisionWithRollback(id: string, networkId: string) {
   try {
     return await computeApi.call({ action: 'create', id });
@@ -58,12 +58,21 @@ export const workflow = Steps.createFunction(async (ctx, input) => {
 });
 ```
 
-**v1 constraints:**
+**Constraints:**
 
 - Must be declared at **module scope** (top-level `async function` or `const fn = async () => { ... }`)
-- Parameters must be **simple identifiers** (no destructuring, rest, or defaults)
-- **Single-level only**: helpers can call services but not other async helpers
-- Must be **awaited** at the call site (`await helper(...)`)
+- Parameters can be **simple identifiers**, **object destructuring** (`{ id, name }`), or have **default values** (`retries = 3`). Rest parameters are not supported.
+- Must be **awaited** at the call site (`await mySubstep(...)`)
+- Substeps can call other substeps — the compiler inlines transitively
+
+```typescript
+// OK — nested substeps (inlined transitively)
+async function validate(id: string) { await validateFn.call({ id }); }
+async function validateAndEnrich(id: string) {
+  await validate(id);             // substep calling another substep
+  await enrichFn.call({ id });
+}
+```
 
 **Not supported:**
 
@@ -75,40 +84,48 @@ function calculateTotal(items: Item[]) {
   return total;
 }
 
-// NOT OK — nested helpers (helper calls another helper)
-async function innerHelper() { await svc.call({}); }
-async function outerHelper() { await innerHelper(); } // SS803
-
-// NOT OK — destructured parameters
-async function process({ id }: { id: string }) { ... } // SS804
+// NOT OK — rest parameters
+async function process(...ids: string[]) { ... } // SS804
 ```
 
-Workaround for unsupported patterns: Move the logic into a Lambda function.
+Workaround for rest parameters: pass an explicit array parameter instead.
 
 ## Closures and Variable Capture
 
-Parallel `for...of` loops compile to ASL Map states, which have isolated state. Each iteration cannot reference variables from the outer scope:
+Parallel `for...of` loops compile to ASL Map states, which have isolated state. Each iteration cannot reference **runtime variables** from the outer scope (service call results, input-derived values):
 
 ```typescript
-const prefix = input.prefix;
+const result = await lookupFn.call({ id: input.id });
 
-// NOT OK — Map state can't access `prefix`
+// NOT OK — Map state can't access `result` (runtime variable)
 for (const item of input.items) {
-  await processor.call({ key: prefix + item.id });
+  await processor.call({ key: result.prefix + item.id });
 }
 ```
+
+Compile-time constants and service bindings **are** accessible inside Map state iterations. Only runtime variables are isolated.
 
 Workaround: Use `Steps.sequential()` for sequential iteration (which does allow outer variable access), or restructure the data so each item carries what it needs.
 
 ## Array Methods
 
-`Array.map()`, `Array.filter()`, `Array.reduce()`, and `Array.forEach()` are not supported. These are JavaScript runtime methods with no ASL equivalent.
+Synchronous array methods (`Array.filter()`, `Array.reduce()`) and synchronous `.map()` are not supported — these are JavaScript runtime operations with no ASL equivalent.
 
 ```typescript
-// NOT OK
+// NOT OK — synchronous .map() cannot be compiled
 const names = items.map(i => i.name);
 
-// OK — use for...of instead
+// OK — async .map() compiles to a Map state (parallel)
+const results = await items.map(async (item) => {
+  return await processItem.call(item);
+});
+
+// OK — async .forEach() compiles to a Map state (discard results)
+await items.forEach(async (item) => {
+  await processItem.call(item);
+});
+
+// OK — for...of also compiles to a Map state
 for (const item of items) {
   await processItem.call(item);
 }
@@ -134,6 +151,8 @@ throw new OrderNotFoundError('Not found');          // OK — compiles to Fail s
 **`for...in` loops** — not supported. Use `for...of` with arrays.
 
 **Switch fall-through** — each `case` must end with `break`, `return`, or `throw`. Fall-through between cases is not allowed.
+
+**Ternary expressions** — `const label = count > 5 ? 'large' : 'small'` **is** supported. The compiler desugars it into a Choice state with two Pass branches. Compile-time constant conditions are folded away entirely.
 
 ## Dynamic Property Access
 
@@ -167,26 +186,43 @@ Note: `Math.floor()`, `Math.ceil()`, etc. **are** supported as compile-time cons
 
 ## Variable Shadowing
 
-You cannot redeclare a variable name in a nested scope if it already exists in an outer scope:
+Avoid redeclaring a variable name in a nested scope. ASL uses a flat JSONPath namespace (`$.status`), so shadowing can cause the outer value to be silently overwritten:
 
 ```typescript
 const status = input.status;
 if (status === 'pending') {
-  const status = 'processing';  // NOT OK — shadows outer `status`
+  const status = 'processing';  // Avoid — overwrites $.status
 }
 ```
 
-## Spread in Service Call Arguments
+## Spread Operators
 
-Object spread (`{ ...obj }`) is not supported in service call parameters. Use `Steps.merge()` or construct the object with explicit properties.
+Object spread in **service call parameters** is not supported — ASL `Parameters` requires explicit key-value mappings:
+
+```typescript
+// NOT OK — spread in service call arguments
+await myLambda.call({ ...baseParams, extra: 'value' });
+```
+
+Workaround: Use `Steps.merge()` or construct the object with explicit properties.
+
+Object spread **is** supported in general object literals when all properties are spreads (`{ ...a, ...b }`), which compiles to `States.JsonMerge`:
+
+```typescript
+// OK — pure spread compiles to States.JsonMerge
+const merged = { ...defaults, ...overrides };
+```
+
+Mixed spread + plain properties (`{ ...obj, key: value }`) is not yet supported.
 
 ## Module-Level `let`
 
-Only `const` declarations at module scope are folded. `let` and `var` declarations may be reassigned, making their values unresolvable at compile time:
+`const` declarations at module scope are always folded. `let` and `var` with a single assignment are also folded (with a warning suggesting `const`). Reassigned `let`/`var` variables are unresolvable:
 
 ```typescript
 const MAX_RETRIES = 3;    // OK — folded
-let retryCount = 3;        // NOT OK — mutable, not folded
+let retryCount = 3;        // OK — folded (warning SS709: prefer const)
+let x = 1; x = 2;         // NOT OK — reassigned, not foldable
 ```
 
 ## General Rule

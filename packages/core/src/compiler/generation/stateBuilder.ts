@@ -564,6 +564,54 @@ function processTerminator(
       return choiceName;
     }
 
+    case 'ternaryAssign': {
+      const resultPath = `$.${term.variableName}`;
+
+      // Register variable BEFORE processing continuation (so it's in scope)
+      ctx.variables.addVariable(term.variableSymbol, {
+        symbol: term.variableSymbol,
+        type: StepVariableType.StateOutput,
+        jsonPath: resultPath,
+        definitelyAssigned: true,
+        constant: false,
+      });
+
+      // Process continuation block
+      const contFirst = processBlock(ctx, term.continuation);
+
+      // Resolve then/else values
+      const thenResolved = resolveExpression(ctx.compilerContext, term.thenExpression, ctx.variables.toResolution());
+      const elseResolved = resolveExpression(ctx.compilerContext, term.elseExpression, ctx.variables.toResolution());
+
+      // Build Pass states for each branch
+      const thenStateName = generateStateName(`Assign_${term.variableName}_true`, ctx.usedNames);
+      const elseStateName = generateStateName(`Assign_${term.variableName}_false`, ctx.usedNames);
+
+      buildTernaryBranchPass(ctx, thenStateName, thenResolved, resultPath, contFirst);
+      buildTernaryBranchPass(ctx, elseStateName, elseResolved, resultPath, contFirst);
+
+      // Build Choice state
+      const choiceRule = buildChoiceRule(
+        ctx.compilerContext,
+        term.condition,
+        thenStateName,
+        ctx.variables.toResolution(),
+      );
+      const choiceName = generateChoiceStateName(ctx, term.condition);
+      const choiceState: ChoiceState = {
+        Type: 'Choice',
+        Choices: [choiceRule],
+        Default: elseStateName,
+      };
+      ctx.states.set(choiceName, choiceState);
+
+      if (lastStateName) {
+        patchNext(ctx.states, lastStateName, choiceName);
+      }
+
+      return choiceName;
+    }
+
     case 'loop': {
       // Generate Choice name early so loopBack can reference it
       const choiceName = generateChoiceStateName(ctx, term.condition);
@@ -737,7 +785,18 @@ function processMapStateTerminator(
     iterableExpr,
     ctx.variables.toResolution(),
   );
-  const itemsPath = resolved.kind === 'jsonpath' ? resolved.path : '$.items';
+  let itemsPath: string;
+  if (resolved.kind === 'jsonpath') {
+    itemsPath = resolved.path!;
+  } else {
+    ctx.compilerContext.addError(
+      iterableExpr,
+      `Cannot resolve iterable expression to a JSONPath reference. ` +
+      `The for...of target must be an input field or service call result (e.g., input.items).`,
+      ErrorCodes.Expr.UncompilableExpression.code,
+    );
+    itemsPath = '$.items'; // fallback to allow continued analysis
+  }
 
   // Extract iteration variable name
   let iterVarName = 'item';
@@ -764,11 +823,19 @@ function processMapStateTerminator(
 
   const mapStateName = generateStateName('Map_items', ctx.usedNames);
 
+  if (!bodyFirst) {
+    ctx.compilerContext.addError(
+      forOfStmt,
+      'for...of loop body produced no states. The loop body must contain at least one await call or assignment.',
+      ErrorCodes.Gen.EmptyStateMachine.code,
+    );
+  }
+
   const mapState: MapState = {
     Type: 'Map',
     ItemsPath: itemsPath,
     ItemProcessor: {
-      StartAt: bodyFirst ?? '',
+      StartAt: bodyFirst ?? 'Empty',
       States: subStates,
     },
     ...(!term.collectResults && { ResultPath: null }),
@@ -1268,6 +1335,36 @@ function createSubContext(
     usedNames: new Set(),
     tryCatchScopes: [],
   };
+}
+
+// ---------------------------------------------------------------------------
+// Ternary branch Pass state builder
+// ---------------------------------------------------------------------------
+
+function buildTernaryBranchPass(
+  ctx: BuildContext,
+  stateName: string,
+  resolved: { kind: string; value?: unknown; path?: string },
+  resultPath: string,
+  nextState: string | null,
+): void {
+  const passState: Record<string, unknown> = { Type: 'Pass', ResultPath: resultPath };
+
+  if (resolved.kind === 'literal') {
+    passState.Result = resolved.value;
+  } else if (resolved.kind === 'jsonpath' && resolved.path) {
+    passState.InputPath = resolved.path;
+  } else if (resolved.kind === 'intrinsic' && resolved.path) {
+    passState.Parameters = { 'value.$': resolved.path };
+  }
+
+  if (nextState) {
+    passState.Next = nextState;
+  } else {
+    passState.End = true;
+  }
+
+  ctx.states.set(stateName, passState as unknown as State);
 }
 
 // ---------------------------------------------------------------------------

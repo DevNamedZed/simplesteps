@@ -48,6 +48,7 @@ const CATEGORY_ICONS: Record<string, string> = {
   'Services': '\u{2601}\uFE0F',
   'JS Features': '\u{1F4DD}',
   'Inline & Data Flow': '\u{1F517}',
+  'Substeps': '\u{1F9E9}',
   'CDK Patterns': '\u{1F4E6}',
   'Multi-Service Patterns': '\u{26A1}',
   'Limitations': '\u{1F6A7}',
@@ -81,8 +82,14 @@ const EXAMPLE_CATEGORIES: ExampleCategory[] = [
   {
     label: 'Inline & Data Flow',
     keys: [
-      'inline-config', 'inline-helpers', 'inline-enums',
+      'inline-config', 'inline-pure-functions', 'inline-enums',
       'inline-constant-chain', 'inline-safe-var',
+    ],
+  },
+  {
+    label: 'Substeps',
+    keys: [
+      'substep-basic', 'substep-trycatch', 'substep-nested', 'substep-value', 'substep-destructured',
     ],
   },
   {
@@ -102,8 +109,8 @@ const EXAMPLE_CATEGORIES: ExampleCategory[] = [
     label: 'Limitations',
     keys: [
       'limit-arithmetic', 'limit-dynamic-expressions', 'limit-array-methods',
-      'limit-recursive', 'limit-helper-constraints', 'limit-variable-capture',
-      'limit-helper-nesting', 'limit-workarounds',
+      'limit-recursive', 'limit-substep-constraints', 'limit-variable-capture',
+      'limit-substep-await', 'limit-workarounds',
     ],
   },
 ];
@@ -869,21 +876,24 @@ export const config = {
 ` },
   ] },
 
-  'inline-helpers': { description: 'Pure helper functions inlined across file boundaries.', services: ['Lambda'], files: [
-    { name: 'workflow.ts', content: `import { Steps, SimpleStepContext } from './runtime/index';
+  'inline-pure-functions': { description: 'Pure functions inlined at compile time as expressions.', services: ['Lambda'], files: [{ name: 'workflow.ts', content: `import { Steps, SimpleStepContext } from './runtime/index';
 import { Lambda } from './runtime/services/Lambda';
-import { makeArn } from './helpers';
 
-// Pure Helper Functions (cross-file)
-// makeArn() lives in helpers.ts. The compiler inlines the return
-// value across the file boundary — check the ASL for literal ARNs.
-// Open the file tree (◀ button) to see both files.
+// Pure Functions — Expression Inlining
+// Simple functions with a single return statement are evaluated
+// at compile time. The result is substituted directly into the ASL.
+
+function makeArn(name: string) {
+  return \`arn:aws:lambda:us-east-1:123456789:function:\${name}\`;
+}
+
+const formatKey = (prefix: string, id: string) => \`\${prefix}-\${id}\`;
 
 const processFn = Lambda<{ orderId: string }, { status: string }>(makeArn('ProcessOrder'));
 const validateFn = Lambda<{ orderId: string }, { valid: boolean }>(makeArn('ValidateOrder'));
 const notifyFn = Lambda<{ orderId: string; status: string }, { sent: boolean }>(makeArn('NotifyCustomer'));
 
-export const helperWorkflow = Steps.createFunction(
+export const pureInlining = Steps.createFunction(
   async (context: SimpleStepContext, input: { orderId: string }) => {
     const check = await validateFn.call({ orderId: input.orderId });
     if (!check.valid) {
@@ -894,15 +904,7 @@ export const helperWorkflow = Steps.createFunction(
     return { status: result.status };
   },
 );
-` },
-    { name: 'helpers.ts', content: `// Pure helper function — inlined at compile time.
-// The compiler evaluates makeArn() calls and substitutes the result.
-
-export function makeArn(name: string) {
-  return \`arn:aws:lambda:us-east-1:123456789:function:\${name}\`;
-}
-` },
-  ] },
+` }] },
 
   'inline-enums': { description: 'TypeScript enum values resolved to literals at compile time.', services: ['Lambda'], files: [{ name: 'workflow.ts', content: `import { Steps, SimpleStepContext } from './runtime/index';
 import { Lambda } from './runtime/services/Lambda';
@@ -1022,6 +1024,215 @@ export const safeVarWorkflow = Steps.createFunction(
   async (context: SimpleStepContext, input: { data: string }) => {
     const result = await dynamicFn.call({ data: input.data });
     return { result: result.result };
+  },
+);
+` }] },
+
+  // ── Substeps ────────────────────────────────────────────────────────────
+
+  'substep-basic': { description: 'Extract reusable workflow logic into substeps (async functions inlined at compile time).', services: ['Lambda'], files: [{ name: 'workflow.ts', content: `import { Steps, SimpleStepContext } from './runtime/index';
+import { Lambda } from './runtime/services/Lambda';
+
+// Substeps — Reusable Workflow Logic
+// Module-scope async functions are inlined at compile time.
+// The compiler splices the substep's body into the caller's
+// state machine — no nested executions, no runtime cost.
+
+const validateFn = Lambda<
+  { id: string },
+  { valid: boolean }
+>('arn:aws:lambda:us-east-1:123456789:function:Validate');
+
+const processFn = Lambda<
+  { id: string },
+  { result: string }
+>('arn:aws:lambda:us-east-1:123456789:function:Process');
+
+const notifyFn = Lambda<
+  { message: string },
+  void
+>('arn:aws:lambda:us-east-1:123456789:function:Notify');
+
+// Define a substep — a reusable chunk of workflow logic
+async function processAndNotify(id: string) {
+  const result = await processFn.call({ id });
+  await notifyFn.call({ message: result.result });
+}
+
+export const basicSubstep = Steps.createFunction(
+  async (context: SimpleStepContext, input: { id: string }) => {
+    const check = await validateFn.call({ id: input.id });
+
+    // Call the substep — its body is spliced in here
+    await processAndNotify(input.id);
+
+    return { done: true };
+  },
+);
+` }] },
+
+  'substep-trycatch': { description: 'Substep with try/catch for saga-style rollback on failure.', services: ['Lambda'], files: [{ name: 'workflow.ts', content: `import { Steps, SimpleStepContext, StepException } from './runtime/index';
+import { Lambda } from './runtime/services/Lambda';
+
+// Substep with Try/Catch — Saga Rollback
+// Each substep handles its own error recovery.
+// The compiler generates Catch rules on the enclosed Task states.
+
+const provisionFn = Lambda<
+  { id: string },
+  { instanceId: string }
+>('arn:aws:lambda:us-east-1:123456789:function:Provision');
+
+const configureFn = Lambda<
+  { instanceId: string },
+  { configured: boolean }
+>('arn:aws:lambda:us-east-1:123456789:function:Configure');
+
+const rollbackFn = Lambda<
+  { instanceId: string },
+  void
+>('arn:aws:lambda:us-east-1:123456789:function:Rollback');
+
+// Substep with rollback on failure
+async function provisionWithRollback(id: string) {
+  const instance = await provisionFn.call({ id });
+  try {
+    await configureFn.call({ instanceId: instance.instanceId });
+  } catch (e) {
+    await rollbackFn.call({ instanceId: instance.instanceId });
+    throw new StepException('Configuration failed, rolled back');
+  }
+  return instance;
+}
+
+export const sagaWorkflow = Steps.createFunction(
+  async (context: SimpleStepContext, input: { id: string }) => {
+    const instance = await provisionWithRollback(input.id);
+    return { instanceId: instance.instanceId, status: 'ready' };
+  },
+);
+` }] },
+
+  'substep-nested': { description: 'Substeps calling other substeps — inlined transitively into a flat state machine.', services: ['Lambda'], files: [{ name: 'workflow.ts', content: `import { Steps, SimpleStepContext } from './runtime/index';
+import { Lambda } from './runtime/services/Lambda';
+
+// Nested Substeps — Transitive Inlining
+// Substeps can call other substeps. The compiler inlines
+// them bottom-up, producing a flat state machine.
+// No nesting limit — as deep as you need.
+
+const fetchFn = Lambda<
+  { id: string },
+  { data: string }
+>('arn:aws:lambda:us-east-1:123456789:function:Fetch');
+
+const validateFn = Lambda<
+  { data: string },
+  { valid: boolean }
+>('arn:aws:lambda:us-east-1:123456789:function:Validate');
+
+const enrichFn = Lambda<
+  { data: string },
+  { enriched: string }
+>('arn:aws:lambda:us-east-1:123456789:function:Enrich');
+
+const storeFn = Lambda<
+  { enriched: string },
+  void
+>('arn:aws:lambda:us-east-1:123456789:function:Store');
+
+// Inner substep — leaf function
+async function fetchAndValidate(id: string) {
+  const item = await fetchFn.call({ id });
+  await validateFn.call({ data: item.data });
+  return item;
+}
+
+// Outer substep — calls fetchAndValidate
+async function processItem(id: string) {
+  const item = await fetchAndValidate(id);
+  const enriched = await enrichFn.call({ data: item.data });
+  await storeFn.call({ enriched: enriched.enriched });
+}
+
+export const nestedSubsteps = Steps.createFunction(
+  async (context: SimpleStepContext, input: { id: string }) => {
+    // This inlines: fetchFn → validateFn → enrichFn → storeFn
+    await processItem(input.id);
+    return { status: 'complete' };
+  },
+);
+` }] },
+
+  'substep-value': { description: 'Value-returning substeps with ResultPath mapping and property access.', services: ['Lambda'], files: [{ name: 'workflow.ts', content: `import { Steps, SimpleStepContext } from './runtime/index';
+import { Lambda } from './runtime/services/Lambda';
+
+// Value-Returning Substeps
+// Use const x = await mySubstep(arg) to capture the return value.
+// The compiler maps the result to the caller's variable via ResultPath.
+
+const lookupFn = Lambda<
+  { userId: string },
+  { name: string; email: string; tier: string }
+>('arn:aws:lambda:us-east-1:123456789:function:LookupUser');
+
+const sendFn = Lambda<
+  { email: string; subject: string },
+  { messageId: string }
+>('arn:aws:lambda:us-east-1:123456789:function:SendEmail');
+
+// Substep that returns a value
+async function lookupUser(userId: string) {
+  return await lookupFn.call({ userId });
+}
+
+// Substep that uses the return value of another substep
+async function notifyUser(userId: string, subject: string) {
+  const user = await lookupUser(userId);
+  return await sendFn.call({ email: user.email, subject });
+}
+
+export const valueSubstep = Steps.createFunction(
+  async (context: SimpleStepContext, input: { userId: string }) => {
+    // The return value is captured — user.name and result.messageId work
+    const result = await notifyUser(input.userId, 'Welcome!');
+    return { messageId: result.messageId };
+  },
+);
+` }] },
+
+  'substep-destructured': { description: 'Substeps with destructured parameters and default values.', services: ['Lambda'], files: [{ name: 'workflow.ts', content: `import { Steps, SimpleStepContext } from './runtime/index';
+import { Lambda } from './runtime/services/Lambda';
+
+// Destructured & Default Parameters
+// Substeps support object destructuring and default values.
+// The compiler extracts each property from the call-site argument.
+
+const sendFn = Lambda<
+  { userId: string; message: string; priority: number },
+  void
+>('arn:aws:lambda:us-east-1:123456789:function:SendNotification');
+
+const logFn = Lambda<
+  { action: string },
+  void
+>('arn:aws:lambda:us-east-1:123456789:function:AuditLog');
+
+// Destructured parameter — each property binds to the caller's argument
+async function sendNotification(
+  { userId, message }: { userId: string; message: string },
+  priority = 1,
+) {
+  await sendFn.call({ userId, message, priority });
+  await logFn.call({ action: 'notification_sent' });
+}
+
+export const destructuredSubstep = Steps.createFunction(
+  async (context: SimpleStepContext, input: { userId: string }) => {
+    // Destructured params resolve to the object properties
+    // Default value (priority=1) is used as a literal
+    await sendNotification({ userId: input.userId, message: 'Welcome!' });
+    return { done: true };
   },
 );
 ` }] },
@@ -1705,7 +1916,7 @@ export const dynamicLimits = Steps.createFunction(
   async (context: SimpleStepContext, input: { data: string; threshold: number }) => {
     const result = await processFn.call({ data: input.data });
 
-    // ❌ SS502: Ternary with runtime values — ASL has no conditional expression
+    // ✅ Ternary — compiles to Choice + Pass states
     const label = result.count > 5 ? 'large' : 'small';
 
     // ❌ SS502: String() coercion — no ASL equivalent
@@ -1807,38 +2018,36 @@ export const paginationWorkflow = Steps.createFunction(
 );
 ` }] },
 
-  'limit-helper-constraints': { description: 'SS804: Destructured, rest, and default parameters are not supported.', services: ['Lambda'], files: [{ name: 'workflow.ts', content: `import { Steps, SimpleStepContext } from './runtime/index';
+  'limit-substep-constraints': { description: 'SS804: Rest parameters are not supported in substeps.', services: ['Lambda'], files: [{ name: 'workflow.ts', content: `import { Steps, SimpleStepContext } from './runtime/index';
 import { Lambda } from './runtime/services/Lambda';
 
-// Helper function parameters must be simple identifiers.
-// Destructuring, rest params, and default values are not
-// supported for inlined helpers — the compiler emits SS804.
+// Substep parameter restrictions:
+//   ✅ Simple identifiers, object destructuring, and default values work.
+//   ❌ Rest parameters (...args) emit SS804.
 //
-// Why? The compiler binds each parameter symbol to the caller's
-// argument expression. Destructuring creates multiple symbols
-// from one argument, which the v1 binder can't handle.
+// Workaround for rest params: pass an explicit array parameter instead.
 
 const notifyFn = Lambda<
   { userId: string; message: string },
   { sent: boolean }
 >('arn:aws:lambda:us-east-1:123456789:function:Notify');
 
-// ✅ Simple identifier parameters — works
+// ✅ Simple identifier parameters
 async function sendSimple(userId: string, message: string) {
   await notifyFn.call({ userId, message });
 }
 
-// ❌ SS804: Destructured parameter
+// ✅ Destructured parameter — now supported
 async function sendDestructured({ userId, message }: { userId: string; message: string }) {
   await notifyFn.call({ userId, message });
 }
 
-// ❌ SS804: Default parameter value
+// ✅ Default parameter value — now supported
 async function sendWithDefault(userId: string, message: string = 'Hello') {
   await notifyFn.call({ userId, message });
 }
 
-// ❌ SS804: Rest parameter
+// ❌ SS804: Rest parameter — not supported
 async function sendToMany(...userIds: string[]) {
   for (const userId of userIds) {
     await notifyFn.call({ userId, message: 'bulk' });
@@ -1847,12 +2056,11 @@ async function sendToMany(...userIds: string[]) {
 
 export const helperParams = Steps.createFunction(
   async (context: SimpleStepContext, input: { userId: string }) => {
-    // ✅ Works
     await sendSimple(input.userId, 'Welcome!');
-
-    // ❌ Each of these triggers SS804
     await sendDestructured({ userId: input.userId, message: 'hi' });
     await sendWithDefault(input.userId);
+
+    // ❌ This triggers SS804
     await sendToMany(input.userId);
 
     return { status: 'done' };
@@ -1920,15 +2128,12 @@ export const variableCapture = Steps.createFunction(
 );
 ` }] },
 
-  'limit-helper-nesting': { description: 'Helpers cannot call other helpers and must be awaited.', services: ['Lambda'], files: [{ name: 'workflow.ts', content: `import { Steps, SimpleStepContext } from './runtime/index';
+  'limit-substep-await': { description: 'Substeps with service calls must be awaited (SS805).', services: ['Lambda'], files: [{ name: 'workflow.ts', content: `import { Steps, SimpleStepContext } from './runtime/index';
 import { Lambda } from './runtime/services/Lambda';
 
-// Helper function inlining has a "v1" restriction: each helper
-// is inlined independently. A helper CANNOT call another helper
-// because the compiler only inlines one level deep.
-//
-// Additionally, helpers with service calls MUST be awaited —
-// a bare call like \`doWork(id)\` without await is an error.
+// Substeps can call other substeps — the compiler inlines them
+// transitively (bottom-up). The only requirement is that
+// substeps with service calls MUST be awaited.
 
 const validateFn = Lambda<
   { id: string },
@@ -1945,35 +2150,31 @@ const notifyFn = Lambda<
   { sent: boolean }
 >('arn:aws:lambda:us-east-1:123456789:function:Notify');
 
-// ✅ Simple helper — inlines correctly
+// ✅ Simple substep — inlines correctly
 async function validate(id: string) {
   await validateFn.call({ id });
 }
 
-// ✅ Another simple helper — also inlines correctly
+// ✅ Another simple substep — also inlines correctly
 async function enrich(id: string) {
   await enrichFn.call({ id });
 }
 
-// ❌ SS803: Calls validate() which is another user-defined helper
+// ✅ Nested substep — calls validate() and enrich(), all inlined transitively
 async function validateAndEnrich(id: string) {
   await validate(id);
   await enrich(id);
 }
 
-// ❌ SS805: Helper with service calls must be awaited
+// ❌ SS805: Substep with service calls must be awaited
 // (uncomment the bare call in the workflow below to see the error)
 
 export const helperNesting = Steps.createFunction(
   async (context: SimpleStepContext, input: { id: string }) => {
-    // ✅ These work — direct calls to simple helpers
-    await validate(input.id);
-    await enrich(input.id);
-
-    // ❌ SS803: This triggers the nested-helper error
+    // ✅ Nested substep call — inlines validate + enrich transitively
     await validateAndEnrich(input.id);
 
-    // ❌ SS805: Missing await — helper contains service calls
+    // ❌ SS805: Missing await — substep contains service calls
     // validate(input.id);
 
     await notifyFn.call({ id: input.id, message: 'done' });
@@ -2009,14 +2210,8 @@ export const workarounds = Steps.createFunction(
       await computeFn.call({ a: input.x, b: 0, op: item });
     }
 
-    // LIMITATION: No ternary expressions at runtime
-    // WORKAROUND: Use if/else (compiles to Choice state)
-    let status: string;
-    if (product.result > 100) {
-      status = 'high';
-    } else {
-      status = 'low';
-    }
+    // Ternary expressions now compile to Choice + Pass states
+    const status = product.result > 100 ? 'high' : 'low';
 
     // LIMITATION: No string concatenation with + on runtime values
     // WORKAROUND: Use template literals (compile to States.Format)

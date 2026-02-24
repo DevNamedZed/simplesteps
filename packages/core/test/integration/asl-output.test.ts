@@ -496,6 +496,14 @@ describe('ASL output: all fixtures compile cleanly', () => {
     'helper-basic.ts',
     'helper-trycatch.ts',
     'helper-multiple.ts',
+    'helper-nested.ts',
+    'helper-nested-deep.ts',
+    'helper-nested-value.ts',
+    'helper-destructured.ts',
+    'helper-destructured-rename.ts',
+    'helper-default-params.ts',
+    'ternary-literal.ts',
+    'ternary-jsonpath.ts',
     'cdk-order-indirect-arn.ts',
   ];
 
@@ -887,7 +895,7 @@ describe('ASL output: showcase examples compile', () => {
     '23-s3.ts',
     '24-secrets-manager.ts',
     '25-ssm.ts',
-    '30-helper-functions.ts',
+    '30-substeps.ts',
   ];
 
   for (const showcase of showcases) {
@@ -1952,6 +1960,274 @@ describe('ASL output: helper-multiple (multiple helpers inlined)', () => {
 
     // Should reach an End state
     expect(current?.End).toBe(true);
+  });
+});
+
+// ===========================================================================
+// Nested helper function inlining
+//
+// Tests that helpers calling other helpers are correctly inlined transitively.
+// ===========================================================================
+
+describe('ASL output: helper-nested (nested helper inlining)', () => {
+  let asl: any;
+  beforeAll(() => { asl = compileToJson('helper-nested.ts'); });
+
+  it('compiles without errors', () => {
+    const filePath = path.join(FIXTURES_DIR, 'helper-nested.ts');
+    const result = compile({ sourceFiles: [filePath] });
+    expect(result.errors).toHaveLength(0);
+    expect(result.stateMachines.length).toBe(1);
+  });
+
+  it('produces Task states for all three services (innerHelper + outerHelper + direct)', () => {
+    const tasks = getStatesByType(asl, 'Task');
+    expect(tasks.length).toBe(3);
+
+    const resources = tasks.map(([, s]) => (s as any).Resource);
+    expect(resources).toContain('arn:aws:lambda:us-east-1:123:function:SvcA');
+    expect(resources).toContain('arn:aws:lambda:us-east-1:123:function:SvcB');
+    expect(resources).toContain('arn:aws:lambda:us-east-1:123:function:SvcC');
+  });
+
+  it('has a flat state machine (no nested state machines)', () => {
+    const stateNames = getStateNames(asl);
+    for (const name of stateNames) {
+      const state = asl.States[name];
+      expect(state.Type).not.toBe('Map');
+      expect(state.Type).not.toBe('Parallel');
+    }
+  });
+});
+
+describe('ASL output: helper-nested-deep (3-level nested helper inlining)', () => {
+  let asl: any;
+  beforeAll(() => { asl = compileToJson('helper-nested-deep.ts'); });
+
+  it('compiles without errors', () => {
+    const filePath = path.join(FIXTURES_DIR, 'helper-nested-deep.ts');
+    const result = compile({ sourceFiles: [filePath] });
+    expect(result.errors).toHaveLength(0);
+    expect(result.stateMachines.length).toBe(1);
+  });
+
+  it('produces Task states for all three services (levelC + levelB + levelA)', () => {
+    const tasks = getStatesByType(asl, 'Task');
+    expect(tasks.length).toBe(3);
+
+    const resources = tasks.map(([, s]) => (s as any).Resource);
+    expect(resources).toContain('arn:aws:lambda:us-east-1:123:function:Svc1');
+    expect(resources).toContain('arn:aws:lambda:us-east-1:123:function:Svc2');
+    expect(resources).toContain('arn:aws:lambda:us-east-1:123:function:Svc3');
+  });
+
+  it('chains all tasks in sequence through the 3-level nesting', () => {
+    let current = asl.States[asl.StartAt];
+    let visited = 0;
+
+    while (current && !current.End) {
+      visited++;
+      if (current.Next) {
+        current = asl.States[current.Next];
+      } else {
+        break;
+      }
+      if (visited > 30) break; // safety
+    }
+
+    expect(current?.End).toBe(true);
+  });
+});
+
+describe('ASL output: helper-nested-value (nested helper with value returns)', () => {
+  let asl: any;
+  beforeAll(() => { asl = compileToJson('helper-nested-value.ts'); });
+
+  it('compiles without errors', () => {
+    const filePath = path.join(FIXTURES_DIR, 'helper-nested-value.ts');
+    const result = compile({ sourceFiles: [filePath] });
+    expect(result.errors).toHaveLength(0);
+    expect(result.stateMachines.length).toBe(1);
+  });
+
+  it('produces Task states for both services (FetchUser + EnrichUser)', () => {
+    const tasks = getStatesByType(asl, 'Task');
+    expect(tasks.length).toBe(2);
+
+    const resources = tasks.map(([, s]) => (s as any).Resource);
+    expect(resources).toContain('arn:aws:lambda:us-east-1:123:function:FetchUser');
+    expect(resources).toContain('arn:aws:lambda:us-east-1:123:function:EnrichUser');
+  });
+
+  it('ends with a Pass state returning the enriched result', () => {
+    const passes = getStatesByType(asl, 'Pass');
+    const endPass = passes.find(([, s]) => (s as any).End === true);
+    expect(endPass).toBeDefined();
+  });
+});
+
+// ===========================================================================
+// Destructured and default parameter substep inlining
+// ===========================================================================
+
+describe('ASL output: helper-destructured (substep with destructured parameter)', () => {
+  let asl: any;
+  beforeAll(() => { asl = compileToJson('helper-destructured.ts'); });
+
+  it('compiles without errors', () => {
+    const filePath = path.join(FIXTURES_DIR, 'helper-destructured.ts');
+    const result = compile({ sourceFiles: [filePath] });
+    expect(result.errors).toHaveLength(0);
+    expect(result.stateMachines.length).toBe(1);
+  });
+
+  it('produces Task states for both services (SendEmail + LogAction)', () => {
+    const tasks = getStatesByType(asl, 'Task');
+    expect(tasks.length).toBe(2);
+    const resources = tasks.map(([, s]) => (s as any).Resource);
+    expect(resources).toContain('arn:aws:lambda:us-east-1:123:function:SendEmail');
+    expect(resources).toContain('arn:aws:lambda:us-east-1:123:function:LogAction');
+  });
+
+  it('resolves destructured properties to correct JSONPaths in Parameters', () => {
+    const tasks = getStatesByType(asl, 'Task');
+    const sendEmail = tasks.find(([, s]) => (s as any).Resource?.includes('SendEmail'));
+    expect(sendEmail).toBeDefined();
+    const params = (sendEmail![1] as any).Parameters;
+    // Destructured { userId, message } from the call-site argument should resolve
+    expect(params).toBeDefined();
+  });
+});
+
+describe('ASL output: helper-destructured-rename (substep with renamed destructuring)', () => {
+  let asl: any;
+  beforeAll(() => { asl = compileToJson('helper-destructured-rename.ts'); });
+
+  it('compiles without errors', () => {
+    const filePath = path.join(FIXTURES_DIR, 'helper-destructured-rename.ts');
+    const result = compile({ sourceFiles: [filePath] });
+    expect(result.errors).toHaveLength(0);
+    expect(result.stateMachines.length).toBe(1);
+  });
+
+  it('produces Task state for Process service', () => {
+    const tasks = getStatesByType(asl, 'Task');
+    expect(tasks.length).toBe(1);
+    const [, state] = tasks[0];
+    expect((state as any).Resource).toBe('arn:aws:lambda:us-east-1:123:function:Process');
+  });
+});
+
+describe('ASL output: helper-default-params (substep with default parameter)', () => {
+  let asl: any;
+  beforeAll(() => { asl = compileToJson('helper-default-params.ts'); });
+
+  it('compiles without errors', () => {
+    const filePath = path.join(FIXTURES_DIR, 'helper-default-params.ts');
+    const result = compile({ sourceFiles: [filePath] });
+    expect(result.errors).toHaveLength(0);
+    expect(result.stateMachines.length).toBe(1);
+  });
+
+  it('produces Task states for both services (FetchData + Notify)', () => {
+    const tasks = getStatesByType(asl, 'Task');
+    expect(tasks.length).toBe(2);
+    const resources = tasks.map(([, s]) => (s as any).Resource);
+    expect(resources).toContain('arn:aws:lambda:us-east-1:123:function:FetchData');
+    expect(resources).toContain('arn:aws:lambda:us-east-1:123:function:Notify');
+  });
+
+  it('resolves default parameter (retries=3) as literal in Parameters', () => {
+    const tasks = getStatesByType(asl, 'Task');
+    const fetchData = tasks.find(([, s]) => (s as any).Resource?.includes('FetchData'));
+    expect(fetchData).toBeDefined();
+    const params = (fetchData![1] as any).Parameters;
+    expect(params).toBeDefined();
+    // The retries parameter should be resolved as literal 3
+    expect(params.retries).toBe(3);
+  });
+});
+
+// ===========================================================================
+// Ternary expression support
+//
+// Tests that verify ternary expressions in variable declarations are
+// correctly desugared into Choice + Pass state patterns.
+// ===========================================================================
+
+describe('ASL output: ternary-literal (ternary with string literal branches)', () => {
+  let asl: any;
+  beforeAll(() => { asl = compileToJson('ternary-literal.ts'); });
+
+  it('compiles without errors', () => {
+    const filePath = path.join(FIXTURES_DIR, 'ternary-literal.ts');
+    const result = compile({ sourceFiles: [filePath] });
+    expect(result.errors).toHaveLength(0);
+    expect(result.stateMachines.length).toBe(1);
+  });
+
+  it('has a Choice state for the ternary condition', () => {
+    const choices = getStatesByType(asl, 'Choice');
+    expect(choices.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('has two Pass states assigning to the ternary variable', () => {
+    const passes = getStatesByType(asl, 'Pass');
+    const assignPasses = passes.filter(([name]) =>
+      name.startsWith('Assign_label'));
+    expect(assignPasses.length).toBe(2);
+
+    // One should have Result: 'large', the other Result: 'small'
+    const results = assignPasses.map(([, s]) => (s as any).Result);
+    expect(results).toContain('large');
+    expect(results).toContain('small');
+  });
+
+  it('Pass states have ResultPath set to $.label', () => {
+    const passes = getStatesByType(asl, 'Pass');
+    const assignPasses = passes.filter(([name]) =>
+      name.startsWith('Assign_label'));
+    for (const [, state] of assignPasses) {
+      expect((state as any).ResultPath).toBe('$.label');
+    }
+  });
+
+  it('has a Task state for Process service', () => {
+    const tasks = getStatesByType(asl, 'Task');
+    expect(tasks.length).toBe(1);
+    expect((tasks[0][1] as any).Resource).toBe('arn:aws:lambda:us-east-1:123:function:Process');
+  });
+});
+
+describe('ASL output: ternary-jsonpath (ternary with JSONPath branches)', () => {
+  let asl: any;
+  beforeAll(() => { asl = compileToJson('ternary-jsonpath.ts'); });
+
+  it('compiles without errors', () => {
+    const filePath = path.join(FIXTURES_DIR, 'ternary-jsonpath.ts');
+    const result = compile({ sourceFiles: [filePath] });
+    expect(result.errors).toHaveLength(0);
+    expect(result.stateMachines.length).toBe(1);
+  });
+
+  it('has a Choice state for the ternary condition', () => {
+    const choices = getStatesByType(asl, 'Choice');
+    expect(choices.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('has two Pass states for the ternary branches', () => {
+    const passes = getStatesByType(asl, 'Pass');
+    const assignPasses = passes.filter(([name]) =>
+      name.startsWith('Assign_name'));
+    expect(assignPasses.length).toBe(2);
+  });
+
+  it('has Task states for Lookup and Greet services', () => {
+    const tasks = getStatesByType(asl, 'Task');
+    expect(tasks.length).toBe(2);
+    const resources = tasks.map(([, s]) => (s as any).Resource);
+    expect(resources).toContain('arn:aws:lambda:us-east-1:123:function:Lookup');
+    expect(resources).toContain('arn:aws:lambda:us-east-1:123:function:Greet');
   });
 });
 

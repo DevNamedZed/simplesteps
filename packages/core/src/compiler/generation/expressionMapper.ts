@@ -230,6 +230,7 @@ function buildChoiceRuleFromBinary(
   // Ensure we have a variable on one side and a value on the other
   let variable: string | undefined;
   let comparand: { kind: 'literal'; value: unknown } | { kind: 'jsonpath'; path: string } | undefined;
+  let flipped = false;
 
   if (left.kind === 'jsonpath' && (right.kind === 'literal' || right.kind === 'jsonpath')) {
     variable = left.path;
@@ -238,8 +239,7 @@ function buildChoiceRuleFromBinary(
     // Flip: literal op variable → variable reverseOp literal
     variable = right.path;
     comparand = left as any;
-    // Note: for == and !=, flipping doesn't change the operator
-    // For <, >, <=, >= we would need to reverse, but for now keep simple
+    flipped = true;
   }
 
   if (!variable || !comparand) {
@@ -264,8 +264,11 @@ function buildChoiceRuleFromBinary(
   }
 
   // Numeric comparisons: <, >, <=, >=
+  // When operands were flipped (e.g. `5 < x` → variable=x, comparand=5),
+  // reverse the operator: < becomes >, <= becomes >=, etc.
   if (comparand.kind === 'literal' && typeof comparand.value === 'number') {
-    switch (op) {
+    const effectiveOp = flipped ? flipRelationalOp(op) : op;
+    switch (effectiveOp) {
       case ts.SyntaxKind.LessThanToken:
         return { Variable: variable, NumericLessThan: comparand.value, Next: nextState } as ComparisonRule;
       case ts.SyntaxKind.GreaterThanToken:
@@ -284,6 +287,20 @@ function buildChoiceRuleFromBinary(
 function stripNext(rule: ChoiceRule): ChoiceRule {
   const { Next, ...rest } = rule as any;
   return rest as ChoiceRule;
+}
+
+/**
+ * Reverse a relational operator for when operands are flipped.
+ * `5 < x` becomes `x > 5`, so LessThan becomes GreaterThan, etc.
+ */
+function flipRelationalOp(op: ts.SyntaxKind): ts.SyntaxKind {
+  switch (op) {
+    case ts.SyntaxKind.LessThanToken: return ts.SyntaxKind.GreaterThanToken;
+    case ts.SyntaxKind.GreaterThanToken: return ts.SyntaxKind.LessThanToken;
+    case ts.SyntaxKind.LessThanEqualsToken: return ts.SyntaxKind.GreaterThanEqualsToken;
+    case ts.SyntaxKind.GreaterThanEqualsToken: return ts.SyntaxKind.LessThanEqualsToken;
+    default: return op;
+  }
 }
 
 function buildEqualityComparison(

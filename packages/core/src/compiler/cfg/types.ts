@@ -79,6 +79,16 @@ export interface ParallelTerminator {
   readonly exitBlock: string;
 }
 
+export interface TernaryAssignTerminator {
+  readonly kind: 'ternaryAssign';
+  readonly condition: ts.Expression;
+  readonly variableName: string;
+  readonly variableSymbol: ts.Symbol;
+  readonly thenExpression: ts.Expression;
+  readonly elseExpression: ts.Expression;
+  readonly continuation: string;
+}
+
 export type Terminator =
   | FallTerminator
   | BranchTerminator
@@ -87,6 +97,7 @@ export type Terminator =
   | TryCatchTerminator
   | MapStateTerminator
   | ParallelTerminator
+  | TernaryAssignTerminator
   | ReturnTerminator
   | ThrowTerminator
   | BreakTerminator

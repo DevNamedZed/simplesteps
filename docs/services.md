@@ -228,4 +228,3 @@ interface RetryPolicy {
 }
 ```
 
-For the full service binding specification, see [`spec/services.md`](../spec/services.md).

@@ -136,4 +136,3 @@ try {
 }
 ```
 
-For the full specification, see [`spec/error-handling.md`](../spec/error-handling.md).

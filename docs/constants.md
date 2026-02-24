@@ -87,7 +87,7 @@ export const workflow = Steps.createFunction(
 - **`let` and `var` declarations** -- only `const` is folded
 - **Runtime values** -- function parameters, service call results, `context.*`
 - **String methods** -- `'hello'.toUpperCase()` is not folded
-- **User-defined functions** -- `myHelper(42)` is not folded
+- **User-defined functions** -- `myFunction(42)` is not folded
 - **Non-Math pure functions** -- only `Math.floor/ceil/round/abs/min/max/pow` are supported
 - **Constants declared inside `Steps.createFunction()`** -- only module-level constants are folded
 

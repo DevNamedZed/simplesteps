@@ -353,7 +353,7 @@ export class WholeProgramAnalyzer {
     const resolved: string[] = [];
     for (const part of parts) {
       if (part === '.') continue;
-      if (part === '..') { resolved.pop(); continue; }
+      if (part === '..') { if (resolved.length > 0) resolved.pop(); continue; }
       resolved.push(part);
     }
     const base = resolved.join('/');

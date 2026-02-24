@@ -344,6 +344,17 @@ export function resolveExpression(
     return resolveBinaryExpression(context, expr, variables);
   }
 
+  // Conditional (ternary): cond ? a : b
+  // Only handles compile-time constant conditions here.
+  // Runtime ternaries are handled by the CFG ternaryAssign terminator.
+  if (ts.isConditionalExpression(expr)) {
+    const cond = resolveExpression(context, expr.condition, variables);
+    if (cond.kind === 'literal' && cond.value !== undefined) {
+      return resolveExpression(context, cond.value ? expr.whenTrue : expr.whenFalse, variables);
+    }
+    return { kind: 'unknown' };
+  }
+
   return { kind: 'unknown' };
 }
 
@@ -747,6 +758,14 @@ function resolveBinaryExpression(
     return { kind: 'intrinsic', path: `States.Format('{}{}', ${leftStr}, ${rightStr})` };
   }
 
+  // Use TypeScript type checker to detect string operands (e.g. firstName + lastName)
+  const leftType = context.checker.getTypeAtLocation(expr.left);
+  const rightType = context.checker.getTypeAtLocation(expr.right);
+  const isStringType = (t: ts.Type) => !!(t.flags & (ts.TypeFlags.String | ts.TypeFlags.StringLiteral));
+  if (isStringType(leftType) || isStringType(rightType)) {
+    return { kind: 'intrinsic', path: `States.Format('{}{}', ${leftStr}, ${rightStr})` };
+  }
+
   // Otherwise use MathAdd (numbers, jsonpaths, intrinsics)
   return { kind: 'intrinsic', path: `States.MathAdd(${leftStr}, ${rightStr})` };
 }
@@ -871,6 +890,15 @@ function tryFoldConstant(
     }
   }
 
+  // Conditional (ternary): cond ? a : b — fold if condition is constant
+  if (ts.isConditionalExpression(expr)) {
+    const cond = tryFoldConstant(expr.condition, builder);
+    if (cond === undefined) return undefined;
+    return cond
+      ? tryFoldConstant(expr.whenTrue, builder)
+      : tryFoldConstant(expr.whenFalse, builder);
+  }
+
   return undefined;
 }
 
@@ -882,26 +910,32 @@ function foldBinaryLiterals(
   right: unknown,
   op: ts.SyntaxKind,
 ): unknown | undefined {
+  let result: unknown;
   switch (op) {
     case ts.SyntaxKind.PlusToken:
-      if (typeof left === 'number' && typeof right === 'number') return left + right;
+      if (typeof left === 'number' && typeof right === 'number') { result = left + right; break; }
       if (typeof left === 'string' || typeof right === 'string') return String(left) + String(right);
       return undefined;
     case ts.SyntaxKind.MinusToken:
-      if (typeof left === 'number' && typeof right === 'number') return left - right;
+      if (typeof left === 'number' && typeof right === 'number') { result = left - right; break; }
       return undefined;
     case ts.SyntaxKind.AsteriskToken:
-      if (typeof left === 'number' && typeof right === 'number') return left * right;
+      if (typeof left === 'number' && typeof right === 'number') { result = left * right; break; }
       return undefined;
     case ts.SyntaxKind.SlashToken:
-      if (typeof left === 'number' && typeof right === 'number' && right !== 0) return left / right;
+      if (typeof left === 'number' && typeof right === 'number' && right !== 0) { result = left / right; break; }
       return undefined;
     case ts.SyntaxKind.PercentToken:
-      if (typeof left === 'number' && typeof right === 'number' && right !== 0) return left % right;
+      if (typeof left === 'number' && typeof right === 'number' && right !== 0) { result = left % right; break; }
       return undefined;
     default:
       return undefined;
   }
+  // Guard against NaN/Infinity which cannot be represented in ASL JSON
+  if (typeof result === 'number' && (!Number.isFinite(result) || Number.isNaN(result))) {
+    return undefined;
+  }
+  return result;
 }
 
 // ---------------------------------------------------------------------------

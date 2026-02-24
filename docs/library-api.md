@@ -118,4 +118,4 @@ const obj = AslSerializer.serializeToObject(definition);
 | `@simplesteps/core/runtime/services` | `Lambda`, `DynamoDB`, `S3`, `SQS`, `SNS`, `StepFunction`, `EventBridge`, `SecretsManager`, `SSM` |
 | `@simplesteps/core/asl` | `AslSerializer`, `AslParser`, `AslValidator`, ASL type definitions |
 
-For full type signatures, see [`spec/public-api.md`](../spec/public-api.md).
+Full type signatures are available in the published TypeScript declarations (`@simplesteps/core`).

@@ -388,10 +388,9 @@ function expandBindingPattern(
     for (const element of pattern.elements) {
       if (element.dotDotDotToken) {
         // Rest pattern: const { a, ...rest } = obj
-        // Complex — mark as bottom for now
         const sym = ts.isIdentifier(element.name) ? checker.getSymbolAtLocation(element.name) : undefined;
         if (sym) {
-          env.set(sym, bottom('Rest patterns in destructuring are not yet supported for constant propagation'));
+          env.set(sym, bottom('Object rest patterns in destructuring (e.g., const { a, ...rest } = obj) are not supported for constant propagation. Destructure individual properties instead'));
           env.incrementAssignment(sym);
           if (isExported && ts.isIdentifier(element.name)) {
             env.markExport(element.name.text, sym);

@@ -105,4 +105,3 @@ const id = Steps.uuid();               // States.UUID()
 const id = crypto.randomUUID();        // States.UUID()
 ```
 
-For the full specification with ASL examples, see [`spec/intrinsic-functions.md`](../spec/intrinsic-functions.md).
