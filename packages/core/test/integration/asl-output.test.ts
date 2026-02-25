@@ -1966,6 +1966,63 @@ describe('Error-path diagnostics', () => {
   });
 });
 
+describe('Cross-file imported constants', () => {
+  const fs = require('fs');
+
+  function writeFilesAndCompile(files: Record<string, string>) {
+    const paths: string[] = [];
+    try {
+      for (const [name, source] of Object.entries(files)) {
+        const p = path.join(FIXTURES_DIR, name);
+        fs.writeFileSync(p, source);
+        paths.push(p);
+      }
+      return compile({ sourceFiles: paths });
+    } finally {
+      for (const p of paths) {
+        try { fs.unlinkSync(p); } catch {}
+      }
+    }
+  }
+
+  it('resolves computed constants imported from another file', () => {
+    const result = writeFilesAndCompile({
+      '__test_constants.ts': `
+        export const BASE = 10;
+        export const MULTIPLIER = 3;
+        export const MAX_TIMEOUT = BASE * MULTIPLIER;
+        export const GREETING = \`app-v\${2}\`;
+      `,
+      '__test_cross_file.ts': `
+        import { Steps, SimpleStepContext } from '../../../src/runtime/index';
+        import { Lambda } from '../../../src/runtime/services/Lambda';
+        import { MAX_TIMEOUT, GREETING } from './__test_constants';
+
+        const svc = Lambda<{ timeout: number; tag: string }, { ok: boolean }>(
+          'arn:aws:lambda:us-east-1:123:function:Fn',
+        );
+
+        export const test = Steps.createFunction(
+          async (context: SimpleStepContext, input: { id: string }) => {
+            const result = await svc.call({ timeout: MAX_TIMEOUT, tag: GREETING });
+            return { ok: result.ok };
+          },
+        );
+      `,
+    });
+
+    expect(result.errors).toHaveLength(0);
+    expect(result.stateMachines.length).toBe(1);
+
+    const def = result.stateMachines[0].definition;
+    const states = Object.values(def.States);
+    const taskState = states.find(s => s.Type === 'Task') as any;
+    expect(taskState).toBeDefined();
+    expect(taskState.Parameters['timeout']).toBe(30);
+    expect(taskState.Parameters['tag']).toBe('app-v2');
+  });
+});
+
 // ===========================================================================
 // Void helper function inlining (fixture-based tests)
 //
@@ -2684,5 +2741,317 @@ describe('ASL output: pure function ARN resolution', () => {
     const resources = lambdaTasks.map(([, s]) => s.Resource).sort();
     expect(resources).toContain('arn:aws:lambda:us-east-1:123456789:function:ProcessOrder');
     expect(resources).toContain('arn:aws:lambda:us-east-1:123456789:function:ValidateOrder');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Retry, Timeout, and Heartbeat
+// ---------------------------------------------------------------------------
+
+describe('ASL output: retry-timeout', () => {
+  let asl: any;
+  beforeAll(() => { asl = compileToJson('retry-timeout.ts'); });
+
+  it('Task state has Retry field', () => {
+    const tasks = getStatesByType(asl, 'Task');
+    expect(tasks).toHaveLength(1);
+    const [, task] = tasks[0];
+    expect(task.Retry).toBeDefined();
+    expect(task.Retry).toHaveLength(1);
+  });
+
+  it('Retry rule has correct fields', () => {
+    const [, task] = getStatesByType(asl, 'Task')[0];
+    const retry = task.Retry[0];
+    expect(retry.ErrorEquals).toEqual(['States.ALL']);
+    expect(retry.MaxAttempts).toBe(3);
+    expect(retry.IntervalSeconds).toBe(2);
+    expect(retry.BackoffRate).toBe(2);
+  });
+
+  it('Task state has TimeoutSeconds', () => {
+    const [, task] = getStatesByType(asl, 'Task')[0];
+    expect(task.TimeoutSeconds).toBe(30);
+  });
+
+  it('Task state has HeartbeatSeconds', () => {
+    const [, task] = getStatesByType(asl, 'Task')[0];
+    expect(task.HeartbeatSeconds).toBe(10);
+  });
+});
+
+describe('ASL output: retry-custom-errors', () => {
+  let asl: any;
+  beforeAll(() => { asl = compileToJson('retry-custom-errors.ts'); });
+
+  it('Retry rule uses custom error list', () => {
+    const [, task] = getStatesByType(asl, 'Task')[0];
+    expect(task.Retry).toBeDefined();
+    const retry = task.Retry[0];
+    expect(retry.ErrorEquals).toEqual(['States.Timeout', 'States.TaskFailed']);
+  });
+
+  it('Retry rule has MaxDelaySeconds and JitterStrategy', () => {
+    const [, task] = getStatesByType(asl, 'Task')[0];
+    const retry = task.Retry[0];
+    expect(retry.MaxAttempts).toBe(5);
+    expect(retry.IntervalSeconds).toBe(1);
+    expect(retry.BackoffRate).toBe(1.5);
+    expect(retry.MaxDelaySeconds).toBe(60);
+    expect(retry.JitterStrategy).toBe('FULL');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Map Catch Rules
+// ---------------------------------------------------------------------------
+
+describe('ASL output: map-catch', () => {
+  let asl: any;
+  beforeAll(() => { asl = compileToJson('map-catch.ts'); });
+
+  it('produces a Map state', () => {
+    const maps = getStatesByType(asl, 'Map');
+    expect(maps).toHaveLength(1);
+  });
+
+  it('Map state has Catch rules from surrounding try/catch', () => {
+    const [, map] = getStatesByType(asl, 'Map')[0];
+    expect(map.Catch).toBeDefined();
+    expect(map.Catch.length).toBeGreaterThan(0);
+  });
+
+  it('Catch rule targets error handler state', () => {
+    const [, map] = getStatesByType(asl, 'Map')[0];
+    const catchRule = map.Catch[0];
+    expect(catchRule.ErrorEquals).toContain('States.ALL');
+    expect(catchRule.Next).toBeDefined();
+    expect(catchRule.ResultPath).toBeDefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Steps.map() with MaxConcurrency
+// ---------------------------------------------------------------------------
+
+describe('ASL output: steps-map', () => {
+  let asl: any;
+  beforeAll(() => { asl = compileToJson('steps-map.ts'); });
+
+  it('produces a Map state', () => {
+    const maps = getStatesByType(asl, 'Map');
+    expect(maps).toHaveLength(1);
+  });
+
+  it('Map state has MaxConcurrency', () => {
+    const [, map] = getStatesByType(asl, 'Map')[0];
+    expect(map.MaxConcurrency).toBe(10);
+  });
+
+  it('Map state has ItemsPath', () => {
+    const [, map] = getStatesByType(asl, 'Map')[0];
+    expect(map.ItemsPath).toBe('$.items');
+  });
+
+  it('Map state has ResultPath null (fire-and-forget)', () => {
+    const [, map] = getStatesByType(asl, 'Map')[0];
+    expect(map.ResultPath).toBeNull();
+  });
+
+  it('Map ItemProcessor has Task states', () => {
+    const [, map] = getStatesByType(asl, 'Map')[0];
+    expect(map.ItemProcessor).toBeDefined();
+    const innerTasks = Object.values(map.ItemProcessor.States).filter((s: any) => s.Type === 'Task');
+    expect(innerTasks.length).toBeGreaterThan(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Steps.map with result capture
+// ---------------------------------------------------------------------------
+
+describe('ASL output: steps-map-results', () => {
+  let asl: any;
+  beforeAll(() => { asl = compileToJson('steps-map-results.ts'); });
+
+  it('produces a Map state', () => {
+    const maps = getStatesByType(asl, 'Map');
+    expect(maps).toHaveLength(1);
+  });
+
+  it('Map state stores results via ResultPath', () => {
+    const [, map] = getStatesByType(asl, 'Map')[0];
+    expect(map.ResultPath).toBe('$.results');
+  });
+
+  it('Map ItemProcessor has a Task state', () => {
+    const [, map] = getStatesByType(asl, 'Map')[0];
+    expect(map.ItemProcessor).toBeDefined();
+    const innerTasks = Object.values(map.ItemProcessor.States).filter((s: any) => s.Type === 'Task');
+    expect(innerTasks.length).toBeGreaterThan(0);
+  });
+
+  it('output Pass state references $.results', () => {
+    const passes = getStatesByType(asl, 'Pass');
+    const returnPass = passes.find(([, s]: [string, any]) => s.End === true);
+    expect(returnPass).toBeDefined();
+    const [, passState] = returnPass!;
+    expect(passState.Parameters?.['results.$']).toBe('$.results');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Map with closure (outer variable captured via ItemSelector)
+// ---------------------------------------------------------------------------
+
+describe('ASL output: map-closure', () => {
+  let asl: any;
+  beforeAll(() => { asl = compileToJson('map-closure.ts'); });
+
+  it('produces a Map state', () => {
+    const maps = getStatesByType(asl, 'Map');
+    expect(maps).toHaveLength(1);
+  });
+
+  it('Map state has ItemSelector with captured variable and item', () => {
+    const [, map] = getStatesByType(asl, 'Map')[0];
+    expect(map.ItemSelector).toBeDefined();
+    expect(map.ItemSelector['item.$']).toBe('$$.Map.Item.Value');
+    expect(map.ItemSelector['prefix.$']).toBe('$.prefix');
+  });
+
+  it('inner Task Parameters reference projected paths', () => {
+    const [, map] = getStatesByType(asl, 'Map')[0];
+    const innerTasks = Object.values(map.ItemProcessor.States)
+      .filter((s: any) => s.Type === 'Task') as any[];
+    expect(innerTasks.length).toBeGreaterThan(0);
+    const processTask = innerTasks[0];
+    // item is at $.item (projected via ItemSelector), prefix.value at $.prefix.value
+    expect(processTask.Parameters['item.$']).toBe('$.item');
+    expect(processTask.Parameters['prefix.$']).toBe('$.prefix.value');
+  });
+
+  it('outer Task state stores result at $.prefix', () => {
+    const tasks = getStatesByType(asl, 'Task');
+    const getPrefixTask = tasks.find(([, s]: [string, any]) =>
+      s.Resource?.includes('GetPrefix'));
+    expect(getPrefixTask).toBeDefined();
+    expect(getPrefixTask![1].ResultPath).toBe('$.prefix');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Parallel with multi-step substep branches
+// ---------------------------------------------------------------------------
+
+describe('ASL output: parallel-substeps', () => {
+  let asl: any;
+  beforeAll(() => { asl = compileToJson('parallel-substeps.ts'); });
+
+  it('produces a Parallel state', () => {
+    const parallels = getStatesByType(asl, 'Parallel');
+    expect(parallels).toHaveLength(1);
+  });
+
+  it('Parallel has 2 branches', () => {
+    const [, p] = getStatesByType(asl, 'Parallel')[0];
+    expect(p.Branches).toHaveLength(2);
+  });
+
+  it('branches have multiple Task states (multi-step)', () => {
+    const [, p] = getStatesByType(asl, 'Parallel')[0];
+    for (const branch of p.Branches) {
+      const tasks = Object.values(branch.States).filter((s: any) => s.Type === 'Task');
+      expect(tasks.length).toBeGreaterThanOrEqual(2);
+    }
+  });
+
+  it('ResultSelector maps array positions to variable names', () => {
+    const [, p] = getStatesByType(asl, 'Parallel')[0];
+    expect(p.ResultSelector).toBeDefined();
+    expect(p.ResultSelector['orderResult.$']).toBe('$[0]');
+    expect(p.ResultSelector['paymentResult.$']).toBe('$[1]');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Deferred-await: sequential deferred awaits → Parallel state
+// ---------------------------------------------------------------------------
+
+describe('ASL output: deferred-parallel', () => {
+  let asl: any;
+  beforeAll(() => { asl = compileToJson('deferred-parallel.ts'); });
+
+  it('produces a Parallel state', () => {
+    const parallels = getStatesByType(asl, 'Parallel');
+    expect(parallels).toHaveLength(1);
+  });
+
+  it('Parallel has 2 branches', () => {
+    const [, p] = getStatesByType(asl, 'Parallel')[0];
+    expect(p.Branches).toHaveLength(2);
+  });
+
+  it('each branch has a single Task', () => {
+    const [, p] = getStatesByType(asl, 'Parallel')[0];
+    for (const branch of p.Branches) {
+      const tasks = Object.values(branch.States).filter((s: any) => s.Type === 'Task');
+      expect(tasks).toHaveLength(1);
+    }
+  });
+
+  it('ResultSelector maps result variables from await declarations', () => {
+    const [, p] = getStatesByType(asl, 'Parallel')[0];
+    expect(p.ResultSelector).toBeDefined();
+    expect(p.ResultSelector['order.$']).toBe('$[0]');
+    expect(p.ResultSelector['payment.$']).toBe('$[1]');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Deferred-await: Promise.all with variable references
+// ---------------------------------------------------------------------------
+
+describe('ASL output: deferred-promise-all', () => {
+  let asl: any;
+  beforeAll(() => { asl = compileToJson('deferred-promise-all.ts'); });
+
+  it('produces a Parallel state', () => {
+    const parallels = getStatesByType(asl, 'Parallel');
+    expect(parallels).toHaveLength(1);
+  });
+
+  it('Parallel has 2 branches', () => {
+    const [, p] = getStatesByType(asl, 'Parallel')[0];
+    expect(p.Branches).toHaveLength(2);
+  });
+
+  it('ResultSelector uses destructured names from Promise.all', () => {
+    const [, p] = getStatesByType(asl, 'Parallel')[0];
+    expect(p.ResultSelector).toBeDefined();
+    expect(p.ResultSelector['order.$']).toBe('$[0]');
+    expect(p.ResultSelector['payment.$']).toBe('$[1]');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Deferred-await: single deferred → Task (no Parallel)
+// ---------------------------------------------------------------------------
+
+describe('ASL output: deferred-single', () => {
+  let asl: any;
+  beforeAll(() => { asl = compileToJson('deferred-single.ts'); });
+
+  it('produces a Task state (not Parallel)', () => {
+    const tasks = getStatesByType(asl, 'Task');
+    expect(tasks.length).toBeGreaterThanOrEqual(1);
+    const parallels = getStatesByType(asl, 'Parallel');
+    expect(parallels).toHaveLength(0);
+  });
+
+  it('Task invokes the correct Lambda', () => {
+    const tasks = getStatesByType(asl, 'Task');
+    const [, task] = tasks[0];
+    expect(task.Resource).toContain('ValidateOrder');
   });
 });

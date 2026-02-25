@@ -22,7 +22,6 @@ function createProgram(fixtureFile: string): ts.Program {
     path.join(servicesDir, 'SNS.ts'),
     path.join(servicesDir, 'StepFunction.ts'),
     path.join(servicesDir, 'EventBridge.ts'),
-    path.join(servicesDir, 'index.ts'),
   ];
 
   return ts.createProgram(

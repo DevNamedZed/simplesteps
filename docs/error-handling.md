@@ -83,6 +83,33 @@ const result = await api.call(input, {
 });
 ```
 
+## Timeouts
+
+Set execution time limits and heartbeat intervals:
+
+```typescript
+const result = await longRunningTask.call(input, {
+  timeoutSeconds: 300,       // Fail with States.Timeout after 5 minutes
+  heartbeatSeconds: 30,      // Fail with States.HeartbeatTimeout if no heartbeat for 30s
+});
+```
+
+Combine with retry and try/catch for resilient long-running tasks:
+
+```typescript
+try {
+  const result = await longTask.call(input, {
+    timeoutSeconds: 600,
+    heartbeatSeconds: 60,
+    retry: { maxAttempts: 2, intervalSeconds: 10 },
+  });
+} catch (e) {
+  if (e instanceof TimeoutError) {
+    await alertService.call({ message: 'Task timed out' });
+  }
+}
+```
+
 ## Custom Errors
 
 Define custom errors by extending `StepException`:

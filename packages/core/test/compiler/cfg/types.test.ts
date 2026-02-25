@@ -80,6 +80,8 @@ describe('CFG types', () => {
       const t: MapStateTerminator = {
         kind: 'mapState',
         expression: {} as ts.ForOfStatement,
+        itemsExpression: {} as ts.Expression,
+        iterVarName: 'item',
         bodyBlock: 'body_0',
         exitBlock: 'exit_0',
         collectResults: false,

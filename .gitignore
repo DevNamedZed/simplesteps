@@ -16,6 +16,9 @@ coverage/
 # example output
 examples/showcase/output/
 
+# codegen vendored models
+tools/codegen/models/
+
 # logs
 npm-debug.log*
 yarn-debug.log*

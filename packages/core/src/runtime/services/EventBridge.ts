@@ -1,3 +1,4 @@
+// @generated — DO NOT EDIT. Run `npx tsx tools/codegen/generate.ts` to regenerate.
 import type { RetryPolicy } from './types';
 
 const BINDING_ERROR =
@@ -13,6 +14,8 @@ export interface EventBridgeEvent {
 /** Options for EventBridge operations. */
 export interface EventBridgeOptions {
   retry?: RetryPolicy;
+  timeoutSeconds?: number;
+  heartbeatSeconds?: number;
 }
 
 /** EventBridge binding for the SimpleSteps compiler. */

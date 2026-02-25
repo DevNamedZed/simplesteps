@@ -1,16 +1,19 @@
+// @generated — DO NOT EDIT. Run `npx tsx tools/codegen/generate.ts` to regenerate.
 import type { RetryPolicy } from './types';
 
 const BINDING_ERROR =
   'SimpleSteps service bindings cannot be called directly. They exist only for the compiler.';
 
-/** Options for Lambda invocations. */
+/** Options for Lambda operations. */
 export interface LambdaOptions {
   retry?: RetryPolicy;
+  timeoutSeconds?: number;
+  heartbeatSeconds?: number;
 }
 
 /** A callable Lambda function instance. */
-export interface LambdaInstance<TInput, TOutput> {
-  (input: TInput): Promise<TOutput>;
+export interface LambdaInstance<TInput = any, TOutput = any> {
+  (input: TInput, options?: LambdaOptions): Promise<TOutput>;
   call(input: TInput, options?: LambdaOptions): Promise<TOutput>;
   callAsync(input: TInput, options?: LambdaOptions): Promise<void>;
   callWithCallback<TResult = any>(input: TInput, options?: LambdaOptions): Promise<TResult>;

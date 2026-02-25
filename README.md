@@ -136,12 +136,14 @@ npx simplesteps compile workflow.ts -o output/
 | `if/else`, `switch/case` | Choice state |
 | `while`, `do...while` | Choice + back-edge loop |
 | `for (const item of array)` | Map state (parallel) |
+| `await Steps.map(items, cb, opts?)` | Map state (results, closures, MaxConcurrency) |
 | `await Promise.all([...])` | Parallel state |
+| Deferred-await (`const p = call(); await p`) | Parallel state (auto-batched) |
 | `await Steps.delay({ seconds: 30 })` | Wait state |
 | `throw new Error(msg)` | Fail state |
 | `return value` | Succeed / End state |
 | `try { ... } catch (e) { ... }` | Catch rules |
-| `.call(input, { retry: { ... } })` | Retry rules |
+| `.call(input, { retry, timeoutSeconds, heartbeatSeconds })` | Retry / Timeout / Heartbeat |
 | `` `Hello ${name}` `` | `States.Format` |
 | `a + b` (numbers) | `States.MathAdd` |
 | `str.split(',')` | `States.StringSplit` |
@@ -153,9 +155,9 @@ npx simplesteps compile workflow.ts -o output/
 - **Whole-program data flow analysis** with constant propagation lattice across modules
 - **Cross-file import resolution** with demand-driven analysis and cycle detection
 - **Pure function inlining** for compile-time constant derivation
-- **10 AWS service bindings**: Lambda, DynamoDB, SQS, SNS, EventBridge, S3, Secrets Manager, SSM, ECS, Bedrock, Glue, CodeBuild, Athena, Batch + `Steps.awsSdk()` for direct SDK integration
+- **15 AWS service bindings**: Lambda, DynamoDB, SQS, SNS, EventBridge, S3, Secrets Manager, SSM, ECS, Bedrock, Glue, CodeBuild, Athena, Batch, StepFunction + `Steps.awsSdk()` for direct SDK integration
 - **CDK token propagation** through CloudFormation intrinsics (`Fn::GetAtt`, `Ref`)
-- **Helper function inlining** for reusable workflow fragments
+- **Substep inlining** for reusable workflow fragments
 - **50+ diagnostic codes** with root-cause attribution and poisoned-value chain tracking
 
 ## Documentation
@@ -177,7 +179,7 @@ npx simplesteps compile workflow.ts -o output/
 ## Examples
 
 - [Starter projects](examples/starters/) — CLI, library API, and CDK templates
-- [Showcase](examples/showcase/) — 29 examples covering every language feature
+- [Showcase](examples/showcase/) — 30+ examples covering every language feature
 
 ## License
 

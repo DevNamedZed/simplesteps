@@ -40,6 +40,7 @@ export class ErrorCodes {
     static readonly ContinueOutsideLoop = error('SS401', 'cfg');
     static readonly SwitchFallThrough = error('SS410', 'cfg');
     static readonly PromiseAllNotArray = error('SS420', 'cfg');
+    static readonly InvalidMapCall = error('SS430', 'cfg');
   };
 
   // ── Expression mapping (SS5xx) ────────────────────────────────────────

@@ -6,6 +6,7 @@ import type {
   BasicBlock,
   ControlFlowGraph,
   Terminator,
+  ParallelBranch,
 } from './types.js';
 
 // ---------------------------------------------------------------------------
@@ -20,6 +21,7 @@ interface LoopContext {
 class CFGBuilderState {
   private counter = 0;
   readonly blocks = new Map<string, BasicBlock>();
+  readonly deferredCalls = new Map<ts.Symbol, ts.CallExpression>();
 
   newBlockId(label?: string): string {
     const id = label
@@ -78,6 +80,7 @@ export function buildCFG(
     cfg: {
       entry: entryId,
       blocks: state.blocks,
+      ...(state.deferredCalls.size > 0 && { deferredCalls: state.deferredCalls }),
     },
     inlineBindings,
   };
@@ -122,9 +125,25 @@ function processStatements(
 ): string | null {
   const accumulated: ts.Statement[] = [];
 
+  // Pre-scan: detect deferred-await patterns (const x = call(); ... await x)
+  const pendingPromises = findPendingPromises(context, statements);
+
   for (let i = 0; i < statements.length; i++) {
     const stmt = statements[i];
     const remaining = statements.slice(i + 1);
+
+    // --- Skip pending promise declarations (consumed at the await point) ---
+    if (pendingPromises.size > 0 && ts.isVariableStatement(stmt)) {
+      const decl = stmt.declarationList.declarations[0];
+      if (decl && ts.isIdentifier(decl.name)) {
+        const sym = context.checker.getSymbolAtLocation(decl.name);
+        if (sym && pendingPromises.has(sym)) {
+          // Record in deferredCalls for state builder fallback (single-await case)
+          state.deferredCalls.set(sym, pendingPromises.get(sym)!.callExpr);
+          continue;
+        }
+      }
+    }
 
     // --- Return statement ---
     if (ts.isReturnStatement(stmt)) {
@@ -294,15 +313,76 @@ function processStatements(
       return afterSwitch;
     }
 
-    // --- Promise.all → Parallel state ---
+    // --- Steps.map() → Map state with options ---
+    {
+      const stepsMapResult = tryExtractStepsMap(state, context, stmt, accumulated, currentBlockId, remaining, loopStack, inlining);
+      if (stepsMapResult !== undefined) {
+        return stepsMapResult;
+      }
+    }
+
+    // --- Deferred-await batch → Parallel state ---
+    if (pendingPromises.size > 0) {
+      const batchResult = tryBatchDeferredAwaits(
+        state, context, statements, i, accumulated, currentBlockId, loopStack, inlining, pendingPromises,
+      );
+      if (batchResult) {
+        const { exitBlockId, advanceTo } = batchResult;
+        const afterBatch = statements.slice(advanceTo);
+        if (afterBatch.length > 0) {
+          return processStatements(state, context, afterBatch, exitBlockId, loopStack, inlining);
+        }
+        return exitBlockId;
+      }
+    }
+
+    // --- Promise.all (fire-and-forget, ExpressionStatement) → Parallel state ---
+    if (ts.isExpressionStatement(stmt) && ts.isAwaitExpression(stmt.expression)) {
+      const promiseAll = extractPromiseAllFromAwait(context, stmt.expression, pendingPromises);
+      if (promiseAll) {
+        const exitBlockId = state.newBlockId('parallel_exit');
+        const classifiedBranches = classifyParallelBranches(
+          state, context, promiseAll.branches, loopStack, inlining,
+        );
+        state.addBlock(currentBlockId, accumulated, {
+          kind: 'parallel',
+          branches: classifiedBranches,
+          resultBindings: [],
+          resultSymbols: [],
+          exitBlock: exitBlockId,
+        });
+        if (remaining.length > 0) {
+          return processStatements(state, context, remaining, exitBlockId, loopStack, inlining);
+        }
+        return exitBlockId;
+      }
+    }
+
+    // --- Promise.all (with destructuring, VariableStatement) → Parallel state ---
     if (ts.isVariableStatement(stmt)) {
       const promiseAll = extractPromiseAll(context, stmt);
       if (promiseAll) {
         const exitBlockId = state.newBlockId('parallel_exit');
 
+        // Resolve deferred promise references in branches
+        const resolvedBranches = pendingPromises.size > 0
+          ? promiseAll.branches.map(branch => {
+              if (ts.isIdentifier(branch)) {
+                const sym = context.checker.getSymbolAtLocation(branch);
+                if (sym && pendingPromises.has(sym)) return pendingPromises.get(sym)!.callExpr;
+              }
+              return branch;
+            })
+          : promiseAll.branches;
+
+        // Classify each branch: direct expression or substep
+        const classifiedBranches = classifyParallelBranches(
+          state, context, resolvedBranches, loopStack, inlining,
+        );
+
         state.addBlock(currentBlockId, accumulated, {
           kind: 'parallel',
-          branches: promiseAll.branches,
+          branches: classifiedBranches,
           resultBindings: promiseAll.resultBindings,
           resultSymbols: promiseAll.resultSymbols,
           exitBlock: exitBlockId,
@@ -656,10 +736,24 @@ function processForOfStatement(
   // For now, set collectResults = false — full detection is a Stage 6 concern
   const collectResults = false;
 
+  // Extract iteration variable name and symbol
+  let iterVarName = 'item';
+  let iterVarSymbol: ts.Symbol | undefined;
+  if (ts.isVariableDeclarationList(stmt.initializer)) {
+    const decl = stmt.initializer.declarations[0];
+    if (decl && ts.isIdentifier(decl.name)) {
+      iterVarName = decl.name.text;
+      iterVarSymbol = context.checker.getSymbolAtLocation(decl.name);
+    }
+  }
+
   // Finalize current block with mapState terminator
   state.addBlock(currentBlockId, accumulated, {
     kind: 'mapState',
     expression: stmt,
+    itemsExpression: stmt.expression,
+    iterVarName,
+    iterVarSymbol,
     bodyBlock: bodyBlockId,
     exitBlock: exitBlockId,
     collectResults,
@@ -1229,6 +1323,255 @@ function patchBlockTerminator(
 }
 
 // ---------------------------------------------------------------------------
+// Steps.map() detection
+// ---------------------------------------------------------------------------
+
+/**
+ * Detect `await Steps.map(items, callback, options?)` or
+ * `const results = await Steps.map(items, callback, options?)`.
+ *
+ * Returns the exit block ID if matched, undefined if not matched.
+ */
+function tryExtractStepsMap(
+  state: CFGBuilderState,
+  context: CompilerContext,
+  stmt: ts.Statement,
+  accumulated: ts.Statement[],
+  currentBlockId: string,
+  remaining: readonly ts.Statement[],
+  loopStack: readonly LoopContext[],
+  inlining: InliningContext,
+): string | null | undefined {
+  // Pattern 1: const results = await Steps.map(items, cb, opts?)
+  // Pattern 2: await Steps.map(items, cb, opts?)  (fire-and-forget)
+  let callExpr: ts.CallExpression | undefined;
+  let collectResults = false;
+  let resultBindingName: string | undefined;
+  let resultSymbol: ts.Symbol | undefined;
+
+  if (ts.isVariableStatement(stmt)) {
+    const decl = stmt.declarationList.declarations[0];
+    if (decl?.initializer && ts.isAwaitExpression(decl.initializer) &&
+        ts.isCallExpression(decl.initializer.expression)) {
+      const call = decl.initializer.expression;
+      if (isStepsMapCall(call)) {
+        callExpr = call;
+        collectResults = true;
+        if (ts.isIdentifier(decl.name)) {
+          resultBindingName = decl.name.text;
+          resultSymbol = context.checker.getSymbolAtLocation(decl.name);
+        }
+      }
+    }
+  } else if (ts.isExpressionStatement(stmt) && ts.isAwaitExpression(stmt.expression) &&
+             ts.isCallExpression(stmt.expression.expression)) {
+    const call = stmt.expression.expression;
+    if (isStepsMapCall(call)) {
+      callExpr = call;
+      collectResults = false;
+    }
+  }
+
+  if (!callExpr) return undefined;
+
+  // Extract arguments: Steps.map(items, callback, options?)
+  const itemsArg = callExpr.arguments[0];
+  const callbackArg = callExpr.arguments[1];
+  const optionsArg = callExpr.arguments[2];
+
+  if (!itemsArg || !callbackArg) {
+    context.addError(callExpr, 'Steps.map() requires at least 2 arguments: items and callback', ErrorCodes.Cfg.InvalidMapCall.code);
+    return undefined;
+  }
+
+  // Callback must be an arrow function or function expression
+  let callbackBody: ts.Block | undefined;
+  let callbackParam: ts.ParameterDeclaration | undefined;
+
+  if (ts.isArrowFunction(callbackArg) || ts.isFunctionExpression(callbackArg)) {
+    callbackParam = callbackArg.parameters[0];
+    if (ts.isBlock(callbackArg.body)) {
+      callbackBody = callbackArg.body;
+    } else {
+      // Expression body: (item) => expr  →  wrap in { return expr; }
+      // The CFG builder processes statements, so we treat the expression as a single return
+      // For now, only block bodies are supported
+      context.addError(callbackArg, 'Steps.map() callback must have a block body (use { } braces)', ErrorCodes.Cfg.InvalidMapCall.code);
+      return undefined;
+    }
+  } else {
+    context.addError(callbackArg, 'Steps.map() callback must be an arrow function or function expression', ErrorCodes.Cfg.InvalidMapCall.code);
+    return undefined;
+  }
+
+  // Extract maxConcurrency from options
+  let maxConcurrency: number | undefined;
+  if (optionsArg && ts.isObjectLiteralExpression(optionsArg)) {
+    for (const prop of optionsArg.properties) {
+      if (ts.isPropertyAssignment(prop) && ts.isIdentifier(prop.name) &&
+          prop.name.text === 'maxConcurrency' && ts.isNumericLiteral(prop.initializer)) {
+        maxConcurrency = Number(prop.initializer.text);
+      }
+    }
+  }
+
+  // Extract iteration variable name and symbol
+  let iterVarName = 'item';
+  let iterVarSymbol: ts.Symbol | undefined;
+  if (callbackParam && ts.isIdentifier(callbackParam.name)) {
+    iterVarName = callbackParam.name.text;
+    iterVarSymbol = context.checker.getSymbolAtLocation(callbackParam.name);
+  }
+
+  const bodyBlockId = state.newBlockId('map_body');
+  const exitBlockId = state.newBlockId('map_exit');
+
+  // Finalize current block with mapState terminator
+  state.addBlock(currentBlockId, accumulated, {
+    kind: 'mapState',
+    itemsExpression: itemsArg,
+    iterVarName,
+    iterVarSymbol,
+    bodyBlock: bodyBlockId,
+    exitBlock: exitBlockId,
+    collectResults,
+    maxConcurrency,
+    ...(resultBindingName && { resultBindingName }),
+    ...(resultSymbol && { resultSymbol }),
+  });
+
+  // Process the callback body
+  const bodyStatements = Array.from(callbackBody.statements);
+  const bodyExit = processStatements(
+    state, context, bodyStatements, bodyBlockId,
+    [...loopStack, { conditionBlock: bodyBlockId, exitBlock: exitBlockId }],
+    inlining,
+  );
+
+  // Body exit: implicit end of iteration (each iteration is independent in Map)
+  if (bodyExit !== null) {
+    patchBlockTerminator(state, bodyExit, { kind: 'return', expression: undefined });
+  }
+
+  if (remaining.length > 0) {
+    return processStatements(state, context, remaining, exitBlockId, loopStack, inlining);
+  }
+  return exitBlockId;
+}
+
+function isStepsMapCall(call: ts.CallExpression): boolean {
+  if (!ts.isPropertyAccessExpression(call.expression)) return false;
+  const prop = call.expression;
+  return ts.isIdentifier(prop.expression) && prop.expression.text === 'Steps' &&
+         prop.name.text === 'map';
+}
+
+// ---------------------------------------------------------------------------
+// Parallel branch classification
+// ---------------------------------------------------------------------------
+
+/**
+ * Classify Promise.all branches as direct expressions or substep calls.
+ * When a branch is a call to a registered substep, inline the substep body
+ * into a sub-block to produce a multi-state branch.
+ */
+function classifyParallelBranches(
+  state: CFGBuilderState,
+  context: CompilerContext,
+  branches: readonly ts.Expression[],
+  loopStack: readonly LoopContext[],
+  inlining: InliningContext,
+): ParallelBranch[] {
+  const result: ParallelBranch[] = [];
+
+  for (const expr of branches) {
+    // Unwrap await
+    let callExpr: ts.Expression = expr;
+    if (ts.isAwaitExpression(callExpr)) {
+      callExpr = callExpr.expression;
+    }
+
+    // Check if this is a call to a registered substep/helper
+    if (ts.isCallExpression(callExpr) && inlining.helperRegistry) {
+      const calleeSym = context.checker.getSymbolAtLocation(callExpr.expression);
+      if (calleeSym) {
+        const resolvedSym = (calleeSym.flags & ts.SymbolFlags.Alias)
+          ? context.checker.getAliasedSymbol(calleeSym)
+          : calleeSym;
+        const helper = inlining.helperRegistry.get(resolvedSym);
+        if (helper) {
+          // This is a substep call — inline its body into a sub-block
+          const branchBlockId = state.newBlockId(`parallel_branch_${helper.symbol.getName()}`);
+
+          // Record parameter-to-argument bindings
+          if (inlining.inlineBindings) {
+            for (let p = 0; p < helper.parameters.length; p++) {
+              const param = helper.parameters[p];
+              const argExpr = p < callExpr.arguments.length
+                ? callExpr.arguments[p]
+                : param.initializer!;
+
+              if (ts.isIdentifier(param.name)) {
+                const paramSym = context.checker.getSymbolAtLocation(param.name);
+                if (paramSym) {
+                  inlining.inlineBindings.push({ paramSymbol: paramSym, argExpression: argExpr });
+                }
+              } else if (ts.isObjectBindingPattern(param.name)) {
+                for (const element of param.name.elements) {
+                  const elemSym = context.checker.getSymbolAtLocation(element.name);
+                  if (!elemSym) continue;
+                  const propName = element.propertyName
+                    ? (element.propertyName as ts.Identifier).text
+                    : (element.name as ts.Identifier).text;
+
+                  let bindingExpr: ts.Expression | undefined;
+                  if (ts.isObjectLiteralExpression(argExpr)) {
+                    const prop = argExpr.properties.find(p => {
+                      if (ts.isPropertyAssignment(p) && ts.isIdentifier(p.name)) return p.name.text === propName;
+                      if (ts.isShorthandPropertyAssignment(p)) return p.name.text === propName;
+                      return false;
+                    });
+                    if (prop) {
+                      bindingExpr = ts.isPropertyAssignment(prop)
+                        ? prop.initializer
+                        : (prop as ts.ShorthandPropertyAssignment).name;
+                    }
+                  }
+                  if (!bindingExpr) {
+                    bindingExpr = ts.factory.createPropertyAccessExpression(argExpr, propName);
+                  }
+                  inlining.inlineBindings.push({ paramSymbol: elemSym, argExpression: bindingExpr });
+                }
+              }
+            }
+          }
+
+          // Process the helper's body into a sub-graph
+          const bodyStatements = Array.from(helper.body.statements);
+          const bodyExit = processStatements(
+            state, context, bodyStatements, branchBlockId, loopStack,
+            { ...inlining, returnOverride: undefined, returnVarName: undefined, returnVarSymbol: undefined },
+          );
+
+          // Body exit: end of branch (implicit return)
+          if (bodyExit !== null) {
+            patchBlockTerminator(state, bodyExit, { kind: 'return', expression: undefined });
+          }
+
+          result.push({ kind: 'substep', bodyBlock: branchBlockId });
+          continue;
+        }
+      }
+    }
+
+    // Not a substep — direct expression
+    result.push({ kind: 'expression', expression: expr });
+  }
+
+  return result;
+}
+
+// ---------------------------------------------------------------------------
 // Promise.all detection
 // ---------------------------------------------------------------------------
 
@@ -1292,4 +1635,275 @@ function extractPromiseAll(
   }
 
   return { branches, resultBindings, resultSymbols };
+}
+
+/**
+ * Extract Promise.all from a standalone await expression (fire-and-forget):
+ *   await Promise.all([exprA, exprB])
+ * Resolves deferred promise references in branches.
+ */
+function extractPromiseAllFromAwait(
+  context: CompilerContext,
+  awaitExpr: ts.AwaitExpression,
+  pendingPromises: ReadonlyMap<ts.Symbol, PendingPromise>,
+): { branches: ts.Expression[] } | null {
+  const callExpr = awaitExpr.expression;
+  if (!ts.isCallExpression(callExpr)) return null;
+
+  if (!ts.isPropertyAccessExpression(callExpr.expression)) return null;
+  const propAccess = callExpr.expression;
+  if (!ts.isIdentifier(propAccess.expression) || propAccess.expression.text !== 'Promise') return null;
+  if (propAccess.name.text !== 'all') return null;
+
+  const arg = callExpr.arguments[0];
+  if (!arg || !ts.isArrayLiteralExpression(arg)) {
+    context.addError(callExpr, 'Promise.all argument must be an array literal', ErrorCodes.Cfg.PromiseAllNotArray.code);
+    return null;
+  }
+
+  const branches = [...arg.elements].map(branch => {
+    if (ts.isIdentifier(branch)) {
+      const sym = context.checker.getSymbolAtLocation(branch);
+      if (sym && pendingPromises.has(sym)) return pendingPromises.get(sym)!.callExpr;
+    }
+    return branch;
+  });
+
+  return { branches };
+}
+
+// ---------------------------------------------------------------------------
+// Deferred-await detection
+// ---------------------------------------------------------------------------
+
+interface PendingPromise {
+  readonly callExpr: ts.CallExpression;
+  readonly varName: string;
+  readonly varSymbol: ts.Symbol;
+}
+
+/**
+ * Pre-scan statements to find the deferred-await pattern:
+ *   const foo = svc.call(params)   // non-awaited call
+ *   ...
+ *   await foo                       // awaited later
+ *
+ * Only returns candidates that are confirmed to be awaited later
+ * in the same statement list (via `await x`, `const y = await x`,
+ * or inside `Promise.all([x, ...])`).
+ */
+function findPendingPromises(
+  context: CompilerContext,
+  statements: readonly ts.Statement[],
+): Map<ts.Symbol, PendingPromise> {
+  const candidates = new Map<ts.Symbol, PendingPromise>();
+
+  // Pass 1: find non-awaited call declarations
+  for (const stmt of statements) {
+    if (!ts.isVariableStatement(stmt)) continue;
+    const decl = stmt.declarationList.declarations[0];
+    if (!decl?.initializer || !ts.isIdentifier(decl.name)) continue;
+    if (ts.isAwaitExpression(decl.initializer)) continue;
+    if (!ts.isCallExpression(decl.initializer)) continue;
+
+    const sym = context.checker.getSymbolAtLocation(decl.name);
+    if (sym) {
+      candidates.set(sym, {
+        callExpr: decl.initializer,
+        varName: decl.name.text,
+        varSymbol: sym,
+      });
+    }
+  }
+
+  if (candidates.size === 0) return candidates;
+
+  // Pass 2: check which candidates are awaited later
+  const awaited = new Set<ts.Symbol>();
+
+  for (const stmt of statements) {
+    visitAwaitedIdentifiers(context, stmt, candidates, (sym) => {
+      awaited.add(sym);
+    });
+  }
+
+  // Only keep confirmed
+  for (const sym of candidates.keys()) {
+    if (!awaited.has(sym)) candidates.delete(sym);
+  }
+
+  return candidates;
+}
+
+/**
+ * Walk a statement looking for identifiers that are awaited:
+ * - `await x` (ExpressionStatement)
+ * - `const y = await x` (VariableDeclaration)
+ * - `Promise.all([x, ...])` (identifier inside array argument)
+ */
+function visitAwaitedIdentifiers(
+  context: CompilerContext,
+  stmt: ts.Statement,
+  candidates: ReadonlyMap<ts.Symbol, PendingPromise>,
+  callback: (sym: ts.Symbol) => void,
+): void {
+  // Pattern: await x (ExpressionStatement)
+  if (ts.isExpressionStatement(stmt) && ts.isAwaitExpression(stmt.expression)) {
+    const inner = stmt.expression.expression;
+    if (ts.isIdentifier(inner)) {
+      const sym = context.checker.getSymbolAtLocation(inner);
+      if (sym && candidates.has(sym)) callback(sym);
+    }
+    // Also check: await Promise.all([x, ...])
+    if (ts.isCallExpression(inner)) {
+      checkPromiseAllArgs(context, inner, candidates, callback);
+    }
+  }
+
+  // Pattern: const y = await x (VariableStatement)
+  if (ts.isVariableStatement(stmt)) {
+    const decl = stmt.declarationList.declarations[0];
+    if (decl?.initializer && ts.isAwaitExpression(decl.initializer)) {
+      const inner = decl.initializer.expression;
+      if (ts.isIdentifier(inner)) {
+        const sym = context.checker.getSymbolAtLocation(inner);
+        if (sym && candidates.has(sym)) callback(sym);
+      }
+      // Also check: const [a, b] = await Promise.all([x, ...])
+      if (ts.isCallExpression(inner)) {
+        checkPromiseAllArgs(context, inner, candidates, callback);
+      }
+    }
+  }
+}
+
+/**
+ * If callExpr is Promise.all([...]), check array elements for candidate identifiers.
+ */
+function checkPromiseAllArgs(
+  context: CompilerContext,
+  callExpr: ts.CallExpression,
+  candidates: ReadonlyMap<ts.Symbol, PendingPromise>,
+  callback: (sym: ts.Symbol) => void,
+): void {
+  if (!ts.isPropertyAccessExpression(callExpr.expression)) return;
+  const propAccess = callExpr.expression;
+  if (!ts.isIdentifier(propAccess.expression) || propAccess.expression.text !== 'Promise') return;
+  if (propAccess.name.text !== 'all') return;
+
+  const arg = callExpr.arguments[0];
+  if (!arg || !ts.isArrayLiteralExpression(arg)) return;
+
+  for (const el of arg.elements) {
+    if (ts.isIdentifier(el)) {
+      const sym = context.checker.getSymbolAtLocation(el);
+      if (sym && candidates.has(sym)) callback(sym);
+    }
+  }
+}
+
+/**
+ * Info about a single deferred-await resolution point.
+ */
+interface DeferredAwaitInfo {
+  readonly callExpr: ts.CallExpression;
+  readonly resultName: string | undefined;
+  readonly resultSymbol: ts.Symbol | undefined;
+}
+
+/**
+ * Check if a statement is an await-on-pending-promise pattern.
+ * Returns info if it is, undefined otherwise.
+ */
+function extractDeferredAwait(
+  context: CompilerContext,
+  stmt: ts.Statement,
+  pendingPromises: ReadonlyMap<ts.Symbol, PendingPromise>,
+): DeferredAwaitInfo | undefined {
+  // Pattern: await x (fire-and-forget)
+  if (ts.isExpressionStatement(stmt) && ts.isAwaitExpression(stmt.expression)) {
+    const inner = stmt.expression.expression;
+    if (ts.isIdentifier(inner)) {
+      const sym = context.checker.getSymbolAtLocation(inner);
+      if (sym && pendingPromises.has(sym)) {
+        return {
+          callExpr: pendingPromises.get(sym)!.callExpr,
+          resultName: undefined,
+          resultSymbol: undefined,
+        };
+      }
+    }
+  }
+
+  // Pattern: const y = await x (result capture)
+  if (ts.isVariableStatement(stmt)) {
+    const decl = stmt.declarationList.declarations[0];
+    if (decl?.initializer && ts.isAwaitExpression(decl.initializer) && ts.isIdentifier(decl.name)) {
+      const inner = decl.initializer.expression;
+      if (ts.isIdentifier(inner)) {
+        const sym = context.checker.getSymbolAtLocation(inner);
+        if (sym && pendingPromises.has(sym)) {
+          return {
+            callExpr: pendingPromises.get(sym)!.callExpr,
+            resultName: decl.name.text,
+            resultSymbol: context.checker.getSymbolAtLocation(decl.name),
+          };
+        }
+      }
+    }
+  }
+
+  return undefined;
+}
+
+/**
+ * Try to batch consecutive deferred-await statements into a ParallelTerminator.
+ * Returns the index to advance to (exclusive) if a batch was created, or -1 if not.
+ */
+function tryBatchDeferredAwaits(
+  state: CFGBuilderState,
+  context: CompilerContext,
+  statements: readonly ts.Statement[],
+  startIndex: number,
+  accumulated: ts.Statement[],
+  currentBlockId: string,
+  loopStack: readonly LoopContext[],
+  inlining: InliningContext,
+  pendingPromises: ReadonlyMap<ts.Symbol, PendingPromise>,
+): { exitBlockId: string; advanceTo: number } | undefined {
+  const first = extractDeferredAwait(context, statements[startIndex], pendingPromises);
+  if (!first) return undefined;
+
+  // Collect consecutive deferred awaits
+  const batch: DeferredAwaitInfo[] = [first];
+  let j = startIndex + 1;
+  while (j < statements.length) {
+    const next = extractDeferredAwait(context, statements[j], pendingPromises);
+    if (!next) break;
+    batch.push(next);
+    j++;
+  }
+
+  // Single deferred await — don't create Parallel; handled by state builder fallback
+  if (batch.length < 2) return undefined;
+
+  const exitBlockId = state.newBlockId('parallel_exit');
+
+  // Classify branches (handles both service calls and substep calls)
+  const classifiedBranches = classifyParallelBranches(
+    state, context, batch.map(b => b.callExpr), loopStack, inlining,
+  );
+
+  const resultBindings = batch.map(b => b.resultName ?? '_');
+  const resultSymbols = batch.map(b => b.resultSymbol);
+
+  state.addBlock(currentBlockId, accumulated, {
+    kind: 'parallel',
+    branches: classifiedBranches,
+    resultBindings,
+    resultSymbols,
+    exitBlock: exitBlockId,
+  });
+
+  return { exitBlockId, advanceTo: j };
 }

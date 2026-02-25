@@ -1,12 +1,15 @@
+// @generated — DO NOT EDIT. Run `npx tsx tools/codegen/generate.ts` to regenerate.
 import type { RetryPolicy } from './types';
 
 const BINDING_ERROR =
   'SimpleSteps service bindings cannot be called directly. They exist only for the compiler.';
 
-/** Options for Step Function executions. */
+/** Options for StepFunction operations. */
 export interface StepFunctionOptions {
   executionName?: string;
   retry?: RetryPolicy;
+  timeoutSeconds?: number;
+  heartbeatSeconds?: number;
 }
 
 /** Step Function binding for the SimpleSteps compiler. */

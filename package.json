@@ -21,6 +21,7 @@
     "examples:cdk": "npx tsx examples/aws-cdk-comparison/run-examples.ts",
     "examples:all": "npm run examples && npm run examples:cdk",
     "playground": "npm run dev --prefix playground",
+    "codegen": "npx tsx tools/codegen/generate.ts",
     "prepare": "husky"
   },
   "devDependencies": {

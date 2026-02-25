@@ -1,12 +1,19 @@
 import ts from 'typescript';
 import path from 'path';
 import { CompilerContext } from '../compilerContext.js';
+import {
+  OPTIMIZED_INTEGRATIONS,
+  SERVICE_SDK_IDS,
+  type OptimizedEntry,
+  type OptimizedMethodEntry,
+  type ServiceIntegration,
+} from '../../runtime/services/metadata.js';
 
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
 
-export type ServiceIntegration = 'direct' | 'sdk';
+export type { ServiceIntegration } from '../../runtime/services/metadata.js';
 
 export interface ServiceMethodConfig {
   readonly integration: ServiceIntegration;
@@ -20,7 +27,11 @@ export interface ServiceMethodAlias {
 
 type ServiceMethodEntry = ServiceMethodConfig | ServiceMethodAlias;
 
-function isAlias(entry: ServiceMethodEntry): entry is ServiceMethodAlias {
+function isAlias(entry: ServiceMethodEntry | OptimizedEntry): entry is ServiceMethodAlias {
+  return 'aliasOf' in entry;
+}
+
+function isOptimizedAlias(entry: OptimizedEntry): entry is { aliasOf: string } {
   return 'aliasOf' in entry;
 }
 
@@ -52,96 +63,6 @@ export interface ServiceRegistry {
 }
 
 // ---------------------------------------------------------------------------
-// Mapping table (from spec/services.md §2.2)
-// ---------------------------------------------------------------------------
-
-const SERVICE_METHOD_MAPPINGS: Record<string, Record<string, ServiceMethodEntry>> = {
-  Lambda: {
-    call: { integration: 'direct', hasOutput: true },
-    callAsync: { integration: 'sdk', sdkResource: 'arn:aws:states:::lambda:invoke', hasOutput: false },
-    callWithCallback: { integration: 'sdk', sdkResource: 'arn:aws:states:::lambda:invoke.waitForTaskToken', hasOutput: true },
-  },
-  SimpleQueueService: {
-    publish: { integration: 'sdk', sdkResource: 'arn:aws:states:::sqs:sendMessage', hasOutput: false },
-    publishWithCallback: { integration: 'sdk', sdkResource: 'arn:aws:states:::sqs:sendMessage.waitForTaskToken', hasOutput: true },
-    receiveMessage: { integration: 'sdk', sdkResource: 'arn:aws:states:::aws-sdk:sqs:receiveMessage', hasOutput: true },
-    deleteMessage: { integration: 'sdk', sdkResource: 'arn:aws:states:::aws-sdk:sqs:deleteMessage', hasOutput: false },
-  },
-  DynamoDB: {
-    getItem: { integration: 'sdk', sdkResource: 'arn:aws:states:::dynamodb:getItem', hasOutput: true },
-    get: { aliasOf: 'getItem' },
-    putItem: { integration: 'sdk', sdkResource: 'arn:aws:states:::dynamodb:putItem', hasOutput: false },
-    put: { aliasOf: 'putItem' },
-    deleteItem: { integration: 'sdk', sdkResource: 'arn:aws:states:::dynamodb:deleteItem', hasOutput: false },
-    delete: { aliasOf: 'deleteItem' },
-    updateItem: { integration: 'sdk', sdkResource: 'arn:aws:states:::dynamodb:updateItem', hasOutput: true },
-    update: { aliasOf: 'updateItem' },
-    query: { integration: 'sdk', sdkResource: 'arn:aws:states:::dynamodb:query', hasOutput: true },
-    scan: { integration: 'sdk', sdkResource: 'arn:aws:states:::dynamodb:scan', hasOutput: true },
-    batchGetItem: { integration: 'sdk', sdkResource: 'arn:aws:states:::dynamodb:batchGetItem', hasOutput: true },
-    batchWriteItem: { integration: 'sdk', sdkResource: 'arn:aws:states:::dynamodb:batchWriteItem', hasOutput: false },
-  },
-  SNS: {
-    publish: { integration: 'sdk', sdkResource: 'arn:aws:states:::sns:publish', hasOutput: false },
-  },
-  StepFunction: {
-    startExecution: { integration: 'sdk', sdkResource: 'arn:aws:states:::states:startExecution.sync:2', hasOutput: true },
-    startExecutionAsync: { integration: 'sdk', sdkResource: 'arn:aws:states:::states:startExecution', hasOutput: true },
-    startExecutionWithCallback: { integration: 'sdk', sdkResource: 'arn:aws:states:::states:startExecution.waitForTaskToken', hasOutput: true },
-  },
-  EventBridge: {
-    putEvent: { integration: 'sdk', sdkResource: 'arn:aws:states:::events:putEvents', hasOutput: false },
-  },
-  S3: {
-    getObject: { integration: 'sdk', sdkResource: 'arn:aws:states:::aws-sdk:s3:getObject', hasOutput: true },
-    putObject: { integration: 'sdk', sdkResource: 'arn:aws:states:::aws-sdk:s3:putObject', hasOutput: false },
-    deleteObject: { integration: 'sdk', sdkResource: 'arn:aws:states:::aws-sdk:s3:deleteObject', hasOutput: false },
-    copyObject: { integration: 'sdk', sdkResource: 'arn:aws:states:::aws-sdk:s3:copyObject', hasOutput: false },
-    headObject: { integration: 'sdk', sdkResource: 'arn:aws:states:::aws-sdk:s3:headObject', hasOutput: true },
-    listObjects: { integration: 'sdk', sdkResource: 'arn:aws:states:::aws-sdk:s3:listObjectsV2', hasOutput: true },
-  },
-  SecretsManager: {
-    getSecretValue: { integration: 'sdk', sdkResource: 'arn:aws:states:::aws-sdk:secretsmanager:getSecretValue', hasOutput: true },
-    putSecretValue: { integration: 'sdk', sdkResource: 'arn:aws:states:::aws-sdk:secretsmanager:putSecretValue', hasOutput: false },
-    createSecret: { integration: 'sdk', sdkResource: 'arn:aws:states:::aws-sdk:secretsmanager:createSecret', hasOutput: true },
-    updateSecret: { integration: 'sdk', sdkResource: 'arn:aws:states:::aws-sdk:secretsmanager:updateSecret', hasOutput: false },
-    deleteSecret: { integration: 'sdk', sdkResource: 'arn:aws:states:::aws-sdk:secretsmanager:deleteSecret', hasOutput: false },
-    describeSecret: { integration: 'sdk', sdkResource: 'arn:aws:states:::aws-sdk:secretsmanager:describeSecret', hasOutput: true },
-  },
-  SSM: {
-    getParameter: { integration: 'sdk', sdkResource: 'arn:aws:states:::aws-sdk:ssm:getParameter', hasOutput: true },
-    putParameter: { integration: 'sdk', sdkResource: 'arn:aws:states:::aws-sdk:ssm:putParameter', hasOutput: false },
-    getParameters: { integration: 'sdk', sdkResource: 'arn:aws:states:::aws-sdk:ssm:getParameters', hasOutput: true },
-    getParametersByPath: { integration: 'sdk', sdkResource: 'arn:aws:states:::aws-sdk:ssm:getParametersByPath', hasOutput: true },
-    deleteParameter: { integration: 'sdk', sdkResource: 'arn:aws:states:::aws-sdk:ssm:deleteParameter', hasOutput: false },
-  },
-  ECS: {
-    runTask: { integration: 'sdk', sdkResource: 'arn:aws:states:::ecs:runTask.sync', hasOutput: true },
-    runTaskAsync: { integration: 'sdk', sdkResource: 'arn:aws:states:::ecs:runTask', hasOutput: false },
-  },
-  Bedrock: {
-    invokeModel: { integration: 'sdk', sdkResource: 'arn:aws:states:::bedrock:invokeModel', hasOutput: true },
-  },
-  Batch: {
-    submitJob: { integration: 'sdk', sdkResource: 'arn:aws:states:::batch:submitJob.sync', hasOutput: true },
-    submitJobAsync: { integration: 'sdk', sdkResource: 'arn:aws:states:::batch:submitJob', hasOutput: false },
-  },
-  Glue: {
-    startJobRun: { integration: 'sdk', sdkResource: 'arn:aws:states:::glue:startJobRun.sync', hasOutput: true },
-    startJobRunAsync: { integration: 'sdk', sdkResource: 'arn:aws:states:::glue:startJobRun', hasOutput: false },
-  },
-  CodeBuild: {
-    startBuild: { integration: 'sdk', sdkResource: 'arn:aws:states:::codebuild:startBuild.sync', hasOutput: true },
-    startBuildAsync: { integration: 'sdk', sdkResource: 'arn:aws:states:::codebuild:startBuild', hasOutput: false },
-  },
-  Athena: {
-    startQueryExecution: { integration: 'sdk', sdkResource: 'arn:aws:states:::athena:startQueryExecution.sync', hasOutput: true },
-    getQueryExecution: { integration: 'sdk', sdkResource: 'arn:aws:states:::athena:getQueryExecution', hasOutput: true },
-    getQueryResults: { integration: 'sdk', sdkResource: 'arn:aws:states:::athena:getQueryResults', hasOutput: true },
-  },
-};
-
-// ---------------------------------------------------------------------------
 // Discovery
 // ---------------------------------------------------------------------------
 
@@ -160,7 +81,8 @@ function getBaseName(filePath: string): string {
 
 /**
  * Build the service registry by scanning runtime/services/ and matching
- * exported classes/functions against the SERVICE_METHOD_MAPPINGS table.
+ * exported classes/functions against the OPTIMIZED_INTEGRATIONS table and
+ * SERVICE_SDK_IDS for generic SDK integration fallback.
  */
 export function discoverServices(context: CompilerContext, servicesDirOverride?: string): ServiceRegistry {
   const servicesDir = servicesDirOverride ?? resolveServicesDir();
@@ -170,11 +92,11 @@ export function discoverServices(context: CompilerContext, servicesDirOverride?:
   for (const sourceFile of context.program.getSourceFiles()) {
     const filePath = sourceFile.fileName;
 
-    // Only scan files in the services directory (exclude types and index)
+    // Only scan files in the services directory (exclude types, index, metadata)
     if (!filePath.startsWith(servicesDir)) continue;
     const baseName = getBaseName(filePath);
-    if (baseName === 'types' || baseName === 'index'
-        || baseName === 'types.d' || baseName === 'index.d') continue;
+    if (baseName === 'types' || baseName === 'index' || baseName === 'metadata'
+        || baseName === 'types.d' || baseName === 'index.d' || baseName === 'metadata.d') continue;
 
     // Look for exported classes and functions
     for (const stmt of sourceFile.statements) {
@@ -218,8 +140,11 @@ function matchClassBinding(
   classDecl: ts.ClassDeclaration,
   className: string,
 ): ServiceBinding | null {
-  const mappings = SERVICE_METHOD_MAPPINGS[className];
-  if (!mappings) return null;
+  const optimized = OPTIMIZED_INTEGRATIONS[className];
+  const sdkId = SERVICE_SDK_IDS[className];
+
+  // Not a known service at all
+  if (!optimized && !sdkId) return null;
 
   const classSymbol = context.checker.getSymbolAtLocation(classDecl.name!);
   if (!classSymbol) return null;
@@ -227,7 +152,6 @@ function matchClassBinding(
   const methods = new Map<string, ServiceMethodInfo>();
 
   // Use index-based access instead of for-of to handle emit-phase nodes
-  // where members may not be iterable (ts-patch / ts-node compatibility).
   const members = classDecl.members;
   if (!members || typeof members.length !== 'number') return null;
 
@@ -239,20 +163,30 @@ function matchClassBinding(
     if (!methodSymbol) continue;
 
     const methodName = methodSymbol.getName();
-    const entry = mappings[methodName];
-    if (!entry) continue;
 
-    // Resolve aliases
-    const config = resolveMethodConfig(mappings, entry);
-    if (!config) continue;
+    // Check optimized integrations first
+    if (optimized && methodName in optimized) {
+      const entry = optimized[methodName];
+      const config = resolveOptimizedEntry(optimized, entry);
+      if (!config) continue;
 
-    methods.set(methodName, {
-      methodName,
-      symbol: methodSymbol,
-      integration: config.integration,
-      sdkResource: config.sdkResource,
-      hasOutput: config.hasOutput,
-    });
+      methods.set(methodName, {
+        methodName,
+        symbol: methodSymbol,
+        integration: config.integration,
+        sdkResource: config.sdkResource,
+        hasOutput: config.hasOutput,
+      });
+    } else if (sdkId) {
+      // Generic SDK integration fallback
+      methods.set(methodName, {
+        methodName,
+        symbol: methodSymbol,
+        integration: 'sdk',
+        sdkResource: `arn:aws:states:::aws-sdk:${sdkId}:${methodName}`,
+        hasOutput: true,
+      });
+    }
   }
 
   return { className, symbol: classSymbol, methods };
@@ -263,15 +197,14 @@ function matchFunctionBinding(
   funcDecl: ts.FunctionDeclaration,
   funcName: string,
 ): ServiceBinding | null {
-  const mappings = SERVICE_METHOD_MAPPINGS[funcName];
-  if (!mappings) return null;
+  const optimized = OPTIMIZED_INTEGRATIONS[funcName];
+  const sdkId = SERVICE_SDK_IDS[funcName];
+
+  if (!optimized && !sdkId) return null;
 
   const funcSymbol = context.checker.getSymbolAtLocation(funcDecl.name!);
   if (!funcSymbol) return null;
 
-  // For function-based bindings (like Lambda), the function itself is the
-  // "constructor" and its return type's methods are the service methods.
-  // We need to look at the return type of the function to find callable methods.
   const methods = new Map<string, ServiceMethodInfo>();
 
   // Check the return type for method signatures
@@ -280,34 +213,43 @@ function matchFunctionBinding(
     const returnType = context.checker.getReturnTypeOfSignature(signature);
     for (const prop of returnType.getProperties()) {
       const propName = prop.getName();
-      const entry = mappings[propName];
-      if (!entry) continue;
 
-      const config = resolveMethodConfig(mappings, entry);
-      if (!config) continue;
+      if (optimized && propName in optimized) {
+        const entry = optimized[propName];
+        const config = resolveOptimizedEntry(optimized, entry);
+        if (!config) continue;
 
-      methods.set(propName, {
-        methodName: propName,
-        symbol: prop,
-        integration: config.integration,
-        sdkResource: config.sdkResource,
-        hasOutput: config.hasOutput,
-      });
+        methods.set(propName, {
+          methodName: propName,
+          symbol: prop,
+          integration: config.integration,
+          sdkResource: config.sdkResource,
+          hasOutput: config.hasOutput,
+        });
+      } else if (sdkId) {
+        methods.set(propName, {
+          methodName: propName,
+          symbol: prop,
+          integration: 'sdk',
+          sdkResource: `arn:aws:states:::aws-sdk:${sdkId}:${propName}`,
+          hasOutput: true,
+        });
+      }
     }
   }
 
   return { className: funcName, symbol: funcSymbol, methods };
 }
 
-function resolveMethodConfig(
-  mappings: Record<string, ServiceMethodEntry>,
-  entry: ServiceMethodEntry,
-): ServiceMethodConfig | null {
-  if (!isAlias(entry)) return entry;
+function resolveOptimizedEntry(
+  mappings: Record<string, OptimizedEntry>,
+  entry: OptimizedEntry,
+): OptimizedMethodEntry | null {
+  if (!isOptimizedAlias(entry)) return entry as OptimizedMethodEntry;
 
   const target = mappings[entry.aliasOf];
   if (!target) return null;
-  if (isAlias(target)) return null; // Don't support chained aliases
+  if (isOptimizedAlias(target)) return null; // Don't support chained aliases
 
-  return target;
+  return target as OptimizedMethodEntry;
 }

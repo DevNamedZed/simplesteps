@@ -1,7 +1,7 @@
 import ts from 'typescript';
 import { CompilerContext } from '../compilerContext.js';
 import { ErrorCodes } from '../diagnosticCodes.js';
-import type { ControlFlowGraph, BasicBlock } from '../cfg/types.js';
+import type { ControlFlowGraph, BasicBlock, ParallelBranch } from '../cfg/types.js';
 import type { ServiceRegistry, ServiceMethodInfo } from '../discovery/serviceDiscovery.js';
 import type { StepFunctionCallSite } from '../discovery/callSiteLocator.js';
 import {
@@ -14,6 +14,7 @@ import {
 import { StepVariableType } from '../analysis/types.js';
 import { buildParameters, buildChoiceRule } from './expressionMapper.js';
 import { STEP_ERROR_NAMES } from '../../runtime/index.js';
+import { SDK_PARAM_SHAPE, SDK_RESOURCE_INJECT } from '../../runtime/services/metadata.js';
 import type {
   State,
   StateMachineDefinition,
@@ -25,56 +26,8 @@ import type {
   MapState,
   ParallelState,
   CatchRule,
+  RetryRule,
 } from '../../asl/types.js';
-
-// ---------------------------------------------------------------------------
-// SDK parameter shaping
-// ---------------------------------------------------------------------------
-
-const SDK_PARAM_SHAPE: Record<string, Record<string, {
-  resourceKey: string;
-  paramKey: string;
-  extraParams?: Record<string, unknown>;
-}>> = {
-  Lambda: {
-    callAsync: { resourceKey: 'FunctionName', paramKey: 'Payload', extraParams: { InvocationType: 'Event' } },
-    callWithCallback: { resourceKey: 'FunctionName', paramKey: 'Payload' },
-  },
-  SimpleQueueService: {
-    publish: { resourceKey: 'QueueUrl', paramKey: 'MessageBody' },
-    publishWithCallback: { resourceKey: 'QueueUrl', paramKey: 'MessageBody' },
-  },
-  SNS: {
-    publish: { resourceKey: 'TopicArn', paramKey: 'Message' },
-  },
-  StepFunction: {
-    startExecution: { resourceKey: 'StateMachineArn', paramKey: 'Input' },
-    startExecutionAsync: { resourceKey: 'StateMachineArn', paramKey: 'Input' },
-    startExecutionWithCallback: { resourceKey: 'StateMachineArn', paramKey: 'Input' },
-  },
-  EventBridge: {
-    putEvent: { resourceKey: 'EventBusName', paramKey: 'Detail' },
-  },
-  Batch: {
-    submitJob: { resourceKey: 'JobQueue', paramKey: 'Parameters' },
-    submitJobAsync: { resourceKey: 'JobQueue', paramKey: 'Parameters' },
-  },
-};
-
-/**
- * Simple resource injection for SDK services that take a resource identifier
- * as a constructor arg but pass parameters flat (not nested under a single key).
- * E.g., S3 injects { Bucket: constructorArg, ...userParams }.
- */
-const SDK_RESOURCE_INJECT: Record<string, string> = {
-  DynamoDB: 'TableName',
-  S3: 'Bucket',
-  SimpleQueueService: 'QueueUrl',
-  ECS: 'Cluster',
-  Bedrock: 'ModelId',
-  Glue: 'JobName',
-  CodeBuild: 'ProjectName',
-};
 
 // ---------------------------------------------------------------------------
 // Build context
@@ -334,7 +287,16 @@ function processAwaitAssignment(
   decl: ts.VariableDeclaration,
 ): string | null {
   const awaitExpr = decl.initializer as ts.AwaitExpression;
-  const callExpr = awaitExpr.expression;
+  let callExpr: ts.Expression = awaitExpr.expression;
+
+  // Resolve deferred promise: const y = await x → look up x's original call
+  if (ts.isIdentifier(callExpr)) {
+    const sym = ctx.compilerContext.checker.getSymbolAtLocation(callExpr);
+    if (sym && ctx.cfg.deferredCalls?.has(sym)) {
+      callExpr = ctx.cfg.deferredCalls.get(sym)!;
+    }
+  }
+
   if (!ts.isCallExpression(callExpr)) return null;
 
   const serviceCall = extractServiceCall(ctx, callExpr);
@@ -368,6 +330,11 @@ function processAwaitAssignment(
     Resource: serviceCall.resource,
     ...(serviceCall.parameters && { Parameters: serviceCall.parameters }),
     ...(resultPath && { ResultPath: resultPath }),
+    ...(serviceCall.retry && { Retry: serviceCall.retry }),
+    ...(serviceCall.timeoutSeconds != null && { TimeoutSeconds: serviceCall.timeoutSeconds }),
+    ...(serviceCall.timeoutSecondsPath && { TimeoutSecondsPath: serviceCall.timeoutSecondsPath }),
+    ...(serviceCall.heartbeatSeconds != null && { HeartbeatSeconds: serviceCall.heartbeatSeconds }),
+    ...(serviceCall.heartbeatSecondsPath && { HeartbeatSecondsPath: serviceCall.heartbeatSecondsPath }),
     ...buildCatchRules(ctx),
   };
 
@@ -379,7 +346,16 @@ function processAwaitFireAndForget(
   ctx: BuildContext,
   awaitExpr: ts.AwaitExpression,
 ): string | null {
-  const callExpr = awaitExpr.expression;
+  let callExpr: ts.Expression = awaitExpr.expression;
+
+  // Resolve deferred promise: await x → look up x's original call
+  if (ts.isIdentifier(callExpr)) {
+    const sym = ctx.compilerContext.checker.getSymbolAtLocation(callExpr);
+    if (sym && ctx.cfg.deferredCalls?.has(sym)) {
+      callExpr = ctx.cfg.deferredCalls.get(sym)!;
+    }
+  }
+
   if (!ts.isCallExpression(callExpr)) return null;
 
   const serviceCall = extractServiceCall(ctx, callExpr);
@@ -395,6 +371,11 @@ function processAwaitFireAndForget(
     Resource: serviceCall.resource,
     ...(serviceCall.parameters && { Parameters: serviceCall.parameters }),
     ResultPath: null,
+    ...(serviceCall.retry && { Retry: serviceCall.retry }),
+    ...(serviceCall.timeoutSeconds != null && { TimeoutSeconds: serviceCall.timeoutSeconds }),
+    ...(serviceCall.timeoutSecondsPath && { TimeoutSecondsPath: serviceCall.timeoutSecondsPath }),
+    ...(serviceCall.heartbeatSeconds != null && { HeartbeatSeconds: serviceCall.heartbeatSeconds }),
+    ...(serviceCall.heartbeatSecondsPath && { HeartbeatSecondsPath: serviceCall.heartbeatSecondsPath }),
     ...buildCatchRules(ctx),
   };
 
@@ -435,6 +416,11 @@ function processAwaitReassignment(
     Resource: serviceCall.resource,
     ...(serviceCall.parameters && { Parameters: serviceCall.parameters }),
     ...(resultPath && { ResultPath: resultPath }),
+    ...(serviceCall.retry && { Retry: serviceCall.retry }),
+    ...(serviceCall.timeoutSeconds != null && { TimeoutSeconds: serviceCall.timeoutSeconds }),
+    ...(serviceCall.timeoutSecondsPath && { TimeoutSecondsPath: serviceCall.timeoutSecondsPath }),
+    ...(serviceCall.heartbeatSeconds != null && { HeartbeatSeconds: serviceCall.heartbeatSeconds }),
+    ...(serviceCall.heartbeatSecondsPath && { HeartbeatSecondsPath: serviceCall.heartbeatSecondsPath }),
     ...buildCatchRules(ctx),
   };
 
@@ -768,29 +754,33 @@ function processMapStateTerminator(
   ctx: BuildContext,
   term: {
     readonly kind: 'mapState';
-    readonly expression: ts.ForOfStatement;
+    readonly expression?: ts.ForOfStatement;
+    readonly itemsExpression: ts.Expression;
+    readonly iterVarName: string;
+    readonly iterVarSymbol?: ts.Symbol;
     readonly bodyBlock: string;
     readonly exitBlock: string;
     readonly collectResults: boolean;
+    readonly maxConcurrency?: number;
+    readonly resultBindingName?: string;
+    readonly resultSymbol?: ts.Symbol;
   },
   block: BasicBlock,
   lastStateName: string | null,
 ): string | null {
-  const forOfStmt = term.expression;
-
-  // Extract iterable → resolve to JSONPath
-  const iterableExpr = forOfStmt.expression;
+  // Resolve items expression to JSONPath
   const resolved = resolveExpression(
     ctx.compilerContext,
-    iterableExpr,
+    term.itemsExpression,
     ctx.variables.toResolution(),
   );
   let itemsPath: string;
   if (resolved.kind === 'jsonpath') {
     itemsPath = resolved.path!;
   } else {
+    const errorNode = term.expression ?? term.itemsExpression;
     ctx.compilerContext.addError(
-      iterableExpr,
+      errorNode,
       `Cannot resolve iterable expression to a JSONPath reference. ` +
       `The for...of target must be an input field or service call result (e.g., input.items).`,
       ErrorCodes.Expr.UncompilableExpression.code,
@@ -798,19 +788,21 @@ function processMapStateTerminator(
     itemsPath = '$.items'; // fallback to allow continued analysis
   }
 
-  // Extract iteration variable name
-  let iterVarName = 'item';
-  let iterVarSymbol: ts.Symbol | undefined;
-  if (ts.isVariableDeclarationList(forOfStmt.initializer)) {
-    const decl = forOfStmt.initializer.declarations[0];
-    if (decl && ts.isIdentifier(decl.name)) {
-      iterVarName = decl.name.text;
-      iterVarSymbol = ctx.compilerContext.checker.getSymbolAtLocation(decl.name);
+  // Detect captured variables (outer StateOutput vars referenced inside body)
+  const capturedVars = findCapturedVariables(ctx, term.bodyBlock, term.iterVarSymbol);
+
+  // Build ItemSelector if there are captured variables
+  let itemSelector: Record<string, string> | undefined;
+  if (capturedVars.size > 0) {
+    itemSelector = {};
+    itemSelector[`${term.iterVarName}.$`] = '$$.Map.Item.Value';
+    for (const [, capture] of capturedVars) {
+      itemSelector[`${capture.name}.$`] = capture.jsonPath;
     }
   }
 
   // Create sub-context for the Map state's ItemProcessor
-  const subCtx = createSubContext(ctx, iterVarName, iterVarSymbol);
+  const subCtx = createSubContext(ctx, term.iterVarName, term.iterVarSymbol, capturedVars);
 
   // Process the body block in the sub-context
   const bodyFirst = processBlock(subCtx, term.bodyBlock);
@@ -824,24 +816,44 @@ function processMapStateTerminator(
   const mapStateName = generateStateName('Map_items', ctx.usedNames);
 
   if (!bodyFirst) {
+    const errorNode = term.expression ?? term.itemsExpression;
     ctx.compilerContext.addError(
-      forOfStmt,
-      'for...of loop body produced no states. The loop body must contain at least one await call or assignment.',
+      errorNode,
+      'Map body produced no states. The loop body must contain at least one await call or assignment.',
       ErrorCodes.Gen.EmptyStateMachine.code,
     );
   }
 
+  // Determine ResultPath: collect results into a named variable, or discard
+  const collectResultPath = term.collectResults && term.resultBindingName
+    ? `$.${term.resultBindingName}`
+    : undefined;
+
   const mapState: MapState = {
     Type: 'Map',
     ItemsPath: itemsPath,
+    ...(itemSelector && { ItemSelector: itemSelector }),
     ItemProcessor: {
       StartAt: bodyFirst ?? 'Empty',
       States: subStates,
     },
-    ...(!term.collectResults && { ResultPath: null }),
+    ...(term.maxConcurrency != null && { MaxConcurrency: term.maxConcurrency }),
+    ...(collectResultPath ? { ResultPath: collectResultPath } : { ResultPath: null }),
+    ...buildCatchRules(ctx),
   };
 
   ctx.states.set(mapStateName, mapState);
+
+  // Register result variable so downstream states can reference it
+  if (collectResultPath && term.resultSymbol) {
+    ctx.variables.addVariable(term.resultSymbol, {
+      symbol: term.resultSymbol,
+      type: StepVariableType.StateOutput,
+      jsonPath: collectResultPath,
+      definitelyAssigned: true,
+      constant: false,
+    });
+  }
 
   if (lastStateName) {
     patchNext(ctx.states, lastStateName, mapStateName);
@@ -860,7 +872,7 @@ function processParallelTerminator(
   ctx: BuildContext,
   term: {
     readonly kind: 'parallel';
-    readonly branches: readonly ts.Expression[];
+    readonly branches: readonly ParallelBranch[];
     readonly resultBindings: readonly string[];
     readonly resultSymbols: readonly (ts.Symbol | undefined)[];
     readonly exitBlock: string;
@@ -870,23 +882,36 @@ function processParallelTerminator(
 ): string | null {
   const branchDefs: StateMachineDefinition[] = [];
 
-  for (const branchExpr of term.branches) {
-    // Create a sub-context for each parallel branch
-    const subCtx = createParallelBranchContext(ctx);
+  for (const branch of term.branches) {
+    if (branch.kind === 'expression') {
+      // Direct expression branch — single service call → single Task
+      const subCtx = createParallelBranchContext(ctx);
+      const stateName = processBranchExpression(subCtx, branch.expression);
 
-    // Each branch expression is typically a service call — process it as a single statement
-    const stateName = processBranchExpression(subCtx, branchExpr);
+      const subStates: Record<string, State> = {};
+      for (const [name, state] of subCtx.states) {
+        subStates[name] = state;
+      }
 
-    // Collect sub-context states
-    const subStates: Record<string, State> = {};
-    for (const [name, state] of subCtx.states) {
-      subStates[name] = state;
+      branchDefs.push({
+        StartAt: stateName ?? '',
+        States: subStates,
+      });
+    } else {
+      // Substep branch — multi-state sub-machine from inlined helper body
+      const subCtx = createParallelBranchContext(ctx);
+      const firstState = processBlock(subCtx, branch.bodyBlock);
+
+      const subStates: Record<string, State> = {};
+      for (const [name, state] of subCtx.states) {
+        subStates[name] = state;
+      }
+
+      branchDefs.push({
+        StartAt: firstState ?? '',
+        States: subStates,
+      });
     }
-
-    branchDefs.push({
-      StartAt: stateName ?? '',
-      States: subStates,
-    });
   }
 
   const parallelStateName = generateStateName('Parallel', ctx.usedNames);
@@ -967,11 +992,10 @@ function processParallelTerminator(
  */
 function createParallelBranchContext(ctx: BuildContext): BuildContext {
   const subVariables = new VRBClass();
-  // Copy service bindings, input, and constants from outer scope
+  // Copy all resolvable variables from outer scope — each Parallel branch
+  // receives the same $ input, so StateOutput paths remain valid.
   for (const [sym, info] of ctx.variables.variables) {
-    if (info.type === StepVariableType.External || info.type === StepVariableType.Input || info.type === StepVariableType.Constant) {
-      subVariables.addVariable(sym, info);
-    }
+    subVariables.addVariable(sym, info);
   }
 
   return {
@@ -1016,6 +1040,11 @@ function processBranchExpression(
     Type: 'Task',
     Resource: serviceCall.resource,
     ...(serviceCall.parameters && { Parameters: serviceCall.parameters }),
+    ...(serviceCall.retry && { Retry: serviceCall.retry }),
+    ...(serviceCall.timeoutSeconds != null && { TimeoutSeconds: serviceCall.timeoutSeconds }),
+    ...(serviceCall.timeoutSecondsPath && { TimeoutSecondsPath: serviceCall.timeoutSecondsPath }),
+    ...(serviceCall.heartbeatSeconds != null && { HeartbeatSeconds: serviceCall.heartbeatSeconds }),
+    ...(serviceCall.heartbeatSecondsPath && { HeartbeatSecondsPath: serviceCall.heartbeatSecondsPath }),
     End: true,
   };
 
@@ -1034,6 +1063,34 @@ function processReturnTerminator(
       patchEnd(ctx.states, lastStateName);
     }
     return null;
+  }
+
+  // return await svc.call(...) → Task state with End: true
+  if (ts.isAwaitExpression(expression) && ts.isCallExpression(expression.expression)) {
+    const serviceCall = extractServiceCall(ctx, expression.expression);
+    if (serviceCall) {
+      const stateName = generateStateName(
+        `Invoke_${serviceCall.serviceVarName}`,
+        ctx.usedNames,
+      );
+      const taskState: TaskState = {
+        Type: 'Task',
+        Resource: serviceCall.resource,
+        ...(serviceCall.parameters && { Parameters: serviceCall.parameters }),
+        ...(serviceCall.retry && { Retry: serviceCall.retry }),
+        ...(serviceCall.timeoutSeconds != null && { TimeoutSeconds: serviceCall.timeoutSeconds }),
+        ...(serviceCall.timeoutSecondsPath && { TimeoutSecondsPath: serviceCall.timeoutSecondsPath }),
+        ...(serviceCall.heartbeatSeconds != null && { HeartbeatSeconds: serviceCall.heartbeatSeconds }),
+        ...(serviceCall.heartbeatSecondsPath && { HeartbeatSecondsPath: serviceCall.heartbeatSecondsPath }),
+        ...buildCatchRules(ctx),
+        End: true,
+      };
+      ctx.states.set(stateName, taskState);
+      if (lastStateName) {
+        patchNext(ctx.states, lastStateName, stateName);
+      }
+      return stateName;
+    }
   }
 
   // Object literal return → Pass state with Parameters
@@ -1179,6 +1236,11 @@ interface ExtractedServiceCall {
   resource: string | Record<string, unknown>;
   parameters?: Record<string, unknown>;
   methodInfo: ServiceMethodInfo;
+  retry?: readonly RetryRule[];
+  timeoutSeconds?: number;
+  timeoutSecondsPath?: string;
+  heartbeatSeconds?: number;
+  heartbeatSecondsPath?: string;
 }
 
 function extractServiceCall(
@@ -1267,11 +1329,162 @@ function extractServiceCall(
     }
   }
 
+  // Extract task options (retry, timeout, heartbeat) from 2nd argument
+  const taskOptions = extractTaskOptions(ctx, callExpr);
+
   return {
     serviceVarName,
     resource,
     parameters,
     methodInfo,
+    ...taskOptions,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Task options extraction (retry, timeout, heartbeat)
+// ---------------------------------------------------------------------------
+
+/**
+ * Extract task-level options from the 2nd argument of a service call.
+ * Supports: retry, timeoutSeconds, heartbeatSeconds.
+ */
+function extractTaskOptions(
+  ctx: BuildContext,
+  callExpr: ts.CallExpression,
+): Pick<ExtractedServiceCall, 'retry' | 'timeoutSeconds' | 'timeoutSecondsPath' | 'heartbeatSeconds' | 'heartbeatSecondsPath'> {
+  const optionsArg = callExpr.arguments[1];
+  if (!optionsArg || !ts.isObjectLiteralExpression(optionsArg)) return {};
+
+  const result: {
+    retry?: readonly RetryRule[];
+    timeoutSeconds?: number;
+    timeoutSecondsPath?: string;
+    heartbeatSeconds?: number;
+    heartbeatSecondsPath?: string;
+  } = {};
+
+  for (const prop of optionsArg.properties) {
+    if (!ts.isPropertyAssignment(prop) || !ts.isIdentifier(prop.name)) continue;
+    const name = prop.name.text;
+
+    if (name === 'retry') {
+      result.retry = extractRetryRules(ctx, prop.initializer);
+    } else if (name === 'timeoutSeconds') {
+      const resolved = resolveExpression(ctx.compilerContext, prop.initializer, ctx.variables.toResolution());
+      if (resolved.kind === 'literal' && typeof resolved.value === 'number') {
+        result.timeoutSeconds = resolved.value;
+      } else if (resolved.kind === 'jsonpath') {
+        result.timeoutSecondsPath = resolved.path;
+      }
+    } else if (name === 'heartbeatSeconds') {
+      const resolved = resolveExpression(ctx.compilerContext, prop.initializer, ctx.variables.toResolution());
+      if (resolved.kind === 'literal' && typeof resolved.value === 'number') {
+        result.heartbeatSeconds = resolved.value;
+      } else if (resolved.kind === 'jsonpath') {
+        result.heartbeatSecondsPath = resolved.path;
+      }
+    }
+  }
+
+  return result;
+}
+
+/**
+ * Extract retry rules from a retry option value.
+ * Supports a single object literal or an array of object literals.
+ */
+function extractRetryRules(
+  ctx: BuildContext,
+  expr: ts.Expression,
+): readonly RetryRule[] | undefined {
+  // Support both single retry config and array of retry configs
+  const retryExprs: ts.ObjectLiteralExpression[] = [];
+
+  if (ts.isObjectLiteralExpression(expr)) {
+    retryExprs.push(expr);
+  } else if (ts.isArrayLiteralExpression(expr)) {
+    for (const el of expr.elements) {
+      if (ts.isObjectLiteralExpression(el)) {
+        retryExprs.push(el);
+      }
+    }
+  }
+
+  if (retryExprs.length === 0) return undefined;
+
+  const rules: RetryRule[] = [];
+  for (const retryObj of retryExprs) {
+    const rule = extractSingleRetryRule(ctx, retryObj);
+    if (rule) rules.push(rule);
+  }
+
+  return rules.length > 0 ? rules : undefined;
+}
+
+function extractSingleRetryRule(
+  ctx: BuildContext,
+  obj: ts.ObjectLiteralExpression,
+): RetryRule | null {
+  let errorEquals: string[] | undefined;
+  let intervalSeconds: number | undefined;
+  let maxAttempts: number | undefined;
+  let backoffRate: number | undefined;
+  let maxDelaySeconds: number | undefined;
+  let jitterStrategy: 'FULL' | 'NONE' | undefined;
+
+  for (const prop of obj.properties) {
+    if (!ts.isPropertyAssignment(prop) || !ts.isIdentifier(prop.name)) continue;
+    const name = prop.name.text;
+    const resolved = resolveExpression(ctx.compilerContext, prop.initializer, ctx.variables.toResolution());
+
+    switch (name) {
+      case 'errorEquals':
+        if (ts.isArrayLiteralExpression(prop.initializer)) {
+          errorEquals = [];
+          for (const el of prop.initializer.elements) {
+            const elResolved = resolveExpression(ctx.compilerContext, el, ctx.variables.toResolution());
+            if (elResolved.kind === 'literal' && typeof elResolved.value === 'string') {
+              errorEquals.push(elResolved.value);
+            }
+          }
+        }
+        break;
+      case 'intervalSeconds':
+        if (resolved.kind === 'literal' && typeof resolved.value === 'number') {
+          intervalSeconds = resolved.value;
+        }
+        break;
+      case 'maxAttempts':
+        if (resolved.kind === 'literal' && typeof resolved.value === 'number') {
+          maxAttempts = resolved.value;
+        }
+        break;
+      case 'backoffRate':
+        if (resolved.kind === 'literal' && typeof resolved.value === 'number') {
+          backoffRate = resolved.value;
+        }
+        break;
+      case 'maxDelaySeconds':
+        if (resolved.kind === 'literal' && typeof resolved.value === 'number') {
+          maxDelaySeconds = resolved.value;
+        }
+        break;
+      case 'jitterStrategy':
+        if (resolved.kind === 'literal' && (resolved.value === 'FULL' || resolved.value === 'NONE')) {
+          jitterStrategy = resolved.value;
+        }
+        break;
+    }
+  }
+
+  return {
+    ErrorEquals: errorEquals ?? ['States.ALL'],
+    ...(intervalSeconds != null && { IntervalSeconds: intervalSeconds }),
+    ...(maxAttempts != null && { MaxAttempts: maxAttempts }),
+    ...(backoffRate != null && { BackoffRate: backoffRate }),
+    ...(maxDelaySeconds != null && { MaxDelaySeconds: maxDelaySeconds }),
+    ...(jitterStrategy && { JitterStrategy: jitterStrategy }),
   };
 }
 
@@ -1298,10 +1511,100 @@ function buildCatchRules(ctx: BuildContext): { Catch?: readonly CatchRule[] } {
 // Sub-context for Map states
 // ---------------------------------------------------------------------------
 
+interface CapturedVariable {
+  readonly name: string;
+  readonly jsonPath: string;
+}
+
+/**
+ * Walk CFG blocks reachable from `startId` and find outer StateOutput variables
+ * referenced in the body. These need to be projected via ItemSelector.
+ */
+function findCapturedVariables(
+  ctx: BuildContext,
+  startId: string,
+  iterVarSymbol: ts.Symbol | undefined,
+): Map<ts.Symbol, CapturedVariable> {
+  const captured = new Map<ts.Symbol, CapturedVariable>();
+
+  // Collect all reachable blocks
+  const visited = new Set<string>();
+  const blocks: BasicBlock[] = [];
+  const queue = [startId];
+  while (queue.length > 0) {
+    const id = queue.shift()!;
+    if (visited.has(id)) continue;
+    visited.add(id);
+    const block = ctx.cfg.blocks.get(id);
+    if (!block) continue;
+    blocks.push(block);
+    const t = block.terminator;
+    if (t.kind === 'fall') queue.push(t.target);
+    else if (t.kind === 'branch') { queue.push(t.thenBlock); queue.push(t.elseBlock); }
+    else if (t.kind === 'return' || t.kind === 'throw') { /* terminal */ }
+    else if (t.kind === 'loop') { queue.push(t.bodyBlock); queue.push(t.exitBlock); }
+    else if (t.kind === 'loopBack') queue.push(t.target);
+    else if (t.kind === 'mapState') { queue.push(t.bodyBlock); queue.push(t.exitBlock); }
+    else if (t.kind === 'tryCatch') {
+      queue.push(t.tryBlock);
+      if (t.catchFallback) queue.push(t.catchFallback);
+      queue.push(t.mergeBlock);
+      for (const h of t.errorHandlers) queue.push(h.blockId);
+    }
+    else if (t.kind === 'parallel') {
+      queue.push(t.exitBlock);
+      for (const b of t.branches) {
+        if (b.kind === 'substep') queue.push(b.bodyBlock);
+      }
+    }
+    else if (t.kind === 'ternaryAssign') queue.push(t.continuation);
+    else if (t.kind === 'break') queue.push(t.target);
+    else if (t.kind === 'continue') queue.push(t.target);
+  }
+
+  // Walk all AST nodes in those blocks to find identifier references
+  const checker = ctx.compilerContext.checker;
+  function visitNode(node: ts.Node): void {
+    if (ts.isIdentifier(node)) {
+      const sym = checker.getSymbolAtLocation(node);
+      if (sym && sym !== iterVarSymbol && !captured.has(sym)) {
+        const varInfo = ctx.variables.getBySymbol(sym);
+        if (varInfo && varInfo.type === StepVariableType.StateOutput && varInfo.jsonPath) {
+          // Extract the top-level binding name from the jsonPath (e.g., "$.prefix" → "prefix")
+          const match = varInfo.jsonPath.match(/^\$\.(\w+)/);
+          if (match) {
+            captured.set(sym, { name: match[1], jsonPath: varInfo.jsonPath });
+          }
+        }
+      }
+    }
+    ts.forEachChild(node, visitNode);
+  }
+
+  for (const block of blocks) {
+    for (const stmt of block.statements) {
+      visitNode(stmt);
+    }
+    // Also check terminator expressions
+    const t = block.terminator;
+    if (t.kind === 'return' && t.expression) visitNode(t.expression);
+    if (t.kind === 'branch') visitNode(t.condition);
+    if (t.kind === 'loop') visitNode(t.condition);
+    if (t.kind === 'ternaryAssign') {
+      visitNode(t.condition);
+      visitNode(t.thenExpression);
+      visitNode(t.elseExpression);
+    }
+  }
+
+  return captured;
+}
+
 function createSubContext(
   ctx: BuildContext,
   iterationVarName: string,
   iterationVarSymbol: ts.Symbol | undefined,
+  capturedVars?: Map<ts.Symbol, CapturedVariable>,
 ): BuildContext {
   // Clone variables builder: copy service bindings and constants from outer scope
   const subVariables = new VRBClass();
@@ -1311,16 +1614,32 @@ function createSubContext(
     }
   }
 
-  // Register the iteration variable at $ (each Map item input is $)
+  // With captures: iteration var is at $.iterVarName instead of $
+  const iterPath = capturedVars?.size ? `$.${iterationVarName}` : '$';
+
+  // Register the iteration variable
   if (iterationVarSymbol) {
     subVariables.addVariable(iterationVarSymbol, {
       symbol: iterationVarSymbol,
       type: StepVariableType.Input,
-      jsonPath: '$',
+      jsonPath: iterPath,
       definitelyAssigned: true,
       constant: true,
     });
     subVariables.inputSymbol = iterationVarSymbol;
+  }
+
+  // Register captured variables with their projected paths inside the Map
+  if (capturedVars) {
+    for (const [sym, capture] of capturedVars) {
+      subVariables.addVariable(sym, {
+        symbol: sym,
+        type: StepVariableType.StateOutput,
+        jsonPath: `$.${capture.name}`,
+        definitelyAssigned: true,
+        constant: false,
+      });
+    }
   }
 
   return {

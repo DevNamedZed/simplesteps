@@ -269,7 +269,7 @@ function checkAwaitedCalls(
 
     for (const edge of node.edges) {
       if (edge.callee?.symbol && helpers.has(edge.callee.symbol)) {
-        if (!edge.await) {
+        if (!edge.await && !isInsidePromiseAll(edge.callsite)) {
           context.addError(
             edge.callsite,
             `Substep '${edge.callee.symbol.getName()}' contains service calls and must be awaited`,
@@ -284,6 +284,34 @@ function checkAwaitedCalls(
   }
 
   walk(root);
+}
+
+/**
+ * Check if a call expression is inside a Promise.all([...]) argument array.
+ * Substep calls inside Promise.all are effectively awaited by the outer await.
+ */
+function isInsidePromiseAll(callsite: ts.Node): boolean {
+  // Walk up: call → arrayLiteral → callExpression(Promise.all) → awaitExpression
+  let node: ts.Node = callsite;
+
+  // The call might be nested: walk up to find ArrayLiteralExpression
+  while (node.parent && !ts.isSourceFile(node.parent)) {
+    if (ts.isArrayLiteralExpression(node.parent)) {
+      // Check if the array is the argument of Promise.all(...)
+      const arrayParent = node.parent.parent;
+      if (arrayParent && ts.isCallExpression(arrayParent)) {
+        const callee = arrayParent.expression;
+        if (ts.isPropertyAccessExpression(callee) &&
+            ts.isIdentifier(callee.expression) &&
+            callee.expression.text === 'Promise' &&
+            callee.name.text === 'all') {
+          return true;
+        }
+      }
+    }
+    node = node.parent;
+  }
+  return false;
 }
 
 // ---------------------------------------------------------------------------

@@ -11,14 +11,16 @@ Every TypeScript construct supported by SimpleSteps and its ASL mapping.
 | `if/else`, `switch/case` | Choice |
 | `while`, `do...while` | Choice + back-edge loop |
 | `for (const item of array)` | Map (parallel) |
+| `await Steps.map(items, callback, opts?)` | Map (with result capture, closures, MaxConcurrency) |
 | `for (const item of Steps.sequential(array))` | Map (sequential, `MaxConcurrency: 1`) |
 | `await Promise.all([...])` | Parallel |
+| Deferred-await (`const p = call(); await p`) | Parallel (auto-batched) |
 | `await Steps.delay({ seconds: 30 })` | Wait |
 | `throw new Error(msg)` | Fail |
 | `return value` | Succeed / End |
 | `try { ... } catch (e) { ... }` | Catch rules |
 | `if (e instanceof TimeoutError)` | Typed error matching |
-| `.call(input, { retry: { ... } })` | Retry rules |
+| `.call(input, { retry, timeoutSeconds, heartbeatSeconds })` | Retry / Timeout / Heartbeat |
 
 ## Entry Points
 
@@ -114,6 +116,37 @@ for (const step of Steps.sequential(input.steps)) {
 }
 ```
 
+### Steps.map()
+
+`Steps.map()` provides a functional API for Map states with result capture, closures, and concurrency control:
+
+```typescript
+// Collect results from parallel iteration
+const results = await Steps.map(input.orders, async (order) => {
+  return await processOrder.call({ order });
+});
+// results is an array of each iteration's return value
+
+// Fire-and-forget (no result capture)
+await Steps.map(input.items, async (item) => {
+  await processItem.call({ item });
+});
+
+// With concurrency limit
+await Steps.map(input.items, async (item) => {
+  await processItem.call({ item });
+}, { maxConcurrency: 10 });
+
+// Closures — outer await results are accessible
+const config = await getConfig.call({ env: input.env });
+await Steps.map(input.items, async (item) => {
+  // config is captured via ItemSelector — just works
+  await processItem.call({ item, prefix: config.prefix });
+});
+```
+
+Unlike `for...of`, `Steps.map()` supports closures over prior `await` results and can capture iteration results into a variable.
+
 ### Parallel Execution
 
 ```typescript
@@ -123,7 +156,26 @@ const [users, orders] = await Promise.all([
 ]);
 ```
 
-Compiles to a Parallel state with one branch per promise.
+Compiles to a Parallel state with one branch per promise. Each branch can be a single service call or a multi-step substep function.
+
+### Deferred-Await (Natural Parallelism)
+
+Start multiple service calls without awaiting, then collect results later:
+
+```typescript
+// Start calls (not awaited yet — compiled away, no state emitted)
+const orderPromise = orderFn.call({ id: input.orderId });
+const paymentPromise = paymentFn.call({ amount: input.amount });
+
+// Await individually — compiler batches into a Parallel state
+const order = await orderPromise;
+const payment = await paymentPromise;
+
+// Or collect with Promise.all
+const [order, payment] = await Promise.all([orderPromise, paymentPromise]);
+```
+
+The compiler detects non-awaited service calls and batches their subsequent awaits into a single Parallel state. This is the natural JS/TS pattern for concurrent work.
 
 ### Wait
 

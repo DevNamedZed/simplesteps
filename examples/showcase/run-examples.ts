@@ -40,6 +40,10 @@ const examples = [
   '27-lambda-patterns.ts',
   '28-aws-sdk-escape-hatch.ts',
   '29-context-object.ts',
+  '30-substeps.ts',
+  '31-steps-map.ts',
+  '32-deferred-await.ts',
+  '33-retry-timeout.ts',
 ];
 
 fs.mkdirSync(OUTPUT_DIR, { recursive: true });

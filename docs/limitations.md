@@ -115,50 +115,74 @@ Workaround for rest parameters: pass an explicit array parameter instead.
 
 ## Closures and Variable Capture
 
-Parallel `for...of` loops compile to ASL Map states, which have isolated state. Each iteration cannot reference **runtime variables** from the outer scope (service call results, input-derived values):
+Map state iterations have isolated state — each iteration receives only its array element as input.
+
+**`Steps.map()` supports closures** — prior `await` results are automatically projected into each iteration via ASL's `ItemSelector`:
 
 ```typescript
-const result = await lookupFn.call({ id: input.id });
+const config = await getConfig.call({ env: input.env });
 
-// NOT OK — Map state can't access `result` (runtime variable)
+// OK — Steps.map() captures `config` via ItemSelector
+await Steps.map(input.items, async (item) => {
+  await processor.call({ key: config.prefix, item });
+});
+```
+
+**`for...of` loops do NOT support closures** — each iteration cannot reference runtime variables from the outer scope:
+
+```typescript
+const config = await getConfig.call({ env: input.env });
+
+// NOT OK — for...of Map state can't access `config`
 for (const item of input.items) {
-  await processor.call({ key: result.prefix + item.id });
+  await processor.call({ key: config.prefix, item }); // SS502
 }
 ```
 
-Compile-time constants and service bindings **are** accessible inside Map state iterations. Only runtime variables are isolated.
+Compile-time constants and service bindings are accessible in all Map iterations. Only runtime variables (service call results) are restricted in `for...of`.
 
-Workaround: Use `Steps.sequential()` for sequential iteration (which does allow outer variable access), or restructure the data so each item carries what it needs.
+Workaround for `for...of`: Use `Steps.map()` instead (which supports closures), use `Steps.sequential()` for sequential iteration, or restructure the data so each item carries what it needs.
 
 ## Array Methods
 
-Synchronous array methods (`Array.filter()`, `Array.reduce()`) and synchronous `.map()` are not supported — these are JavaScript runtime operations with no ASL equivalent.
+Array instance methods (`.map()`, `.filter()`, `.reduce()`, `.forEach()`) are not supported — these are JavaScript runtime operations with no ASL equivalent.
 
 ```typescript
-// NOT OK — synchronous .map() cannot be compiled
+// NOT OK — .map() is a JS method, not compilable
 const names = items.map(i => i.name);
 
-// OK — async .map() compiles to a Map state (parallel)
-const results = await items.map(async (item) => {
-  return await processItem.call(item);
-});
-
-// OK — async .forEach() compiles to a Map state (discard results)
+// NOT OK — .forEach() is a JS method, not compilable
 await items.forEach(async (item) => {
   await processItem.call(item);
 });
+```
+
+Use `Steps.map()` or `for...of` instead:
+
+```typescript
+// OK — Steps.map() compiles to Map state (parallel, with result capture)
+const results = await Steps.map(input.items, async (item) => {
+  return await processItem.call({ item });
+});
+
+// OK — Steps.map() fire-and-forget
+await Steps.map(input.items, async (item) => {
+  await processItem.call({ item });
+});
 
 // OK — for...of also compiles to a Map state
-for (const item of items) {
-  await processItem.call(item);
+for (const item of input.items) {
+  await processItem.call({ item });
 }
 ```
 
-Array methods that **are** supported via ASL intrinsics: `.includes()`, `.length`, `[index]`, `.split()` (on strings).
+Array properties that **are** supported via ASL intrinsics: `.includes()`, `.length`, `[index]`, `.split()` (on strings).
 
-## Promise.all
+## Promise.all and Parallel Execution
 
-`Promise.all` compiles to an ASL Parallel state, but the argument **must** be an inline array literal:
+`Promise.all` compiles to an ASL Parallel state. There are two supported patterns:
+
+### Inline array literal
 
 ```typescript
 // OK — array literal with service calls
@@ -166,13 +190,36 @@ const [order, payment] = await Promise.all([
   orderFn.call({ id: input.orderId }),
   paymentFn.call({ amount: input.amount }),
 ]);
+```
 
-// NOT OK — variable reference
+Each element becomes a parallel branch. Branches can be single service calls or multi-step substeps.
+
+### Deferred-await (fire-then-collect)
+
+```typescript
+// OK — natural JS pattern: start calls, then await them
+const orderPromise = orderFn.call({ id: input.orderId });
+const paymentPromise = paymentFn.call({ amount: input.amount });
+const order = await orderPromise;
+const payment = await paymentPromise;
+
+// OK — also works with Promise.all to collect deferred calls
+const orderPromise = orderFn.call({ id: input.orderId });
+const paymentPromise = paymentFn.call({ amount: input.amount });
+const [order, payment] = await Promise.all([orderPromise, paymentPromise]);
+```
+
+The compiler detects non-awaited service calls and batches their awaits into a Parallel state.
+
+### Not supported
+
+```typescript
+// NOT OK — variable reference (not inline literal)
 const promises = [orderFn.call({ id: input.orderId })];
 await Promise.all(promises);  // SS420
 ```
 
-Each element of the array becomes a parallel branch. The compiler needs to see the branches at compile time.
+The compiler must be able to see the branches at compile time.
 
 ## Destructuring
 

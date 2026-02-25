@@ -45,10 +45,22 @@ export interface TryCatchTerminator {
 
 export interface MapStateTerminator {
   readonly kind: 'mapState';
-  readonly expression: ts.ForOfStatement;
+  /** The original ForOfStatement (present for `for...of`, absent for `Steps.map()`). */
+  readonly expression?: ts.ForOfStatement;
+  /** The expression that evaluates to the items array (e.g., `input.items`). */
+  readonly itemsExpression: ts.Expression;
+  /** Iteration variable name (e.g., `item`). */
+  readonly iterVarName: string;
+  /** Iteration variable symbol (for variable resolver). */
+  readonly iterVarSymbol?: ts.Symbol;
   readonly bodyBlock: string;
   readonly exitBlock: string;
   readonly collectResults: boolean;
+  readonly maxConcurrency?: number;
+  /** Variable name for collecting results (e.g., `results` from `const results = await Steps.map(...)`). */
+  readonly resultBindingName?: string;
+  /** Symbol of the result variable for registration in the variable resolver. */
+  readonly resultSymbol?: ts.Symbol;
 }
 
 export interface ReturnTerminator {
@@ -71,9 +83,14 @@ export interface ContinueTerminator {
   readonly target: string;
 }
 
+/** A branch in Promise.all: either a direct expression (service call) or an inlined substep. */
+export type ParallelBranch =
+  | { readonly kind: 'expression'; readonly expression: ts.Expression }
+  | { readonly kind: 'substep'; readonly bodyBlock: string };
+
 export interface ParallelTerminator {
   readonly kind: 'parallel';
-  readonly branches: readonly ts.Expression[];
+  readonly branches: readonly ParallelBranch[];
   readonly resultBindings: readonly string[];
   readonly resultSymbols: readonly (ts.Symbol | undefined)[];
   readonly exitBlock: string;
@@ -127,4 +144,10 @@ export interface BasicBlock {
 export interface ControlFlowGraph {
   readonly entry: string;
   readonly blocks: ReadonlyMap<string, BasicBlock>;
+  /**
+   * Non-awaited service calls that are awaited later via an identifier.
+   * Maps the variable symbol to the original call expression so the state
+   * builder can resolve `await foo` → `await svc.call(params)`.
+   */
+  readonly deferredCalls?: ReadonlyMap<ts.Symbol, ts.CallExpression>;
 }

@@ -184,6 +184,30 @@ export function resolveVariables(
         }
       }
     }
+
+    // Also resolve imported constants via WPA
+    for (const stmt of sourceFile.statements) {
+      if (!ts.isImportDeclaration(stmt)) continue;
+      if (!stmt.importClause?.namedBindings) continue;
+      if (!ts.isNamedImports(stmt.importClause.namedBindings)) continue;
+
+      for (const spec of stmt.importClause.namedBindings.elements) {
+        const sym = context.checker.getSymbolAtLocation(spec.name);
+        if (!sym) continue;
+        if (builder.getBySymbol(sym)) continue; // already classified
+
+        const latticeVal = env.resolve(sym);
+        if (isConstant(latticeVal)) {
+          builder.addVariable(sym, {
+            symbol: sym,
+            type: StepVariableType.Constant,
+            definitelyAssigned: true,
+            constant: true,
+            literalValue: latticeVal.value,
+          });
+        }
+      }
+    }
   } else {
     // Fallback: original single-file scan without whole-program analysis
     for (const stmt of sourceFile.statements) {

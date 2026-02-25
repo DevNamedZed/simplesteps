@@ -1,6 +1,6 @@
 # Services
 
-SimpleSteps provides typed bindings for 10 AWS services, plus a generic escape hatch for any AWS service.
+SimpleSteps provides typed bindings for 15 AWS services, plus a generic escape hatch for any AWS service.
 
 All service bindings are compile-time markers. They provide TypeScript types for the compiler and throw if called at runtime.
 
@@ -180,6 +180,130 @@ No constructor argument. SSM is stateless.
 
 ---
 
+## ECS
+
+```typescript
+const cluster = new ECS('arn:aws:ecs:us-east-1:123:cluster/my-cluster');
+
+// Run task (sync — waits for completion)
+const result = await cluster.runTask<TaskResult>({
+  TaskDefinition: 'arn:aws:ecs:us-east-1:123:task-definition/my-task:1',
+  LaunchType: 'FARGATE',
+});
+
+// Run task (async — returns immediately)
+await cluster.runTaskAsync({
+  TaskDefinition: 'arn:aws:ecs:us-east-1:123:task-definition/my-task:1',
+  LaunchType: 'FARGATE',
+});
+```
+
+Constructor takes a **Cluster ARN**.
+
+---
+
+## Bedrock
+
+```typescript
+const model = new Bedrock('anthropic.claude-3-sonnet-20240229-v1:0');
+
+const result = await model.invokeModel<BedrockResponse>({
+  Body: { prompt: input.prompt, max_tokens: 1000 },
+  ContentType: 'application/json',
+  Accept: 'application/json',
+});
+```
+
+Constructor takes a **Model ID**.
+
+---
+
+## Glue
+
+```typescript
+const job = new Glue('my-etl-job');
+
+// Start job run (sync — waits for completion)
+const result = await job.startJobRun<JobResult>({
+  Arguments: { '--input_path': input.path },
+});
+
+// Start job run (async — returns immediately)
+await job.startJobRunAsync({
+  Arguments: { '--input_path': input.path },
+});
+```
+
+Constructor takes a **Job Name**.
+
+---
+
+## CodeBuild
+
+```typescript
+const project = new CodeBuild('my-build-project');
+
+// Start build (sync — waits for completion)
+const result = await project.startBuild<BuildResult>({
+  EnvironmentVariablesOverride: [
+    { Name: 'BRANCH', Value: input.branch, Type: 'PLAINTEXT' },
+  ],
+});
+
+// Start build (async — returns immediately)
+await project.startBuildAsync({});
+```
+
+Constructor takes a **Project Name**.
+
+---
+
+## Athena
+
+```typescript
+const athena = new Athena();
+
+const execution = await athena.startQueryExecution<StartResult>({
+  QueryString: 'SELECT * FROM logs WHERE date = ?',
+  QueryExecutionContext: { Database: 'my_database' },
+  ResultConfiguration: { OutputLocation: 's3://results/' },
+});
+
+const status = await athena.getQueryExecution<StatusResult>({
+  QueryExecutionId: execution.QueryExecutionId,
+});
+
+const results = await athena.getQueryResults<QueryResult>({
+  QueryExecutionId: execution.QueryExecutionId,
+});
+```
+
+No constructor argument. Athena is stateless.
+
+---
+
+## Batch
+
+```typescript
+const queue = new Batch('arn:aws:batch:us-east-1:123:job-queue/my-queue');
+
+// Submit job (sync — waits for completion)
+const result = await queue.submitJob<JobResult>({
+  JobDefinition: 'arn:aws:batch:us-east-1:123:job-definition/my-job:1',
+  JobName: 'process-data',
+});
+
+// Submit job (async — returns immediately)
+await queue.submitJobAsync({
+  JobDefinition: 'arn:aws:batch:us-east-1:123:job-definition/my-job:1',
+  JobName: 'process-data',
+});
+```
+
+Constructor takes a **Job Queue ARN**.
+
+---
+
 ## `Steps.awsSdk()` -- Generic Escape Hatch
 
 For AWS services without a dedicated binding:
@@ -213,9 +337,26 @@ Use typed bindings when available. Use `Steps.awsSdk()` for services without bin
 
 ---
 
-## Retry Policy
+## Service Options
 
-All service methods accept a `retry` option:
+All service methods accept an optional second argument with retry, timeout, and heartbeat settings:
+
+```typescript
+const result = await fn.call(input, {
+  retry: {
+    errorEquals: ['States.TaskFailed'],
+    intervalSeconds: 2,
+    maxAttempts: 3,
+    backoffRate: 2,
+    maxDelaySeconds: 60,
+    jitterStrategy: 'FULL',
+  },
+  timeoutSeconds: 300,       // Max execution time
+  heartbeatSeconds: 30,      // Heartbeat interval for long-running tasks
+});
+```
+
+### Retry Policy
 
 ```typescript
 interface RetryPolicy {
@@ -227,4 +368,11 @@ interface RetryPolicy {
   jitterStrategy?: 'FULL' | 'NONE';
 }
 ```
+
+### Timeouts
+
+- `timeoutSeconds` — Maximum time (in seconds) the Task state is allowed to run. If the task exceeds this, Step Functions raises `States.Timeout`.
+- `heartbeatSeconds` — Interval (in seconds) between heartbeat signals for long-running tasks. If no heartbeat is received within this interval, Step Functions raises `States.HeartbeatTimeout`.
+
+Both compile to their corresponding ASL fields (`TimeoutSeconds`, `HeartbeatSeconds`) on the Task state.
 

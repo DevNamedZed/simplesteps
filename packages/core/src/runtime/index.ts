@@ -30,7 +30,15 @@ export interface DelayOptions {
 }
 
 // ---------------------------------------------------------------------------
-// 3. HashAlgorithm
+// 3. MapOptions
+// ---------------------------------------------------------------------------
+
+export interface MapOptions {
+  readonly maxConcurrency?: number;
+}
+
+// ---------------------------------------------------------------------------
+// 4. HashAlgorithm
 // ---------------------------------------------------------------------------
 
 export type HashAlgorithm = 'MD5' | 'SHA-1' | 'SHA-256' | 'SHA-384' | 'SHA-512';
@@ -153,6 +161,25 @@ export class Steps {
   }
 
   static merge(_obj1: any, _obj2: any, _deep?: boolean): any {
+    throw new Error(RUNTIME_ERROR_MESSAGE);
+  }
+
+  // -- Map with options ----------------------------------------------------
+
+  /**
+   * Iterate over an array and execute the callback for each item,
+   * compiling to a Map state with optional concurrency control.
+   *
+   * @example
+   *   const results = await Steps.map(input.items, async (item) => {
+   *     return await processItem.call({ item });
+   *   }, { maxConcurrency: 10 });
+   */
+  static map<T, R>(
+    _items: readonly T[],
+    _callback: (item: T) => Promise<R>,
+    _options?: MapOptions,
+  ): Promise<R[]> {
     throw new Error(RUNTIME_ERROR_MESSAGE);
   }
 

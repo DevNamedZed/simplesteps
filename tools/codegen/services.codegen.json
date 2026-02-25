@@ -1,0 +1,693 @@
+{
+  "include": [
+    "api-gateway",
+    "appsync",
+    "cloudformation",
+    "cloudwatch",
+    "cloudwatch-logs",
+    "codecommit",
+    "codepipeline",
+    "comprehend",
+    "config-service",
+    "connect",
+    "databrew",
+    "docdb",
+    "database-migration-service",
+    "ec2",
+    "ecr",
+    "eks",
+    "elasticache",
+    "elastic-beanstalk",
+    "emr",
+    "emr-serverless",
+    "firehose",
+    "iam",
+    "iot",
+    "kinesis",
+    "kms",
+    "lakeformation",
+    "lex-models-v2",
+    "mediaconvert",
+    "kafka",
+    "neptune",
+    "opensearch",
+    "organizations",
+    "pinpoint",
+    "polly",
+    "rds",
+    "redshift",
+    "rekognition",
+    "route-53",
+    "sagemaker",
+    "scheduler",
+    "service-catalog",
+    "sesv2",
+    "sfn",
+    "textract",
+    "transcribe",
+    "transfer",
+    "translate",
+    "wafv2"
+  ],
+  "optimizedServices": {
+    "Lambda": {
+      "smithyModel": null,
+      "className": "Lambda",
+      "pattern": "factory",
+      "constructorArg": { "name": "arn", "type": "string", "doc": "The Lambda function ARN" },
+      "constructorOptions": { "type": "LambdaOptions" },
+      "genericParams": ["TInput = any", "TOutput = any"],
+      "callable": true,
+      "options": {
+        "interfaceName": "LambdaOptions",
+        "fields": {}
+      },
+      "paramShape": {
+        "callAsync": { "resourceKey": "FunctionName", "paramKey": "Payload", "extraParams": { "InvocationType": "Event" } },
+        "callWithCallback": { "resourceKey": "FunctionName", "paramKey": "Payload" }
+      },
+      "doc": "A callable Lambda function instance.",
+      "operations": {
+        "call": {
+          "integration": "direct",
+          "hasOutput": true,
+          "customSignature": "(input: TInput, options?: LambdaOptions): Promise<TOutput>"
+        },
+        "callAsync": {
+          "integration": "sdk",
+          "sdkResource": "arn:aws:states:::lambda:invoke",
+          "hasOutput": false,
+          "customSignature": "(input: TInput, options?: LambdaOptions): Promise<void>"
+        },
+        "callWithCallback": {
+          "integration": "sdk",
+          "sdkResource": "arn:aws:states:::lambda:invoke.waitForTaskToken",
+          "hasOutput": true,
+          "customSignature": "<TResult = any>(input: TInput, options?: LambdaOptions): Promise<TResult>"
+        }
+      }
+    },
+    "SimpleQueueService": {
+      "smithyModel": "models/sqs/model.json",
+      "smithyServiceId": "com.amazonaws.sqs#AmazonSQS",
+      "className": "SimpleQueueService",
+      "classAlias": "SQS",
+      "pattern": "class",
+      "constructorArg": { "name": "queueUrl", "type": "string", "doc": "The SQS queue URL" },
+      "resourceInject": "QueueUrl",
+      "paramShape": {
+        "publish": { "resourceKey": "QueueUrl", "paramKey": "MessageBody" },
+        "publishWithCallback": { "resourceKey": "QueueUrl", "paramKey": "MessageBody" }
+      },
+      "options": {
+        "interfaceName": "SqsPublishOptions",
+        "fields": {
+          "delaySeconds": { "type": "number", "optional": true },
+          "messageGroupId": { "type": "string", "optional": true },
+          "messageDeduplicationId": { "type": "string", "optional": true }
+        }
+      },
+      "doc": "SQS queue binding for the SimpleSteps compiler.",
+      "operations": {
+        "publish": {
+          "integration": "sdk",
+          "sdkResource": "arn:aws:states:::sqs:sendMessage",
+          "hasOutput": false,
+          "customSignature": "(message: any, options?: SqsPublishOptions): Promise<void>"
+        },
+        "publishWithCallback": {
+          "integration": "sdk",
+          "sdkResource": "arn:aws:states:::sqs:sendMessage.waitForTaskToken",
+          "hasOutput": true,
+          "customSignature": "<T>(message: any, options?: SqsPublishOptions): Promise<T>"
+        },
+        "receiveMessage": {
+          "smithyOperation": "com.amazonaws.sqs#ReceiveMessage",
+          "integration": "sdk",
+          "sdkResource": "arn:aws:states:::aws-sdk:sqs:receiveMessage",
+          "hasOutput": true,
+          "omitFromInput": ["QueueUrl"],
+          "returnType": "generic"
+        },
+        "deleteMessage": {
+          "smithyOperation": "com.amazonaws.sqs#DeleteMessage",
+          "integration": "sdk",
+          "sdkResource": "arn:aws:states:::aws-sdk:sqs:deleteMessage",
+          "hasOutput": false,
+          "omitFromInput": ["QueueUrl"],
+          "returnType": "void"
+        }
+      }
+    },
+    "DynamoDB": {
+      "smithyModel": "models/dynamodb/model.json",
+      "smithyServiceId": "com.amazonaws.dynamodb#DynamoDB_20120810",
+      "className": "DynamoDB",
+      "pattern": "class",
+      "constructorArg": { "name": "tableName", "type": "string", "doc": "The DynamoDB table name or ARN" },
+      "resourceInject": "TableName",
+      "options": {
+        "interfaceName": "DynamoDbOptions",
+        "fields": {}
+      },
+      "doc": "DynamoDB table binding for the SimpleSteps compiler.",
+      "operations": {
+        "getItem": {
+          "smithyOperation": "com.amazonaws.dynamodb#GetItem",
+          "integration": "sdk",
+          "sdkResource": "arn:aws:states:::dynamodb:getItem",
+          "hasOutput": true,
+          "omitFromInput": ["TableName"],
+          "returnType": "generic"
+        },
+        "get": { "aliasOf": "getItem" },
+        "putItem": {
+          "smithyOperation": "com.amazonaws.dynamodb#PutItem",
+          "integration": "sdk",
+          "sdkResource": "arn:aws:states:::dynamodb:putItem",
+          "hasOutput": false,
+          "omitFromInput": ["TableName"],
+          "returnType": "void"
+        },
+        "put": { "aliasOf": "putItem" },
+        "deleteItem": {
+          "smithyOperation": "com.amazonaws.dynamodb#DeleteItem",
+          "integration": "sdk",
+          "sdkResource": "arn:aws:states:::dynamodb:deleteItem",
+          "hasOutput": false,
+          "omitFromInput": ["TableName"],
+          "returnType": "void"
+        },
+        "delete": { "aliasOf": "deleteItem" },
+        "updateItem": {
+          "smithyOperation": "com.amazonaws.dynamodb#UpdateItem",
+          "integration": "sdk",
+          "sdkResource": "arn:aws:states:::dynamodb:updateItem",
+          "hasOutput": true,
+          "omitFromInput": ["TableName"],
+          "returnType": "generic"
+        },
+        "update": { "aliasOf": "updateItem" },
+        "query": {
+          "smithyOperation": "com.amazonaws.dynamodb#Query",
+          "integration": "sdk",
+          "sdkResource": "arn:aws:states:::dynamodb:query",
+          "hasOutput": true,
+          "omitFromInput": ["TableName"],
+          "returnType": "generic"
+        },
+        "scan": {
+          "smithyOperation": "com.amazonaws.dynamodb#Scan",
+          "integration": "sdk",
+          "sdkResource": "arn:aws:states:::dynamodb:scan",
+          "hasOutput": true,
+          "omitFromInput": ["TableName"],
+          "returnType": "generic"
+        },
+        "batchGetItem": {
+          "smithyOperation": "com.amazonaws.dynamodb#BatchGetItem",
+          "integration": "sdk",
+          "sdkResource": "arn:aws:states:::dynamodb:batchGetItem",
+          "hasOutput": true,
+          "omitFromInput": [],
+          "returnType": "generic"
+        },
+        "batchWriteItem": {
+          "smithyOperation": "com.amazonaws.dynamodb#BatchWriteItem",
+          "integration": "sdk",
+          "sdkResource": "arn:aws:states:::dynamodb:batchWriteItem",
+          "hasOutput": false,
+          "omitFromInput": [],
+          "returnType": "void"
+        }
+      }
+    },
+    "SNS": {
+      "smithyModel": null,
+      "className": "SNS",
+      "pattern": "class",
+      "constructorArg": { "name": "topicArn", "type": "string", "doc": "The SNS topic ARN" },
+      "paramShape": {
+        "publish": { "resourceKey": "TopicArn", "paramKey": "Message" }
+      },
+      "options": {
+        "interfaceName": "SnsPublishOptions",
+        "fields": {
+          "subject": { "type": "string", "optional": true },
+          "messageAttributes": { "type": "Record<string, any>", "optional": true }
+        }
+      },
+      "doc": "SNS topic binding for the SimpleSteps compiler.",
+      "operations": {
+        "publish": {
+          "integration": "sdk",
+          "sdkResource": "arn:aws:states:::sns:publish",
+          "hasOutput": false,
+          "customSignature": "(message: any, options?: SnsPublishOptions): Promise<void>"
+        }
+      }
+    },
+    "StepFunction": {
+      "smithyModel": null,
+      "className": "StepFunction",
+      "pattern": "class",
+      "constructorArg": { "name": "stateMachineArn", "type": "string", "doc": "The Step Function state machine ARN" },
+      "constructorOptions": { "type": "StepFunctionOptions" },
+      "genericParams": ["TInput = any", "TOutput = any"],
+      "paramShape": {
+        "startExecution": { "resourceKey": "StateMachineArn", "paramKey": "Input" },
+        "startExecutionAsync": { "resourceKey": "StateMachineArn", "paramKey": "Input" },
+        "startExecutionWithCallback": { "resourceKey": "StateMachineArn", "paramKey": "Input" }
+      },
+      "options": {
+        "interfaceName": "StepFunctionOptions",
+        "fields": {
+          "executionName": { "type": "string", "optional": true }
+        }
+      },
+      "doc": "Step Function binding for the SimpleSteps compiler.",
+      "operations": {
+        "startExecution": {
+          "integration": "sdk",
+          "sdkResource": "arn:aws:states:::states:startExecution.sync:2",
+          "hasOutput": true,
+          "customSignature": "(input: TInput): Promise<TOutput>"
+        },
+        "startExecutionAsync": {
+          "integration": "sdk",
+          "sdkResource": "arn:aws:states:::states:startExecution",
+          "hasOutput": true,
+          "customSignature": "(input: TInput): Promise<{ executionArn: string }>"
+        },
+        "startExecutionWithCallback": {
+          "integration": "sdk",
+          "sdkResource": "arn:aws:states:::states:startExecution.waitForTaskToken",
+          "hasOutput": true,
+          "customSignature": "<TResult = any>(input: TInput): Promise<TResult>"
+        }
+      }
+    },
+    "EventBridge": {
+      "smithyModel": null,
+      "className": "EventBridge",
+      "pattern": "class",
+      "constructorArg": { "name": "eventBusName", "type": "string", "doc": "The EventBridge event bus name" },
+      "paramShape": {
+        "putEvent": { "resourceKey": "EventBusName", "paramKey": "Detail" }
+      },
+      "options": {
+        "interfaceName": "EventBridgeOptions",
+        "fields": {}
+      },
+      "customTypes": [
+        {
+          "name": "EventBridgeEvent",
+          "kind": "interface",
+          "exported": true,
+          "doc": "An event to be published to EventBridge.",
+          "members": {
+            "source": { "type": "string", "required": true },
+            "detailType": { "type": "string", "required": true },
+            "detail": { "type": "any", "required": true }
+          }
+        }
+      ],
+      "doc": "EventBridge binding for the SimpleSteps compiler.",
+      "operations": {
+        "putEvent": {
+          "integration": "sdk",
+          "sdkResource": "arn:aws:states:::events:putEvents",
+          "hasOutput": false,
+          "customSignature": "(event: EventBridgeEvent, options?: EventBridgeOptions): Promise<void>"
+        }
+      }
+    },
+    "S3": {
+      "smithyModel": "models/s3/model.json",
+      "smithyServiceId": "com.amazonaws.s3#AmazonS3",
+      "className": "S3",
+      "pattern": "class",
+      "constructorArg": { "name": "bucketName", "type": "string", "doc": "The S3 bucket name" },
+      "resourceInject": "Bucket",
+      "options": {
+        "interfaceName": "S3Options",
+        "fields": {}
+      },
+      "doc": "S3 bucket binding for the SimpleSteps compiler.",
+      "operations": {
+        "getObject": {
+          "smithyOperation": "com.amazonaws.s3#GetObject",
+          "integration": "sdk",
+          "sdkResource": "arn:aws:states:::aws-sdk:s3:getObject",
+          "hasOutput": true,
+          "omitFromInput": ["Bucket"],
+          "returnType": "generic"
+        },
+        "putObject": {
+          "smithyOperation": "com.amazonaws.s3#PutObject",
+          "integration": "sdk",
+          "sdkResource": "arn:aws:states:::aws-sdk:s3:putObject",
+          "hasOutput": false,
+          "omitFromInput": ["Bucket"],
+          "returnType": "void"
+        },
+        "deleteObject": {
+          "smithyOperation": "com.amazonaws.s3#DeleteObject",
+          "integration": "sdk",
+          "sdkResource": "arn:aws:states:::aws-sdk:s3:deleteObject",
+          "hasOutput": false,
+          "omitFromInput": ["Bucket"],
+          "returnType": "void"
+        },
+        "copyObject": {
+          "smithyOperation": "com.amazonaws.s3#CopyObject",
+          "integration": "sdk",
+          "sdkResource": "arn:aws:states:::aws-sdk:s3:copyObject",
+          "hasOutput": false,
+          "omitFromInput": ["Bucket"],
+          "returnType": "void"
+        },
+        "headObject": {
+          "smithyOperation": "com.amazonaws.s3#HeadObject",
+          "integration": "sdk",
+          "sdkResource": "arn:aws:states:::aws-sdk:s3:headObject",
+          "hasOutput": true,
+          "omitFromInput": ["Bucket"],
+          "returnType": "generic"
+        },
+        "listObjects": {
+          "smithyOperation": "com.amazonaws.s3#ListObjectsV2",
+          "integration": "sdk",
+          "sdkResource": "arn:aws:states:::aws-sdk:s3:listObjectsV2",
+          "hasOutput": true,
+          "omitFromInput": ["Bucket"],
+          "returnType": "generic"
+        }
+      }
+    },
+    "SecretsManager": {
+      "smithyModel": "models/secrets-manager/model.json",
+      "smithyServiceId": "com.amazonaws.secretsmanager#secretsmanager",
+      "className": "SecretsManager",
+      "pattern": "class",
+      "constructorArg": null,
+      "options": {
+        "interfaceName": "SecretsManagerOptions",
+        "fields": {}
+      },
+      "doc": "Secrets Manager binding for the SimpleSteps compiler.",
+      "operations": {
+        "getSecretValue": {
+          "smithyOperation": "com.amazonaws.secretsmanager#GetSecretValue",
+          "integration": "sdk",
+          "sdkResource": "arn:aws:states:::aws-sdk:secretsmanager:getSecretValue",
+          "hasOutput": true,
+          "omitFromInput": [],
+          "returnType": "generic"
+        },
+        "putSecretValue": {
+          "smithyOperation": "com.amazonaws.secretsmanager#PutSecretValue",
+          "integration": "sdk",
+          "sdkResource": "arn:aws:states:::aws-sdk:secretsmanager:putSecretValue",
+          "hasOutput": false,
+          "omitFromInput": [],
+          "returnType": "void"
+        },
+        "createSecret": {
+          "smithyOperation": "com.amazonaws.secretsmanager#CreateSecret",
+          "integration": "sdk",
+          "sdkResource": "arn:aws:states:::aws-sdk:secretsmanager:createSecret",
+          "hasOutput": true,
+          "omitFromInput": [],
+          "returnType": "generic"
+        },
+        "updateSecret": {
+          "smithyOperation": "com.amazonaws.secretsmanager#UpdateSecret",
+          "integration": "sdk",
+          "sdkResource": "arn:aws:states:::aws-sdk:secretsmanager:updateSecret",
+          "hasOutput": false,
+          "omitFromInput": [],
+          "returnType": "void"
+        },
+        "deleteSecret": {
+          "smithyOperation": "com.amazonaws.secretsmanager#DeleteSecret",
+          "integration": "sdk",
+          "sdkResource": "arn:aws:states:::aws-sdk:secretsmanager:deleteSecret",
+          "hasOutput": false,
+          "omitFromInput": [],
+          "returnType": "void"
+        },
+        "describeSecret": {
+          "smithyOperation": "com.amazonaws.secretsmanager#DescribeSecret",
+          "integration": "sdk",
+          "sdkResource": "arn:aws:states:::aws-sdk:secretsmanager:describeSecret",
+          "hasOutput": true,
+          "omitFromInput": [],
+          "returnType": "generic"
+        }
+      }
+    },
+    "SSM": {
+      "smithyModel": "models/ssm/model.json",
+      "smithyServiceId": "com.amazonaws.ssm#AmazonSSM",
+      "className": "SSM",
+      "pattern": "class",
+      "constructorArg": null,
+      "options": {
+        "interfaceName": "SSMOptions",
+        "fields": {}
+      },
+      "doc": "SSM Parameter Store binding for the SimpleSteps compiler.",
+      "operations": {
+        "getParameter": {
+          "smithyOperation": "com.amazonaws.ssm#GetParameter",
+          "integration": "sdk",
+          "sdkResource": "arn:aws:states:::aws-sdk:ssm:getParameter",
+          "hasOutput": true,
+          "omitFromInput": [],
+          "returnType": "generic"
+        },
+        "putParameter": {
+          "smithyOperation": "com.amazonaws.ssm#PutParameter",
+          "integration": "sdk",
+          "sdkResource": "arn:aws:states:::aws-sdk:ssm:putParameter",
+          "hasOutput": false,
+          "omitFromInput": [],
+          "returnType": "void"
+        },
+        "getParameters": {
+          "smithyOperation": "com.amazonaws.ssm#GetParameters",
+          "integration": "sdk",
+          "sdkResource": "arn:aws:states:::aws-sdk:ssm:getParameters",
+          "hasOutput": true,
+          "omitFromInput": [],
+          "returnType": "generic"
+        },
+        "getParametersByPath": {
+          "smithyOperation": "com.amazonaws.ssm#GetParametersByPath",
+          "integration": "sdk",
+          "sdkResource": "arn:aws:states:::aws-sdk:ssm:getParametersByPath",
+          "hasOutput": true,
+          "omitFromInput": [],
+          "returnType": "generic"
+        },
+        "deleteParameter": {
+          "smithyOperation": "com.amazonaws.ssm#DeleteParameter",
+          "integration": "sdk",
+          "sdkResource": "arn:aws:states:::aws-sdk:ssm:deleteParameter",
+          "hasOutput": false,
+          "omitFromInput": [],
+          "returnType": "void"
+        }
+      }
+    },
+    "ECS": {
+      "smithyModel": "models/ecs/model.json",
+      "smithyServiceId": "com.amazonaws.ecs#AmazonEC2ContainerServiceV20141113",
+      "className": "ECS",
+      "pattern": "class",
+      "constructorArg": { "name": "clusterArn", "type": "string", "doc": "The ECS cluster ARN" },
+      "resourceInject": "Cluster",
+      "options": {
+        "interfaceName": "EcsOptions",
+        "fields": {}
+      },
+      "doc": "ECS cluster binding for the SimpleSteps compiler.",
+      "operations": {
+        "runTask": {
+          "smithyOperation": "com.amazonaws.ecs#RunTask",
+          "integration": "sdk",
+          "sdkResource": "arn:aws:states:::ecs:runTask.sync",
+          "hasOutput": true,
+          "omitFromInput": ["Cluster"],
+          "returnType": "generic"
+        },
+        "runTaskAsync": {
+          "smithyOperation": "com.amazonaws.ecs#RunTask",
+          "integration": "sdk",
+          "sdkResource": "arn:aws:states:::ecs:runTask",
+          "hasOutput": false,
+          "omitFromInput": ["Cluster"],
+          "returnType": "void"
+        }
+      }
+    },
+    "Bedrock": {
+      "smithyModel": "models/bedrock-runtime/model.json",
+      "smithyServiceId": "com.amazonaws.bedrockruntime#AmazonBedrockRuntime",
+      "className": "Bedrock",
+      "pattern": "class",
+      "constructorArg": { "name": "modelId", "type": "string", "doc": "The Bedrock model ID" },
+      "resourceInject": "ModelId",
+      "options": {
+        "interfaceName": "BedrockOptions",
+        "fields": {}
+      },
+      "doc": "Bedrock model binding for the SimpleSteps compiler.",
+      "operations": {
+        "invokeModel": {
+          "smithyOperation": "com.amazonaws.bedrockruntime#InvokeModel",
+          "integration": "sdk",
+          "sdkResource": "arn:aws:states:::bedrock:invokeModel",
+          "hasOutput": true,
+          "omitFromInput": ["ModelId"],
+          "returnType": "generic"
+        }
+      }
+    },
+    "Batch": {
+      "smithyModel": "models/batch/model.json",
+      "smithyServiceId": "com.amazonaws.batch#AWSBatchV20160810",
+      "className": "Batch",
+      "pattern": "class",
+      "constructorArg": { "name": "jobQueueArn", "type": "string", "doc": "The Batch job queue ARN" },
+      "paramShape": {
+        "submitJob": { "resourceKey": "JobQueue", "paramKey": "Parameters" },
+        "submitJobAsync": { "resourceKey": "JobQueue", "paramKey": "Parameters" }
+      },
+      "options": {
+        "interfaceName": "BatchOptions",
+        "fields": {}
+      },
+      "doc": "AWS Batch job queue binding for the SimpleSteps compiler.",
+      "operations": {
+        "submitJob": {
+          "smithyOperation": "com.amazonaws.batch#SubmitJob",
+          "integration": "sdk",
+          "sdkResource": "arn:aws:states:::batch:submitJob.sync",
+          "hasOutput": true,
+          "omitFromInput": ["JobQueue"],
+          "returnType": "generic"
+        },
+        "submitJobAsync": {
+          "smithyOperation": "com.amazonaws.batch#SubmitJob",
+          "integration": "sdk",
+          "sdkResource": "arn:aws:states:::batch:submitJob",
+          "hasOutput": false,
+          "omitFromInput": ["JobQueue"],
+          "returnType": "void"
+        }
+      }
+    },
+    "Glue": {
+      "smithyModel": "models/glue/model.json",
+      "smithyServiceId": "com.amazonaws.glue#AWSGlue",
+      "className": "Glue",
+      "pattern": "class",
+      "constructorArg": { "name": "jobName", "type": "string", "doc": "The Glue job name" },
+      "resourceInject": "JobName",
+      "options": {
+        "interfaceName": "GlueOptions",
+        "fields": {}
+      },
+      "doc": "AWS Glue job binding for the SimpleSteps compiler.",
+      "operations": {
+        "startJobRun": {
+          "smithyOperation": "com.amazonaws.glue#StartJobRun",
+          "integration": "sdk",
+          "sdkResource": "arn:aws:states:::glue:startJobRun.sync",
+          "hasOutput": true,
+          "omitFromInput": ["JobName"],
+          "returnType": "generic"
+        },
+        "startJobRunAsync": {
+          "smithyOperation": "com.amazonaws.glue#StartJobRun",
+          "integration": "sdk",
+          "sdkResource": "arn:aws:states:::glue:startJobRun",
+          "hasOutput": false,
+          "omitFromInput": ["JobName"],
+          "returnType": "void"
+        }
+      }
+    },
+    "CodeBuild": {
+      "smithyModel": "models/codebuild/model.json",
+      "smithyServiceId": "com.amazonaws.codebuild#CodeBuild_20161006",
+      "className": "CodeBuild",
+      "pattern": "class",
+      "constructorArg": { "name": "projectName", "type": "string", "doc": "The CodeBuild project name" },
+      "resourceInject": "ProjectName",
+      "options": {
+        "interfaceName": "CodeBuildOptions",
+        "fields": {}
+      },
+      "doc": "AWS CodeBuild project binding for the SimpleSteps compiler.",
+      "operations": {
+        "startBuild": {
+          "smithyOperation": "com.amazonaws.codebuild#StartBuild",
+          "integration": "sdk",
+          "sdkResource": "arn:aws:states:::codebuild:startBuild.sync",
+          "hasOutput": true,
+          "omitFromInput": ["ProjectName"],
+          "returnType": "generic"
+        },
+        "startBuildAsync": {
+          "smithyOperation": "com.amazonaws.codebuild#StartBuild",
+          "integration": "sdk",
+          "sdkResource": "arn:aws:states:::codebuild:startBuild",
+          "hasOutput": false,
+          "omitFromInput": ["ProjectName"],
+          "returnType": "void"
+        }
+      }
+    },
+    "Athena": {
+      "smithyModel": "models/athena/model.json",
+      "smithyServiceId": "com.amazonaws.athena#AmazonAthena",
+      "className": "Athena",
+      "pattern": "class",
+      "constructorArg": null,
+      "options": {
+        "interfaceName": "AthenaOptions",
+        "fields": {}
+      },
+      "doc": "Athena query binding for the SimpleSteps compiler.",
+      "operations": {
+        "startQueryExecution": {
+          "smithyOperation": "com.amazonaws.athena#StartQueryExecution",
+          "integration": "sdk",
+          "sdkResource": "arn:aws:states:::athena:startQueryExecution.sync",
+          "hasOutput": true,
+          "omitFromInput": [],
+          "returnType": "generic"
+        },
+        "getQueryExecution": {
+          "smithyOperation": "com.amazonaws.athena#GetQueryExecution",
+          "integration": "sdk",
+          "sdkResource": "arn:aws:states:::athena:getQueryExecution",
+          "hasOutput": true,
+          "omitFromInput": [],
+          "returnType": "generic"
+        },
+        "getQueryResults": {
+          "smithyOperation": "com.amazonaws.athena#GetQueryResults",
+          "integration": "sdk",
+          "sdkResource": "arn:aws:states:::athena:getQueryResults",
+          "hasOutput": true,
+          "omitFromInput": [],
+          "returnType": "generic"
+        }
+      }
+    }
+  }
+}
