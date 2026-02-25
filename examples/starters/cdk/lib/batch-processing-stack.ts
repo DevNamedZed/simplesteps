@@ -67,7 +67,7 @@ export class BatchProcessingStack extends cdk.Stack {
 
           const resultKey = Steps.format('results/{}/output.json', input.batchId);
 
-          // Body simplified — JSON.stringify() is not supported by the compiler
+          // Body simplified — full JSON.stringify() compiles to $string() in JSONata mode
           await bucket.putObject({
             Key: resultKey,
             Body: input.batchId,

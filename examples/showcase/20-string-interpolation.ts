@@ -1,9 +1,14 @@
 // String Interpolation with Template Literals
 //
-// Write natural template strings — the compiler maps them to
-// States.Format intrinsic functions automatically.
+// Write natural template strings — the compiler maps them to the
+// appropriate ASL representation for your chosen query language.
 //
-// Mapping:
+// JSONata mode (default):
+//   `Hello ${name}`        → "Hello " & $name
+//   `${a} and ${b}`        → $a & " and " & $b
+//   `Total: ${a + b}`      → "Total: " & ($a + $b)
+//
+// JSONPath mode (--query-language jsonpath):
 //   `Hello ${name}`        → States.Format('Hello {}', name)
 //   `${a} and ${b}`        → States.Format('{} and {}', a, b)
 //   `Total: ${a + b}`      → States.Format('Total: {}', States.MathAdd(a, b))

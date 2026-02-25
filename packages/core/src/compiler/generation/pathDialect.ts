@@ -15,7 +15,8 @@
 export interface PathDialect {
   /**
    * The QueryLanguage value for the top-level ASL definition.
-   * undefined means the default (JSONPath — no field emitted).
+   * undefined means no explicit QueryLanguage field (JSONPath mode).
+   * Note: JSONata is the compiler default; JSONPath is used when explicitly requested.
    */
   readonly queryLanguage: 'JSONPath' | 'JSONata' | undefined;
 
@@ -146,7 +147,7 @@ export interface PathDialect {
 }
 
 // ---------------------------------------------------------------------------
-// JSONPath dialect (default)
+// JSONPath dialect (used when queryLanguage: 'JSONPath' is explicitly set)
 // ---------------------------------------------------------------------------
 
 export class JsonPathDialect implements PathDialect {
@@ -362,7 +363,7 @@ export class JsonataDialect implements PathDialect {
   }
 }
 
-/** Singleton instance for the default JSONPath dialect. */
+/** Singleton instance for the JSONPath dialect. */
 export const JSON_PATH_DIALECT: PathDialect = new JsonPathDialect();
 
 /** Singleton instance for the JSONata dialect. */
