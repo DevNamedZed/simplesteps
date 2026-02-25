@@ -51,6 +51,7 @@ const CATEGORY_ICONS: Record<string, string> = {
   'Substeps': '\u{1F9E9}',
   'CDK Patterns': '\u{1F4E6}',
   'Multi-Service Patterns': '\u{26A1}',
+  'JSONata Features': '\u{2728}',
   'Limitations': '\u{1F6A7}',
 };
 
@@ -77,6 +78,13 @@ const EXAMPLE_CATEGORIES: ExampleCategory[] = [
     keys: [
       'intrinsics', 'js-operators', 'string-interpolation', 'constants',
       'js-patterns', 'context-object', 'multi-step-function',
+    ],
+  },
+  {
+    label: 'JSONata Features',
+    keys: [
+      'jsonata-string-methods', 'jsonata-math-methods', 'jsonata-array-methods',
+      'jsonata-lambda-expressions', 'jsonata-data-transform',
     ],
   },
   {
@@ -1859,14 +1867,313 @@ export const batchFanOut = Steps.createFunction(
 );
 ` }] },
 
-  // ── Limitations ────────────────────────────────────────────────────────
+  // ── JSONata Features ──────────────────────────────────────────────────
 
-  'limit-arithmetic': { description: 'Multiply, divide, and modulo have no ASL intrinsic.', services: ['Lambda'], files: [{ name: 'workflow.ts', content: `import { Steps, SimpleStepContext } from './runtime/index';
+  'jsonata-string-methods': { description: 'String methods compile to JSONata built-ins ($uppercase, $lowercase, $trim, etc.).', services: ['Lambda'], files: [{ name: 'workflow.ts', content: `import { Steps, SimpleStepContext } from './runtime/index';
 import { Lambda } from './runtime/services/Lambda';
 
-// ASL only provides States.MathAdd — there is no States.MathMultiply,
-// States.MathDivide, or States.MathModulo. The compiler will emit
-// helpful errors for each unsupported operator.
+// String Methods — JSONata only
+//
+// Standard JS string methods compile directly to JSONata built-in
+// functions. These require JSONata mode (the default).
+//
+//   str.toUpperCase()    → $uppercase(str)
+//   str.toLowerCase()    → $lowercase(str)
+//   str.trim()           → $trim(str)
+//   str.substring(s, e)  → $substring(str, s, e - s)
+//   str.padStart(n, ch)  → $pad(str, -n, ch)
+//   str.padEnd(n, ch)    → $pad(str, n, ch)
+//   str.replace(old, new)→ $replace(str, old, new)
+//   str.charAt(i)        → $substring(str, i, 1)
+//   str.startsWith(pfx)  → $substring(str, 0, $length(pfx)) = pfx
+//   str.endsWith(sfx)    → comparison via $substring + $length
+//   str.repeat(n)        → $join($map([1..n], function() { str }))
+//   str.length           → $length(str)
+
+const lookupUser = Lambda<
+  { userId: string },
+  { name: string; email: string; bio: string; code: string }
+>('arn:aws:lambda:us-east-1:123:function:LookupUser');
+
+export const stringMethods = Steps.createFunction(
+  async (context: SimpleStepContext, input: { userId: string; prefix: string }) => {
+    const user = await lookupUser.call({ userId: input.userId });
+
+    // Case conversion → $uppercase / $lowercase
+    const displayName = user.name.toUpperCase();
+    const emailNorm = user.email.toLowerCase();
+
+    // Whitespace → $trim
+    const cleanBio = user.bio.trim();
+
+    // Substring → $substring(str, start, length)
+    const preview = user.bio.substring(0, 50);
+
+    // Padding → $pad (negative width = padStart)
+    const paddedCode = user.code.padStart(8, '0');
+    const paddedName = user.name.padEnd(20, ' ');
+
+    // Replace → $replace
+    const sanitized = user.bio.replace(' ', '-');
+
+    // charAt → $substring(str, i, 1)
+    const initial = user.name.charAt(0);
+
+    // Prefix/suffix checks
+    const isInternal = user.email.startsWith(input.prefix);
+    const isGmail = user.email.endsWith('@gmail.com');
+
+    // Repeat → $join($map([1..n], function() { str }))
+    const separator = user.code.repeat(3);
+
+    // Length → $length
+    const nameLen = user.name.length;
+
+    return {
+      displayName, emailNorm, cleanBio, preview,
+      paddedCode, paddedName, sanitized, initial,
+      isInternal, isGmail, separator, nameLen,
+    };
+  },
+);
+` }] },
+
+  'jsonata-math-methods': { description: 'Math methods and type conversion compile to JSONata ($floor, $ceil, $number, etc.).', services: ['Lambda'], files: [{ name: 'workflow.ts', content: `import { Steps, SimpleStepContext } from './runtime/index';
+import { Lambda } from './runtime/services/Lambda';
+
+// Math Methods & Type Conversion — JSONata only
+//
+// JS Math functions and type conversions compile to JSONata built-ins.
+//
+//   Math.floor(x)    → $floor(x)       Math.ceil(x)     → $ceil(x)
+//   Math.round(x)    → $round(x)       Math.abs(x)      → $abs(x)
+//   Math.pow(a, b)   → $power(a, b)    Math.sqrt(x)     → $sqrt(x)
+//   Math.min(a, b)   → $min([a, b])    Math.max(a, b)   → $max([a, b])
+//   Math.random()    → $random()
+//   Number(x)        → $number(x)      String(x)        → $string(x)
+//   Boolean(x)       → $boolean(x)     typeof x         → $type(x)
+//   Date.now()       → $millis()       Array.isArray(x) → $type(x) = 'array'
+
+const getQuote = Lambda<
+  { productId: string },
+  { price: number; discount: number; quantity: string; taxRate: number }
+>('arn:aws:lambda:us-east-1:123:function:GetQuote');
+
+export const mathMethods = Steps.createFunction(
+  async (context: SimpleStepContext, input: { productId: string }) => {
+    const quote = await getQuote.call({ productId: input.productId });
+
+    // Rounding → $floor / $ceil / $round
+    const basePrice = Math.floor(quote.price);
+    const shippingCeil = Math.ceil(quote.price * 0.1);
+    const rounded = Math.round(quote.price);
+
+    // Absolute value → $abs
+    const savings = Math.abs(quote.discount);
+
+    // Power and square root → $power / $sqrt
+    const squared = Math.pow(quote.price, 2);
+    const root = Math.sqrt(quote.price);
+
+    // Min/max → $min([...]) / $max([...])
+    const finalPrice = Math.max(quote.price - quote.discount, 0);
+    const capped = Math.min(quote.price, 999);
+
+    // Type conversion → $number / $string / $boolean
+    const qty = Number(quote.quantity);
+    const label = String(quote.price);
+    const hasDiscount = Boolean(quote.discount);
+
+    // typeof → $type()
+    const priceType = typeof quote.price;
+
+    // Date.now() → $millis()
+    const timestamp = Date.now();
+
+    return {
+      basePrice, shippingCeil, rounded, savings,
+      squared, root, finalPrice, capped,
+      qty, label, hasDiscount, priceType, timestamp,
+    };
+  },
+);
+` }] },
+
+  'jsonata-array-methods': { description: 'Array methods & Object utilities compile to JSONata ($join, $reverse, $sort, $keys, etc.).', services: ['Lambda'], files: [{ name: 'workflow.ts', content: `import { Steps, SimpleStepContext } from './runtime/index';
+import { Lambda } from './runtime/services/Lambda';
+
+// Array Methods & Object Utilities — JSONata only
+//
+//   arr.join(delim)     → $join(arr, delim)
+//   arr.reverse()       → $reverse(arr)
+//   arr.sort()          → $sort(arr)
+//   arr.concat(b)       → $append(arr, b)
+//   arr.length          → $count(arr)
+//   arr.includes(val)   → val in arr  (JSONata) / States.ArrayContains (JSONPath)
+//   Object.keys(o)      → $keys(o)
+//   Object.values(o)    → $lookup(o, $keys(o))
+
+const getInventory = Lambda<
+  { warehouse: string },
+  { items: string[]; backorder: string[]; metadata: Record<string, string> }
+>('arn:aws:lambda:us-east-1:123:function:GetInventory');
+
+export const arrayMethods = Steps.createFunction(
+  async (context: SimpleStepContext, input: { warehouse: string; requiredItem: string }) => {
+    const inv = await getInventory.call({ warehouse: input.warehouse });
+
+    // Join → $join(arr, delim)
+    const itemList = inv.items.join(', ');
+
+    // Reverse → $reverse(arr)
+    const reversed = inv.items.reverse();
+
+    // Sort → $sort(arr)
+    const sorted = inv.items.sort();
+
+    // Concat → $append(arr, arr)
+    const allItems = inv.items.concat(inv.backorder);
+
+    // Length → $count(arr)
+    const totalCount = inv.items.length;
+
+    // Includes → works in both modes
+    const inStock = inv.items.includes(input.requiredItem);
+
+    // Object.keys → $keys(o)
+    const metaKeys = Object.keys(inv.metadata);
+
+    // Object.values → $lookup(o, $keys(o))
+    const metaValues = Object.values(inv.metadata);
+
+    return {
+      itemList, reversed, sorted, allItems,
+      totalCount, inStock, metaKeys, metaValues,
+    };
+  },
+);
+` }] },
+
+  'jsonata-lambda-expressions': { description: 'Higher-order functions: map, filter, reduce, find, some, every with pure callbacks.', services: ['Lambda'], files: [{ name: 'workflow.ts', content: `import { Steps, SimpleStepContext } from './runtime/index';
+import { Lambda } from './runtime/services/Lambda';
+
+// Lambda Expressions — Higher-Order Array Functions
+//
+// When a callback is a pure expression (no awaits), the compiler
+// converts it to a JSONata higher-order function. For callbacks
+// with service calls, use Steps.map() instead.
+//
+//   arr.map(v => expr)          → $map(arr, function($v) { expr })
+//   arr.filter(v => pred)       → $filter(arr, function($v) { pred })
+//   arr.reduce((a, v) => e, i)  → $reduce(arr, function($a, $v) { e }, i)
+//   arr.find(v => pred)         → $filter(arr, function($v) { pred })[0]
+//   arr.some(v => pred)         → $count($filter(...)) > 0
+//   arr.every(v => pred)        → $count($filter(...)) = $count(arr)
+
+const getOrders = Lambda<
+  { customerId: string },
+  { orders: Array<{ id: string; status: string; amount: number; priority: boolean }> }
+>('arn:aws:lambda:us-east-1:123:function:GetOrders');
+
+export const lambdaExpressions = Steps.createFunction(
+  async (context: SimpleStepContext, input: { customerId: string; targetOrderId: string }) => {
+    const result = await getOrders.call({ customerId: input.customerId });
+
+    // map → $map(arr, function($order) { $order.id })
+    const orderIds = result.orders.map(order => order.id);
+
+    // filter → $filter(arr, function($order) { $order.status = 'active' })
+    const activeOrders = result.orders.filter(order => order.status === 'active');
+
+    // reduce → $reduce(arr, function($sum, $order) { $sum + $order.amount }, 0)
+    const totalSpend = result.orders.reduce((sum, order) => sum + order.amount, 0);
+
+    // find → $filter(...)[0]
+    const targetOrder = result.orders.find(order => order.id === input.targetOrderId);
+
+    // some → $count($filter(...)) > 0
+    const hasPriority = result.orders.some(order => order.priority);
+
+    // every → $count($filter(...)) = $count(arr)
+    const allPaid = result.orders.every(order => order.amount > 0);
+
+    return { orderIds, activeOrders, totalSpend, targetOrder, hasPriority, allPaid };
+  },
+);
+` }] },
+
+  'jsonata-data-transform': { description: 'Capstone: Lambda call → filter → map → reduce → round → join → format.', services: ['Lambda'], files: [{ name: 'workflow.ts', content: `import { Steps, SimpleStepContext } from './runtime/index';
+import { Lambda } from './runtime/services/Lambda';
+
+// Full Data Transformation Pipeline
+//
+// A realistic workflow that fetches order data, then uses pure
+// TypeScript to filter, transform, aggregate, and format —
+// all compiled to JSONata expressions in a single state.
+//
+// Combines: .filter(), .map(), .reduce(), Math.round(),
+// .length, .join(), template literals, and Lambda calls.
+
+const fetchOrders = Lambda<
+  { region: string },
+  { orders: Array<{ product: string; quantity: number; unitPrice: number; shipped: boolean }> }
+>('arn:aws:lambda:us-east-1:123:function:FetchOrders');
+
+const sendReport = Lambda<
+  { report: string; total: number; count: number },
+  { sent: boolean }
+>('arn:aws:lambda:us-east-1:123:function:SendReport');
+
+export const fullDataTransform = Steps.createFunction(
+  async (context: SimpleStepContext, input: { region: string }) => {
+    // 1. Fetch raw order data from Lambda
+    const data = await fetchOrders.call({ region: input.region });
+
+    // 2. Filter to shipped orders only → $filter(...)
+    const shipped = data.orders.filter(o => o.shipped);
+
+    // 3. Extract product names → $map(...)
+    const products = shipped.map(o => o.product);
+
+    // 4. Calculate total revenue → $reduce(...)
+    const revenue = shipped.reduce((sum, o) => sum + o.quantity * o.unitPrice, 0);
+
+    // 5. Round to whole dollars → $round(...)
+    const roundedRevenue = Math.round(revenue);
+
+    // 6. Count shipped orders
+    const shippedCount = shipped.length;
+
+    // 7. Build a comma-separated product list → $join(...)
+    const productList = products.join(', ');
+
+    // 8. Format the summary → States.Format
+    const summary = \`Shipped \${shippedCount} orders (\${productList}) for $\${roundedRevenue}\`;
+
+    // 9. Send the report to another Lambda
+    const confirmation = await sendReport.call({
+      report: summary,
+      total: roundedRevenue,
+      count: shippedCount,
+    });
+
+    return { summary, confirmation };
+  },
+);
+` }] },
+
+  // ── Limitations ────────────────────────────────────────────────────────
+
+  'limit-arithmetic': { description: 'Arithmetic: all operators work in JSONata; only + and - in JSONPath.', services: ['Lambda'], files: [{ name: 'workflow.ts', content: `import { Steps, SimpleStepContext } from './runtime/index';
+import { Lambda } from './runtime/services/Lambda';
+
+// Arithmetic Operators
+//
+// JSONata mode (default): ALL arithmetic operators work natively.
+//   *, /, %, +, - all compile to JSONata expressions.
+//
+// JSONPath mode: Only + and - (literal) are supported via States.MathAdd.
+//   *, /, % produce SS530/SS531/SS532 errors in JSONPath mode.
 
 const priceFn = Lambda<
   { productId: string },
@@ -1877,22 +2184,26 @@ export const arithmeticLimits = Steps.createFunction(
   async (context: SimpleStepContext, input: { productId: string }) => {
     const item = await priceFn.call({ productId: input.productId });
 
-    // ✅ Addition works — compiles to States.MathAdd
+    // ✅ Addition — works in both modes (JSONata native / States.MathAdd)
     const withTax = item.price + 5;
 
-    // ✅ Subtraction by a literal works — compiles to States.MathAdd(x, -10)
+    // ✅ Subtraction — works in both modes
     const discounted = item.price - 10;
 
-    // ❌ SS530: Multiplication — no ASL intrinsic
+    // ✅ Multiplication — JSONata only (native * operator)
+    //    JSONPath: ❌ SS530
     const total = item.price * item.quantity;
 
-    // ❌ SS531: Division — no ASL intrinsic
+    // ✅ Division — JSONata only (native / operator)
+    //    JSONPath: ❌ SS531
     const half = item.price / 2;
 
-    // ❌ SS532: Modulo — no ASL intrinsic
+    // ✅ Modulo — JSONata only (native % operator)
+    //    JSONPath: ❌ SS532
     const remainder = item.quantity % 3;
 
-    // ❌ SS533: Dynamic subtraction — right side must be a literal
+    // ✅ Dynamic subtraction — JSONata only (native - operator)
+    //    JSONPath: ❌ SS533 (right side must be a literal)
     const diff = item.price - item.quantity;
 
     return { withTax, discounted, total, half, remainder, diff };
@@ -1903,9 +2214,8 @@ export const arithmeticLimits = Steps.createFunction(
   'limit-dynamic-expressions': { description: 'Expressions that cannot be resolved to ASL values.', services: ['Lambda'], files: [{ name: 'workflow.ts', content: `import { Steps, SimpleStepContext } from './runtime/index';
 import { Lambda } from './runtime/services/Lambda';
 
-// ASL parameters must be: input references ($.field), service call
-// results, compile-time constants, or ASL intrinsic functions.
-// Anything else produces an SS502 "Cannot resolve to ASL value" error.
+// Dynamic expressions in service call arguments must resolve to
+// ASL-compatible values. JSONata mode supports more patterns than JSONPath.
 
 const processFn = Lambda<
   { data: string },
@@ -1929,27 +2239,33 @@ export const dynamicLimits = Steps.createFunction(
       return { status: 'matched' };
     }
 
-    // ❌ SS502: String() coercion in service call — no ASL equivalent
+    // ✅ String() — JSONata only (compiles to $string())
+    //    JSONPath: ❌ SS502
     await storeFn.call({ value: String(result.count), flag: true });
 
-    // ❌ SS501: Computed property name — JSONPath needs static keys
-    const key = 'dynamicKey';
-    await storeFn.call({ [key]: input.data, flag: true });
+    // ❌ SS501: Computed property name — both modes need static keys
+    // const key = 'dynamicKey';
+    // await storeFn.call({ [key]: input.data, flag: true });
 
     return { status: 'done', count: result.count };
   },
 );
 ` }] },
 
-  'limit-array-methods': { description: 'Array .map(), .filter(), .reduce() have no ASL equivalent.', services: ['Lambda'], files: [{ name: 'workflow.ts', content: `import { Steps, SimpleStepContext } from './runtime/index';
+  'limit-array-methods': { description: 'Array .map(), .filter(), .reduce() — JSONata supports pure callbacks; JSONPath needs for...of.', services: ['Lambda'], files: [{ name: 'workflow.ts', content: `import { Steps, SimpleStepContext } from './runtime/index';
 import { Lambda } from './runtime/services/Lambda';
 
-// ASL has no runtime array transformation primitives. Methods like
-// .map(), .filter(), and .reduce() require arbitrary code execution
-// that Step Functions can't express.
+// Array Higher-Order Functions
 //
-// Workaround: Use for...of loops (compiled to Map states) or
-// delegate to a Lambda function.
+// JSONata mode (default): .map(), .filter(), .reduce(), .find(),
+//   .some(), .every() all work with PURE EXPRESSION callbacks
+//   (no awaits). They compile to $map/$filter/$reduce.
+//
+// JSONPath mode: These are ❌ SS540 errors. Use for...of (Map state)
+//   or Steps.map() instead.
+//
+// ⚠️ Callbacks must be pure expressions — no await or service calls.
+//   For service calls inside loops, use for...of or Steps.map().
 
 const enrichFn = Lambda<
   { id: string },
@@ -1958,30 +2274,29 @@ const enrichFn = Lambda<
 
 export const arrayLimits = Steps.createFunction(
   async (context: SimpleStepContext, input: { items: { id: string; value: number }[]; tags: string[] }) => {
-    // ❌ .map() — not compilable to ASL
-    // const ids = input.items.map(item => item.id);
+    // ✅ .map() with pure callback — JSONata only
+    //    JSONPath: ❌ SS540 — use for...of instead
+    const ids = input.items.map(item => item.id);
 
-    // ❌ .filter() — not compilable to ASL
-    // const big = input.items.filter(item => item.value > 100);
+    // ✅ .filter() with pure callback — JSONata only
+    const big = input.items.filter(item => item.value > 100);
 
-    // ❌ .reduce() — not compilable to ASL
-    // const total = input.items.reduce((sum, item) => sum + item.value, 0);
+    // ✅ .reduce() with pure callback — JSONata only
+    const total = input.items.reduce((sum, item) => sum + item.value, 0);
 
-    // ❌ .forEach() — not compilable to ASL
-    // input.items.forEach(item => console.log(item));
-
-    // ✅ for...of compiles to a Map state — the ASL way to iterate
+    // ✅ for...of compiles to a Map state — works in BOTH modes
+    //    Use this when you need await/service calls inside the loop
     for (const item of input.items) {
       await enrichFn.call({ id: item.id });
     }
 
-    // ✅ .length works — compiles to States.ArrayLength
+    // ✅ .length works in both modes
     const count = input.items.length;
 
-    // ✅ .includes() works — compiles to States.ArrayContains
+    // ✅ .includes() works in both modes
     const hasSpecial = input.tags.includes('priority');
 
-    return { processedCount: count, hasSpecial };
+    return { ids, big, total, processedCount: count, hasSpecial };
   },
 );
 ` }] },
@@ -2099,7 +2414,10 @@ let baseUrl = 'https://api.example.com';
 // ⚠️ var with literal — works but emits SS709: prefer const
 var defaultRegion = 'us-east-1';
 
-// ❌ const with impure function call — Date.now() is not foldable
+// ❌ const with impure function call — Date.now() is not foldable at module scope
+// (Note: Date.now() DOES work as a runtime expression inside workflows
+//  in JSONata mode — it compiles to $millis(). The limitation is only
+//  for module-scope constant folding.)
 const timestamp = Date.now();
 
 const processFn = Lambda<
@@ -2317,33 +2635,26 @@ export const spreadWorkaround = Steps.createFunction(
 );
 ` }] },
 
-  'limit-conditions': { description: 'Complex conditions must be simple comparisons (SS510/SS512).', services: ['Lambda'], files: [{ name: 'workflow.ts', content: `import { Steps, SimpleStepContext } from './runtime/index';
+  'limit-conditions': { description: 'Condition expressions: JSONata supports richer patterns; JSONPath needs simple comparisons.', services: ['Lambda'], files: [{ name: 'workflow.ts', content: `import { Steps, SimpleStepContext } from './runtime/index';
 import { Lambda } from './runtime/services/Lambda';
 
-// Conditions in if/while compile to ASL Choice rules.
-// Choice rules only support: ===, !==, >, >=, <, <=, &&, ||, !
-// applied to JSONPath variables and literal values.
+// Conditions in if/while/ternary compile to ASL Choice states.
 //
-// Method calls, function calls, and bitwise operators in
-// conditions cannot be compiled.
+// JSONata mode (default): Conditions are JSONata expressions —
+//   richer patterns work including arithmetic comparisons.
+//
+// JSONPath mode: Choice rules support ===, !==, >, >=, <, <=,
+//   &&, ||, ! applied to JSONPath variables and literal values.
+//   Method calls and bitwise operators produce errors.
+//
+// Bitwise operators (& | ^ ~) are not supported in either mode.
 
 const processFn = Lambda<
   { action: string },
   { result: string }
 >('arn:aws:lambda:us-east-1:123456789:function:Process');
 
-// ❌ SS510: Method call in condition — not a simple comparison
-//
-// export const methodInCondition = Steps.createFunction(
-//   async (context: SimpleStepContext, input: { items: string[] }) => {
-//     if (input.items.includes('special')) {
-//       await processFn.call({ action: 'found' });
-//     }
-//     return { done: true };
-//   },
-// );
-
-// ❌ SS512: Bitwise operator in condition — no ASL equivalent
+// ❌ SS512: Bitwise operator in condition — no ASL equivalent (both modes)
 //
 // export const bitwiseInCondition = Steps.createFunction(
 //   async (context: SimpleStepContext, input: { flags: number }) => {
@@ -2354,25 +2665,25 @@ const processFn = Lambda<
 //   },
 // );
 
-// ✅ Supported conditions: comparisons, &&, ||, !
+// ✅ Supported conditions
 export const conditionsCorrect = Steps.createFunction(
   async (context: SimpleStepContext, input: { count: number; status: string; active: boolean }) => {
-    // ✅ Simple comparison
+    // ✅ Simple comparison — both modes
     if (input.count > 0) {
       await processFn.call({ action: 'has-items' });
     }
 
-    // ✅ Compound condition with &&
+    // ✅ Compound condition with && — both modes
     if (input.status === 'ready' && input.count > 5) {
       await processFn.call({ action: 'ready-and-large' });
     }
 
-    // ✅ Negation
+    // ✅ Negation — both modes
     if (!input.active) {
       await processFn.call({ action: 'inactive' });
     }
 
-    // ✅ OR condition
+    // ✅ OR condition — both modes
     if (input.status === 'error' || input.count === 0) {
       await processFn.call({ action: 'problem' });
     }
@@ -2382,15 +2693,14 @@ export const conditionsCorrect = Steps.createFunction(
 );
 ` }] },
 
-  'limit-map-isolation': { description: 'Runtime variables can\'t be accessed inside for...of loops (Map state isolation).', services: ['Lambda'], files: [{ name: 'workflow.ts', content: `import { Steps, SimpleStepContext } from './runtime/index';
+  'limit-map-isolation': { description: 'Map state closures — runtime variables captured via ItemSelector.', services: ['Lambda'], files: [{ name: 'workflow.ts', content: `import { Steps, SimpleStepContext } from './runtime/index';
 import { Lambda } from './runtime/services/Lambda';
 
-// for...of compiles to an ASL Map state. Map state iterations
-// run in isolated state — they cannot access runtime variables
-// (service call results) from the outer scope.
+// for...of compiles to an ASL Map state. The compiler automatically
+// captures outer-scope runtime variables (service call results) as
+// closures via ItemSelector/Arguments.
 //
-// Compile-time constants and service bindings ARE accessible.
-// Use Steps.sequential() if you need outer variable access.
+// This means you CAN reference prior await results inside loops.
 
 const CONFIG_PREFIX = 'item';
 
@@ -2408,18 +2718,23 @@ export const mapIsolation = Steps.createFunction(
   async (context: SimpleStepContext, input: { id: string; items: string[] }) => {
     const lookup = await lookupFn.call({ id: input.id });
 
-    // ❌ Runtime variable not accessible inside Map state
-    // for (const item of input.items) {
-    //   await processFn.call({ key: lookup.prefix + item });
-    // }
+    // ✅ Closures work — lookup.prefix is captured via ItemSelector
+    for (const item of input.items) {
+      await processFn.call({ key: lookup.prefix + item });
+    }
 
-    // ✅ Compile-time constants work inside Map state
+    // ✅ Compile-time constants also work inside Map state
     for (const item of input.items) {
       await processFn.call({ key: CONFIG_PREFIX + item });
     }
 
-    // ✅ Steps.sequential() allows outer variable access
+    // ✅ Steps.sequential() for sequential iteration (MaxConcurrency: 1)
     for (const item of Steps.sequential(input.items)) {
+      await processFn.call({ key: lookup.prefix + item });
+    }
+
+    // ✅ Steps.items() for concurrency control with closures
+    for (const item of Steps.items(input.items, { maxConcurrency: 5 })) {
       await processFn.call({ key: lookup.prefix + item });
     }
 
@@ -2599,18 +2914,15 @@ export const substepEdgeCases = Steps.createFunction(
 );
 ` }] },
 
-  'limit-runtime-expressions': { description: 'Which expressions work at runtime vs require compile-time constants.', services: ['Lambda'], files: [{ name: 'workflow.ts', content: `import { Steps, SimpleStepContext } from './runtime/index';
+  'limit-runtime-expressions': { description: 'Which expressions work at runtime — JSONata supports more than JSONPath.', services: ['Lambda'], files: [{ name: 'workflow.ts', content: `import { Steps, SimpleStepContext } from './runtime/index';
 import { Lambda } from './runtime/services/Lambda';
 
 // Inside a workflow body, expressions operate on two kinds of values:
 //
 // 1. COMPILE-TIME constants — literals, folded math, module-scope const
-//    These become literal values in ASL.
+// 2. RUNTIME values — service call results, input parameters
 //
-// 2. RUNTIME values — service call results (JSONPath: $.result.field),
-//    input parameters ($.input.field). These become JSONPath references.
-//
-// Some operations work on both. Some only work on one or the other.
+// JSONata mode supports far more runtime operations than JSONPath.
 
 const processFn = Lambda<
   { message: string },
@@ -2623,67 +2935,60 @@ export const runtimeExpressions = Steps.createFunction(
 
     // ── String operations ─────────────────────────────────
 
-    // ✅ Template literals — compile to States.Format
+    // ✅ Template literals — both modes (States.Format)
     const greeting = \`Hello \${result.name}\`;
 
-    // ✅ String + concatenation — also compiles to States.Format
+    // ✅ String + concatenation — both modes (States.Format)
     const label = 'item-' + result.name;
 
-    // ❌ String() on runtime value — no ASL intrinsic
-    // const countStr = String(result.count);  // SS502
-
-    // ✅ Workaround: use template literal instead of String()
-    const countStr = \`\${result.count}\`;
+    // ✅ String() on runtime value — JSONata only ($string)
+    //    JSONPath: use template literal workaround
+    const countStr = String(result.count);
 
     // ── JSON operations ───────────────────────────────────
 
-    // ✅ JSON.stringify() on runtime value — States.JsonToString
+    // ✅ JSON.stringify() — both modes (States.JsonToString)
     const json = JSON.stringify(result.data);
-
-    // ✅ JSON.parse() on runtime string — States.StringToJson
-    // const parsed = JSON.parse(someString);
 
     // ── Array operations ──────────────────────────────────
 
-    // ✅ .length on runtime array — States.ArrayLength
+    // ✅ .length on runtime array — both modes
     const count = input.items.length;
 
     // ── Arithmetic ────────────────────────────────────────
 
-    // ✅ Addition with runtime values — States.MathAdd
+    // ✅ Addition — both modes (States.MathAdd / native +)
     const incremented = result.count + 1;
 
-    // ✅ Subtraction by literal — States.MathAdd(x, -N)
+    // ✅ Subtraction by literal — both modes
     const decremented = result.count - 1;
 
-    // ❌ Multiplication — no ASL intrinsic
-    // const doubled = result.count * 2;  // SS530
+    // ✅ Multiplication — JSONata only (native * operator)
+    //    JSONPath: ❌ SS530
+    const doubled = result.count * 2;
 
     // ── Ternary on runtime condition ──────────────────────
 
-    // ✅ Ternary with runtime condition — Choice + Pass states
+    // ✅ Ternary — both modes (Choice + Pass states)
     const size = result.count > 10 ? 'large' : 'small';
 
     // ── Property access ──────────────────────────────────
 
-    // ❌ Object destructuring of service results — NOT supported
-    // const { name, count: itemCount } = result;  // silently ignored
-
     // ✅ Access properties directly via dot notation
-    const name = result.name;        // → $.result.name
-    const itemCount = result.count;  // → $.result.count
+    const name = result.name;
+    const itemCount = result.count;
 
-    return { greeting, label, countStr, json, count, incremented, size, name, itemCount };
+    return { greeting, label, countStr, json, count, incremented, decremented, doubled, size, name, itemCount };
   },
 );
 ` }] },
 
-  'limit-workarounds': { description: 'Common patterns and their ASL-compatible workarounds.', services: ['Lambda', 'DynamoDB'], files: [{ name: 'workflow.ts', content: `import { Steps, SimpleStepContext } from './runtime/index';
+  'limit-workarounds': { description: 'Common patterns and their workarounds (many now native in JSONata mode).', services: ['Lambda', 'DynamoDB'], files: [{ name: 'workflow.ts', content: `import { Steps, SimpleStepContext } from './runtime/index';
 import { Lambda } from './runtime/services/Lambda';
 import { DynamoDB } from './runtime/services/DynamoDB';
 
-// This example compiles successfully. It shows the recommended
-// workarounds for common limitations.
+// This example compiles successfully in JSONata mode (default).
+// Many patterns that previously needed workarounds are now native.
 
 const computeFn = Lambda<
   { a: number; b: number; op: string },
@@ -2693,41 +2998,43 @@ const computeFn = Lambda<
 const db = new DynamoDB('ResultsTable');
 
 export const workarounds = Steps.createFunction(
-  async (context: SimpleStepContext, input: { x: number; y: number; items: string[] }) => {
-    // LIMITATION: No multiply/divide/modulo in ASL
-    // WORKAROUND: Delegate complex math to a Lambda function
-    const product = await computeFn.call({ a: input.x, b: input.y, op: 'multiply' });
+  async (context: SimpleStepContext, input: { x: number; y: number; items: { id: string; value: number }[] }) => {
+    // ✅ JSONata: multiply/divide/modulo work natively
+    //    JSONPath: delegate to Lambda
+    const product = input.x * input.y;
+    const half = input.x / 2;
 
-    // LIMITATION: No .map() / .filter()
-    // WORKAROUND: Use for...of (compiles to Map state)
-    for (const item of input.items) {
-      await computeFn.call({ a: input.x, b: 0, op: item });
-    }
+    // ✅ JSONata: .map()/.filter() with pure callbacks
+    //    JSONPath: use for...of (Map state) instead
+    const ids = input.items.map(item => item.id);
+    const big = input.items.filter(item => item.value > 100);
+    const total = input.items.reduce((sum, item) => sum + item.value, 0);
 
-    // Ternary expressions now compile to Choice + Pass states
-    const status = product.result > 100 ? 'high' : 'low';
+    // ✅ Ternary — both modes (Choice + Pass states)
+    const status = product > 100 ? 'high' : 'low';
 
-    // LIMITATION: No string concatenation with + on runtime values
-    // WORKAROUND: Use template literals (compile to States.Format)
+    // ✅ Template literals — both modes (States.Format)
     const label = \`result-\${status}\`;
 
-    // LIMITATION: No Date.now() or Math.random()
-    // WORKAROUND: Use context metadata and Steps intrinsics
+    // ✅ JSONata: Date.now() → $millis(), Math.random() → $random()
+    //    Both modes: Steps.uuid() → States.UUID()
     const id = Steps.uuid();
-    const startTime = context.execution.startTime;
+    const timestamp = Date.now();
 
-    // LIMITATION: Compile-time constants only at module scope
-    // WORKAROUND: Use const (not let/var) for values the compiler can fold
+    // ✅ JSONata: String() → $string(), Number() → $number()
+    const productStr = String(product);
+
+    // Compile-time constants always work at module scope
     const VERSION = 'v2';
 
     await db.putItem({
       id,
-      result: product.result,
+      result: product,
       label,
       version: VERSION,
     });
 
-    return { id, result: product.result, label };
+    return { id, result: product, label, total, ids };
   },
 );
 ` }] },
