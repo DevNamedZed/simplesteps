@@ -17,10 +17,11 @@
 //   const [a, b] = await Promise.all([call1(), call2()]);
 //
 // ASL output:
-//   Parallel (Parallel, 2 branches,
-//     ResultSelector: { order: $[0], payment: $[1] })
+//   Parallel (Parallel, 2 branches, ResultPath: $.__parallel)
 //     Branch 0: Invoke_getOrder (Task, End)
 //     Branch 1: Invoke_getPayment (Task, End)
+//   → Assign_order (Pass, InputPath: $.__parallel[0], ResultPath: $.order)
+//   → Assign_payment (Pass, InputPath: $.__parallel[1], ResultPath: $.payment)
 //   → Return_Result (Pass, End)
 
 import { Steps, SimpleStepContext } from '../../packages/core/src/runtime/index';

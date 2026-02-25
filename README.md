@@ -136,8 +136,8 @@ npx simplesteps compile workflow.ts -o output/
 | `if/else`, `switch/case` | Choice state |
 | `while`, `do...while` | Choice + back-edge loop |
 | `for (const item of array)` | Map state (parallel, with closures) |
-| `await Steps.map(items, cb, opts?)` | Map state (results, closures, MaxConcurrency) |
-| `for (const item of Steps.items(arr, opts?))` | Map state (for...of + MaxConcurrency) |
+| `await Steps.map(items, cb, opts?)` | Map state (results, closures, MaxConcurrency, Retry) |
+| `for (const item of Steps.items(arr, opts?))` | Map state (for...of + MaxConcurrency, Retry) |
 | `await Promise.all([...])` | Parallel state |
 | Deferred-await (`const p = call(); await p`) | Parallel state (auto-batched) |
 | `await Steps.delay({ seconds: 30 })` | Wait state |

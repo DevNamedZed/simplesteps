@@ -6,7 +6,7 @@
 //
 // Array destructuring captures each branch's output:
 //   const [a, b] = await Promise.all([callA(), callB()])
-//   → Parallel state with ResultSelector mapping $[0]→a, $[1]→b
+//   → Parallel state with ResultPath + Assign Pass states for each binding
 
 import { Steps, SimpleStepContext } from '../../packages/core/src/runtime/index';
 import { Lambda } from '../../packages/core/src/runtime/services/Lambda';

@@ -11,8 +11,8 @@ Every TypeScript construct supported by SimpleSteps and its ASL mapping.
 | `if/else`, `switch/case` | Choice |
 | `while`, `do...while` | Choice + back-edge loop |
 | `for (const item of array)` | Map (parallel, with closures) |
-| `await Steps.map(items, callback, opts?)` | Map (with result capture, closures, MaxConcurrency) |
-| `for (const item of Steps.items(array, opts?))` | Map (for...of with MaxConcurrency + closures) |
+| `await Steps.map(items, callback, opts?)` | Map (with result capture, closures, MaxConcurrency, Retry) |
+| `for (const item of Steps.items(array, opts?))` | Map (for...of with MaxConcurrency, Retry, closures) |
 | `for (const item of Steps.sequential(array))` | Map (sequential, `MaxConcurrency: 1`) |
 | `await Promise.all([...])` | Parallel |
 | Deferred-await (`const p = call(); await p`) | Parallel (auto-batched) |

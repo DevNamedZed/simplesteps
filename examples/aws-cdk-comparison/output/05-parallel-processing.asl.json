@@ -44,11 +44,25 @@
           }
         }
       ],
-      "ResultSelector": {
-        "profile.$": "$[0]",
-        "history.$": "$[1]",
-        "recommendations.$": "$[2]"
-      },
+      "ResultPath": "$.__parallel",
+      "Next": "Assign_profile"
+    },
+    "Assign_profile": {
+      "Type": "Pass",
+      "InputPath": "$.__parallel[0]",
+      "ResultPath": "$.profile",
+      "Next": "Assign_history"
+    },
+    "Assign_history": {
+      "Type": "Pass",
+      "InputPath": "$.__parallel[1]",
+      "ResultPath": "$.history",
+      "Next": "Assign_recommendations"
+    },
+    "Assign_recommendations": {
+      "Type": "Pass",
+      "InputPath": "$.__parallel[2]",
+      "ResultPath": "$.recommendations",
       "Next": "Return_Result"
     },
     "Return_Result": {
