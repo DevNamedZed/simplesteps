@@ -6,6 +6,20 @@ Most limitations come from ASL itself, not the compiler. Where possible, workaro
 
 ## Arithmetic
 
+### JSONata mode (default)
+
+All arithmetic operators work natively:
+
+```typescript
+const product = a * b;     // OK — native JSONata *
+const quotient = a / b;    // OK — native JSONata /
+const remainder = a % b;   // OK — native JSONata %
+const diff = a - b;        // OK — native JSONata -
+const sum = a + b;         // OK
+```
+
+### JSONPath mode
+
 ASL only provides `States.MathAdd`. The compiler supports addition, subtraction by literal, and increment/decrement:
 
 ```typescript
@@ -14,14 +28,14 @@ count++;                    // OK
 count -= 3;                 // OK
 ```
 
-**Not supported at runtime:**
+**Not supported in JSONPath mode (SS530-SS533):**
 
-- `a * b` — no `States.MathMultiply` exists
-- `a / b` — no `States.MathDivide` exists
-- `a % b` — no `States.MathModulo` exists
-- `a - b` where `b` is a variable — only literal subtraction is supported
+- `a * b` — no `States.MathMultiply` exists (SS530)
+- `a / b` — no `States.MathDivide` exists (SS531)
+- `a % b` — no `States.MathModulo` exists (SS532)
+- `a - b` where `b` is a variable — only literal subtraction is supported (SS533)
 
-Workaround: Use compile-time constants (`const TIMEOUT = 30 * 1000` is folded at compile time), or delegate the calculation to a Lambda.
+Workaround: Switch to JSONata mode (the default), use compile-time constants (`const TIMEOUT = 30 * 1000` is folded at compile time), or delegate the calculation to a Lambda.
 
 ## Conditions
 
@@ -140,19 +154,39 @@ Compile-time constants and service bindings are also accessible in all Map itera
 
 ## Array Methods
 
-Array instance methods (`.map()`, `.filter()`, `.reduce()`, `.forEach()`) are not supported — these are JavaScript runtime operations with no ASL equivalent.
+### Supported array operations
+
+These array methods compile to ASL intrinsics or JSONata built-in functions:
+
+| Method | JSONata | JSONPath | Notes |
+|---|---|---|---|
+| `arr.includes(v)` | `v in arr` | `States.ArrayContains` | Both modes |
+| `arr.length` | `$count(arr)` | `States.ArrayLength` | Both modes |
+| `arr[i]` | Native indexing | `States.ArrayGetItem` | Both modes |
+| `arr.join(sep)` | `$join(arr, sep)` | SS540 | JSONata only |
+| `arr.reverse()` | `$reverse(arr)` | SS540 | JSONata only |
+| `arr.sort()` | `$sort(arr)` | SS540 | JSONata only |
+| `arr.concat(b)` | `$append(arr, b)` | SS540 | JSONata only |
+
+### Higher-order array functions (JSONata only)
+
+In JSONata mode, pure expression callbacks compile directly to JSONata higher-order functions:
 
 ```typescript
-// NOT OK — .map() is a JS method, not compilable
-const names = items.map(i => i.name);
-
-// NOT OK — .forEach() is a JS method, not compilable
-await items.forEach(async (item) => {
-  await processItem.call(item);
-});
+// OK in JSONata mode — pure expression callbacks
+const names = items.map(item => item.name);           // → $map(...)
+const active = items.filter(item => item.active);      // → $filter(...)
+const total = items.reduce((sum, item) => sum + item.price, 0); // → $reduce(...)
+const found = items.find(item => item.id === target);  // → $filter(...)[0]
+const any = items.some(item => item.active);           // → $count($filter(...)) > 0
+const all = items.every(item => item.valid);           // → $count($filter(...)) = $count(arr)
 ```
 
-Use `Steps.map()` or `for...of` instead:
+The callback must be a pure expression (no `await`, no multi-statement bodies). For callbacks with service calls, use `Steps.map()` instead.
+
+### Iteration with service calls
+
+For callbacks that contain `await` or service calls, use `Steps.map()` or `for...of`:
 
 ```typescript
 // OK — Steps.map() compiles to Map state (parallel, with result capture)
@@ -171,7 +205,19 @@ for (const item of input.items) {
 }
 ```
 
-Array properties that **are** supported via ASL intrinsics: `.includes()`, `.length`, `[index]`, `.split()` (on strings).
+### Not supported
+
+```typescript
+// NOT OK — .forEach() (side-effect only, no ASL equivalent)
+items.forEach(item => console.log(item));
+
+// NOT OK — multi-statement callback body
+const processed = items.map(item => {
+  const x = item.name;
+  const y = x.toUpperCase();
+  return y;  // Only single-expression or single-return callbacks work
+});
+```
 
 ## Promise.all and Parallel Execution
 
@@ -255,37 +301,49 @@ throw new OrderNotFoundError('Not found');          // OK — compiles to Fail s
 
 ## Dynamic Property Access
 
-Computed property names and dynamic indexing cannot be expressed in JSONPath:
+Computed property names and dynamic indexing are limited:
 
 ```typescript
-// NOT OK
+// NOT OK — dynamic key lookup
 const key = input.fieldName;
 const value = data[key];
 
-// NOT OK
+// NOT OK — computed property name
 const obj = { [dynamicKey]: 'value' };
 ```
 
-Workaround: Use static property access (`data.knownField`) or restructure your data.
+Workaround: Use static property access (`data.knownField`), `Object.keys()` / `Object.values()` (JSONata mode), or restructure your data.
 
 ## Built-in APIs
 
-These JavaScript built-ins have no ASL equivalent:
+### JSONata mode (default) — expanded support
+
+In JSONata mode, many JavaScript built-ins compile to native JSONata functions:
+
+| Category | Supported Methods |
+|---|---|
+| **String** | `toUpperCase`, `toLowerCase`, `trim`, `substring`, `startsWith`, `endsWith`, `padStart`, `padEnd`, `replace`, `charAt`, `repeat`, `split` |
+| **Array** | `join`, `reverse`, `sort`, `concat`, `map`, `filter`, `reduce`, `find`, `some`, `every` |
+| **Math** | `Math.floor`, `Math.ceil`, `Math.round`, `Math.abs`, `Math.pow`, `Math.sqrt`, `Math.min`, `Math.max`, `Math.random` |
+| **Type** | `Number()`, `String()`, `Boolean()`, `parseInt()`, `parseFloat()`, `typeof`, `Date.now()`, `Array.isArray()` |
+| **Object** | `Object.keys()`, `Object.values()` |
+| **Other** | `JSON.parse`, `JSON.stringify`, `btoa`, `atob`, `crypto.randomUUID()` |
+
+### Not supported (any mode)
 
 | API | Workaround |
 |---|---|
-| `Math.*()` at runtime | Use compile-time constants, or Lambda |
-| `Date` / `Date.now()` | Use `context.execution.startTime` |
+| `Date` / `new Date()` | `Date.now()` → `$millis()` in JSONata mode; for `new Date()` use `context.execution.startTime` |
 | `console.log()` | Return data for inspection |
 | `setTimeout` / `setInterval` | Use `Steps.delay({ seconds: N })` |
 | `fetch()` / HTTP calls | Use Lambda or `Steps.awsSdk()` |
-| `RegExp` | Use Lambda |
+| `RegExp` objects | Use Lambda (string patterns work with `str.replace()` in JSONata mode) |
 
-Note: `Math.floor()`, `Math.ceil()`, etc. **are** supported as compile-time constants (see [Constants](./constants.md)).
+Note: `Math.floor()`, `Math.ceil()`, etc. are also supported as compile-time constants in both modes (see [Constants](./constants.md)).
 
 ## Variable Shadowing
 
-Avoid redeclaring a variable name in a nested scope. ASL uses a flat JSONPath namespace (`$.status`), so shadowing can cause the outer value to be silently overwritten:
+Avoid redeclaring a variable name in a nested scope. ASL uses a flat namespace (`$.status` in JSONPath, `$status` in JSONata), so shadowing can cause the outer value to be silently overwritten:
 
 ```typescript
 const status = input.status;
@@ -348,6 +406,21 @@ const obj = await Steps.awsSdk<{ Bucket: string; Key: string }, { Body: string }
 ```
 
 Compiles to `Resource: "arn:aws:states:::aws-sdk:s3:GetObject"`.
+
+## Query Language Modes
+
+SimpleSteps supports two ASL query languages:
+
+- **JSONata** (default) — richer expression language with native arithmetic, string methods, Math functions, type conversions, and object introspection. Most JavaScript patterns "just work."
+- **JSONPath** — the original ASL query language. More limited (no arithmetic operators, no string methods), but well-established.
+
+Switch modes via the `queryLanguage` compile option:
+
+```typescript
+compile({ sourceFiles: ['workflow.ts'], queryLanguage: 'JSONPath' });
+```
+
+Methods only available in JSONata mode produce error **SS540** when compiled in JSONPath mode. The error message tells you what mode to switch to.
 
 ## General Rule
 

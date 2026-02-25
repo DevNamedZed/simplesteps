@@ -56,6 +56,7 @@ export class ErrorCodes {
     static readonly DivideNotSupported = error('SS531', 'arithmetic');
     static readonly ModuloNotSupported = error('SS532', 'arithmetic');
     static readonly DynamicSubtraction = error('SS533', 'arithmetic');
+    static readonly JsonataOnlyFeature = error('SS540', 'expression');
   };
 
   // ── ASL generation (SS6xx) ────────────────────────────────────────────

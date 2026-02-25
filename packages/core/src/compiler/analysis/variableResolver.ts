@@ -6,6 +6,7 @@ import type { StepFunctionCallSite } from '../discovery/callSiteLocator.js';
 import { StepVariableType, type VariableInfo } from './types.js';
 import type { WholeProgramAnalyzer } from './wholeProgramAnalyzer.js';
 import { isConstant, isBottom } from './lattice.js';
+import type { PathDialect } from '../generation/pathDialect.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -76,6 +77,7 @@ export function resolveVariables(
   serviceRegistry: ServiceRegistry,
   substitutions?: Readonly<Record<string, unknown>>,
   analyzer?: WholeProgramAnalyzer,
+  dialect?: PathDialect,
 ): VariableResolutionBuilder {
   const builder = new VariableResolutionBuilder();
   const factory = callSite.factoryFunction.factory;
@@ -90,7 +92,7 @@ export function resolveVariables(
       builder.addVariable(sym, {
         symbol: sym,
         type: StepVariableType.Context,
-        jsonPath: '$$',
+        jsonPath: dialect?.contextRoot() ?? '$$',
         definitelyAssigned: true,
         constant: true,
       });
@@ -105,7 +107,7 @@ export function resolveVariables(
       builder.addVariable(sym, {
         symbol: sym,
         type: StepVariableType.Input,
-        jsonPath: '$',
+        jsonPath: dialect?.inputRoot() ?? '$',
         definitelyAssigned: true,
         constant: true,
       });
@@ -250,6 +252,28 @@ export function resolveVariables(
   return builder;
 }
 
+/** Check whether dialect is JSONata mode. */
+function isJsonata(dialect?: PathDialect): boolean {
+  return dialect?.isJsonata() === true;
+}
+
+/**
+ * Emit a SS540 error for features only available in JSONata mode.
+ * Returns `{ kind: 'unknown' }` for convenient use in return statements.
+ */
+function jsonataOnlyError(
+  context: CompilerContext,
+  node: ts.Node,
+  feature: string,
+): ResolvedExpression {
+  context.addError(
+    node,
+    `'${feature}' is not supported in JSONPath mode. Switch to JSONata mode (queryLanguage: 'JSONata') to use this feature.`,
+    ErrorCodes.Expr.JsonataOnlyFeature.code,
+  );
+  return { kind: 'unknown' };
+}
+
 /**
  * Resolve a TS expression to a JSONPath string or literal value.
  */
@@ -257,15 +281,16 @@ export function resolveExpression(
   context: CompilerContext,
   expr: ts.Expression,
   variables: VariableResolution,
+  dialect?: PathDialect,
 ): ResolvedExpression {
   // String literal
   if (ts.isStringLiteral(expr) || ts.isNoSubstitutionTemplateLiteral(expr)) {
     return { kind: 'literal', value: expr.text };
   }
 
-  // Template expression: `Hello ${name}` → States.Format('Hello {}', name)
+  // Template expression: `Hello ${name}` → States.Format('Hello {}', name) or 'Hello ' & $name
   if (ts.isTemplateExpression(expr)) {
-    return resolveTemplateExpression(context, expr, variables);
+    return resolveTemplateExpression(context, expr, variables, dialect);
   }
 
   // Numeric literal
@@ -307,7 +332,7 @@ export function resolveExpression(
       if (variables.deferredBindings) {
         const argExpr = variables.deferredBindings.get(sym);
         if (argExpr) {
-          return resolveExpression(context, argExpr, variables);
+          return resolveExpression(context, argExpr, variables, dialect);
         }
       }
     }
@@ -316,12 +341,15 @@ export function resolveExpression(
 
   // Property access: a.b.c or arr.length
   if (ts.isPropertyAccessExpression(expr)) {
-    const base = resolveExpression(context, expr.expression, variables);
+    const base = resolveExpression(context, expr.expression, variables, dialect);
     const propName = expr.name.text;
 
-    // arr.length → States.ArrayLength(arr)
+    // arr.length → States.ArrayLength(arr) or $count(arr)
     if (propName === 'length' && (base.kind === 'jsonpath' || base.kind === 'intrinsic')) {
-      const argStr = base.kind === 'jsonpath' ? base.path : base.path;
+      const argStr = base.path!;
+      if (isJsonata(dialect)) {
+        return { kind: 'intrinsic', path: `$count(${argStr})` };
+      }
       return { kind: 'intrinsic', path: `States.ArrayLength(${argStr})` };
     }
 
@@ -334,47 +362,62 @@ export function resolveExpression(
     return { kind: 'unknown' };
   }
 
-  // Element access: arr[index] → States.ArrayGetItem(arr, index)
+  // Element access: arr[index] → States.ArrayGetItem(arr, index) or arr[index]
   if (ts.isElementAccessExpression(expr)) {
-    const base = resolveExpression(context, expr.expression, variables);
+    const base = resolveExpression(context, expr.expression, variables, dialect);
     if ((base.kind === 'jsonpath' || base.kind === 'intrinsic') && expr.argumentExpression) {
-      const index = resolveExpression(context, expr.argumentExpression, variables);
+      const index = resolveExpression(context, expr.argumentExpression, variables, dialect);
       const baseStr = base.path!;
-      const indexStr = serializeIntrinsicArg(index);
+      const indexStr = serializeArg(index, dialect);
       if (indexStr !== null) {
+        if (isJsonata(dialect)) {
+          return { kind: 'intrinsic', path: `${baseStr}[${indexStr}]` };
+        }
         return { kind: 'intrinsic', path: `States.ArrayGetItem(${baseStr}, ${indexStr})` };
       }
     }
     return { kind: 'unknown' };
   }
 
-  // Object literal — return as literal, or handle spread → States.JsonMerge
+  // Object literal — return as literal, or handle spread → States.JsonMerge / $merge
   if (ts.isObjectLiteralExpression(expr)) {
-    return resolveObjectLiteral(context, expr, variables);
+    return resolveObjectLiteral(context, expr, variables, dialect);
   }
 
-  // Array literal with dynamic elements → States.Array(...)
+  // Array literal with dynamic elements → States.Array(...) or [a, b]
   if (ts.isArrayLiteralExpression(expr)) {
-    return resolveArrayLiteral(context, expr, variables);
+    return resolveArrayLiteral(context, expr, variables, dialect);
   }
 
   // Call expression: Steps.format(), str.split(), JSON.parse(), etc.
   if (ts.isCallExpression(expr)) {
-    return resolveCallExpression(context, expr, variables);
+    return resolveCallExpression(context, expr, variables, dialect);
   }
 
   // Binary expression: a + b
   if (ts.isBinaryExpression(expr)) {
-    return resolveBinaryExpression(context, expr, variables);
+    return resolveBinaryExpression(context, expr, variables, dialect);
   }
 
   // Conditional (ternary): cond ? a : b
   // Only handles compile-time constant conditions here.
   // Runtime ternaries are handled by the CFG ternaryAssign terminator.
   if (ts.isConditionalExpression(expr)) {
-    const cond = resolveExpression(context, expr.condition, variables);
+    const cond = resolveExpression(context, expr.condition, variables, dialect);
     if (cond.kind === 'literal' && cond.value !== undefined) {
-      return resolveExpression(context, cond.value ? expr.whenTrue : expr.whenFalse, variables);
+      return resolveExpression(context, cond.value ? expr.whenTrue : expr.whenFalse, variables, dialect);
+    }
+    return { kind: 'unknown' };
+  }
+
+  // typeof expression: typeof x → $type(x)  [JSONata only]
+  if (ts.isTypeOfExpression(expr)) {
+    const operand = resolveExpression(context, expr.expression, variables, dialect);
+    if ((operand.kind === 'jsonpath' || operand.kind === 'intrinsic') && operand.path) {
+      if (isJsonata(dialect)) {
+        return { kind: 'intrinsic', path: `$type(${operand.path})` };
+      }
+      return jsonataOnlyError(context, expr, 'typeof');
     }
     return { kind: 'unknown' };
   }
@@ -460,6 +503,38 @@ function serializeIntrinsicArg(resolved: ResolvedExpression): string | null {
 }
 
 /**
+ * Serialize a resolved expression as a JSONata sub-expression.
+ * Like serializeIntrinsicArg but for native JSONata output.
+ */
+function serializeJsonataArg(resolved: ResolvedExpression): string | null {
+  switch (resolved.kind) {
+    case 'literal': {
+      const v = resolved.value;
+      if (typeof v === 'string') {
+        const escaped = v.replace(/'/g, "\\'");
+        return `'${escaped}'`;
+      }
+      if (typeof v === 'number' || typeof v === 'boolean') {
+        return String(v);
+      }
+      if (v === null) return 'null';
+      return null;
+    }
+    case 'jsonpath':
+      return resolved.path!;
+    case 'intrinsic':
+      return resolved.path!;
+    default:
+      return null;
+  }
+}
+
+/** Dispatch to the appropriate arg serializer based on dialect. */
+function serializeArg(resolved: ResolvedExpression, dialect?: PathDialect): string | null {
+  return isJsonata(dialect) ? serializeJsonataArg(resolved) : serializeIntrinsicArg(resolved);
+}
+
+/**
  * Resolve a template expression (`Hello ${name}`) to a States.Format intrinsic.
  * If all substitutions are literals, folds to a plain string at compile time.
  */
@@ -467,13 +542,14 @@ function resolveTemplateExpression(
   context: CompilerContext,
   expr: ts.TemplateExpression,
   variables: VariableResolution,
+  dialect?: PathDialect,
 ): ResolvedExpression {
   // Build format string: head + {} placeholders + middle/tail text
   let formatStr = expr.head.text;
   const resolvedArgs: ResolvedExpression[] = [];
 
   for (const span of expr.templateSpans) {
-    const resolved = resolveExpression(context, span.expression, variables);
+    const resolved = resolveExpression(context, span.expression, variables, dialect);
     resolvedArgs.push(resolved);
     formatStr += '{}';
     formatStr += span.literal.text;
@@ -488,6 +564,11 @@ function resolveTemplateExpression(
       result += expr.templateSpans[i].literal.text;
     }
     return { kind: 'literal', value: result };
+  }
+
+  // JSONata mode: use native & concatenation
+  if (isJsonata(dialect)) {
+    return resolveJsonataTemplateExpression(context, expr, resolvedArgs, dialect);
   }
 
   // Serialize each arg for the States.Format call
@@ -508,6 +589,107 @@ function resolveTemplateExpression(
 }
 
 /**
+ * JSONata template expression: `Hello ${name}!` → 'Hello ' & $name & '!'
+ */
+function resolveJsonataTemplateExpression(
+  _context: CompilerContext,
+  expr: ts.TemplateExpression,
+  resolvedArgs: ResolvedExpression[],
+  _dialect?: PathDialect,
+): ResolvedExpression {
+  const parts: string[] = [];
+
+  if (expr.head.text) {
+    parts.push(`'${expr.head.text.replace(/'/g, "\\'")}'`);
+  }
+
+  for (let i = 0; i < expr.templateSpans.length; i++) {
+    const argStr = serializeJsonataArg(resolvedArgs[i]);
+    if (argStr === null) return { kind: 'unknown' };
+    parts.push(argStr);
+
+    const tailText = expr.templateSpans[i].literal.text;
+    if (tailText) {
+      parts.push(`'${tailText.replace(/'/g, "\\'")}'`);
+    }
+  }
+
+  if (parts.length === 0) return { kind: 'literal', value: '' };
+  if (parts.length === 1) return { kind: 'intrinsic', path: parts[0] };
+  return { kind: 'intrinsic', path: parts.join(' & ') };
+}
+
+/**
+ * Analyze a callback (arrow function or function expression) and resolve its
+ * body to a JSONata expression. Returns the parameter names (prefixed with $)
+ * and the resolved body string, or null if the callback is too complex.
+ *
+ * Supports:
+ * - Expression bodies: `x => x.name`
+ * - Single-return block bodies: `x => { return x.name; }`
+ */
+function resolveCallbackToJsonata(
+  context: CompilerContext,
+  callback: ts.ArrowFunction | ts.FunctionExpression,
+  variables: VariableResolution,
+  dialect?: PathDialect,
+): { params: string[]; body: string } | null {
+  // Extract parameters — only simple identifier params supported
+  const paramNames: string[] = [];
+  const paramSymbols: Array<{ sym: ts.Symbol; name: string }> = [];
+  for (const param of callback.parameters) {
+    if (!ts.isIdentifier(param.name)) return null; // destructured params not supported
+    const name = param.name.text;
+    const sym = context.checker.getSymbolAtLocation(param.name);
+    if (!sym) return null;
+    paramNames.push(`$${name}`);
+    paramSymbols.push({ sym, name });
+  }
+
+  // Extract body expression
+  let bodyExpr: ts.Expression | undefined;
+  if (ts.isBlock(callback.body)) {
+    // Block body: must be a single return statement
+    const stmts = callback.body.statements;
+    if (stmts.length !== 1 || !ts.isReturnStatement(stmts[0]) || !stmts[0].expression) {
+      return null;
+    }
+    bodyExpr = stmts[0].expression;
+  } else {
+    // Expression body: (x) => expr
+    bodyExpr = callback.body;
+  }
+
+  // Create child variable resolution with callback params as JSONata variables
+  const childVars: VariableResolution = {
+    variables: new Map([
+      ...variables.variables,
+      ...paramSymbols.map(({ sym, name }) => [
+        sym,
+        {
+          symbol: sym,
+          type: StepVariableType.StateOutput,
+          jsonPath: `$${name}`,
+          definitelyAssigned: true,
+          constant: false,
+        } satisfies VariableInfo,
+      ] as [ts.Symbol, VariableInfo]),
+    ]),
+    inputSymbol: variables.inputSymbol,
+    contextSymbol: variables.contextSymbol,
+    deferredBindings: variables.deferredBindings,
+  };
+
+  const resolved = resolveExpression(context, bodyExpr, childVars, dialect);
+  if (resolved.kind === 'unknown') return null;
+
+  const bodyStr = serializeArg(resolved, dialect);
+  if (bodyStr === null) return null;
+
+  return { params: paramNames, body: bodyStr };
+}
+
+/**
  * Resolve a call expression to an intrinsic function.
  * Handles Steps.* calls and JS method mappings (str.split, JSON.parse, etc.).
  */
@@ -515,7 +697,10 @@ function resolveCallExpression(
   context: CompilerContext,
   expr: ts.CallExpression,
   variables: VariableResolution,
+  dialect?: PathDialect,
 ): ResolvedExpression {
+  const jsonata = isJsonata(dialect);
+
   // Steps.method() — direct intrinsic mapping
   if (ts.isPropertyAccessExpression(expr.expression)) {
     const callee = expr.expression;
@@ -523,81 +708,630 @@ function resolveCallExpression(
 
     // Check for Steps.* intrinsic
     if (ts.isIdentifier(callee.expression) && callee.expression.text === 'Steps') {
+      if (jsonata) {
+        return resolveJsonataStepsCall(context, methodName, expr.arguments, variables, dialect);
+      }
       const intrinsicName = STEPS_TO_INTRINSIC[methodName];
       if (intrinsicName) {
-        return buildIntrinsicFromArgs(context, intrinsicName, expr.arguments, variables);
+        return buildIntrinsicFromArgs(context, intrinsicName, expr.arguments, variables, dialect);
       }
     }
 
     // JS method mappings on resolved values
-    const base = resolveExpression(context, callee.expression, variables);
+    const base = resolveExpression(context, callee.expression, variables, dialect);
     if (base.kind === 'jsonpath' || base.kind === 'intrinsic') {
       const baseStr = base.path!;
 
-      // str.split(delim) → States.StringSplit(str, delim)
+      // str.split(delim) → States.StringSplit(str, delim) or $split(str, delim)
       if (methodName === 'split' && expr.arguments.length === 1) {
-        const delimResolved = resolveExpression(context, expr.arguments[0], variables);
-        const delimStr = serializeIntrinsicArg(delimResolved);
+        const delimResolved = resolveExpression(context, expr.arguments[0], variables, dialect);
+        const delimStr = serializeArg(delimResolved, dialect);
         if (delimStr !== null) {
+          if (jsonata) {
+            return { kind: 'intrinsic', path: `$split(${baseStr}, ${delimStr})` };
+          }
           return { kind: 'intrinsic', path: `States.StringSplit(${baseStr}, ${delimStr})` };
         }
       }
 
-      // arr.includes(val) → States.ArrayContains(arr, val)
+      // str.toUpperCase() → $uppercase(str)  [JSONata only]
+      if (methodName === 'toUpperCase' && expr.arguments.length === 0) {
+        if (jsonata) {
+          return { kind: 'intrinsic', path: `$uppercase(${baseStr})` };
+        }
+        return jsonataOnlyError(context, expr, 'str.toUpperCase()');
+      }
+
+      // str.toLowerCase() → $lowercase(str)  [JSONata only]
+      if (methodName === 'toLowerCase' && expr.arguments.length === 0) {
+        if (jsonata) {
+          return { kind: 'intrinsic', path: `$lowercase(${baseStr})` };
+        }
+        return jsonataOnlyError(context, expr, 'str.toLowerCase()');
+      }
+
+      // str.trim() / trimStart() / trimEnd() → $trim(str)  [JSONata only]
+      if ((methodName === 'trim' || methodName === 'trimStart' || methodName === 'trimEnd') && expr.arguments.length === 0) {
+        if (jsonata) {
+          return { kind: 'intrinsic', path: `$trim(${baseStr})` };
+        }
+        return jsonataOnlyError(context, expr, `str.${methodName}()`);
+      }
+
+      // str.substring(start, end?) → $substring(str, start, end - start)  [JSONata only]
+      if (methodName === 'substring' && expr.arguments.length >= 1 && expr.arguments.length <= 2) {
+        if (jsonata) {
+          const startResolved = resolveExpression(context, expr.arguments[0], variables, dialect);
+          const startStr = serializeArg(startResolved, dialect);
+          if (startStr !== null) {
+            if (expr.arguments.length === 1) {
+              return { kind: 'intrinsic', path: `$substring(${baseStr}, ${startStr})` };
+            }
+            const endResolved = resolveExpression(context, expr.arguments[1], variables, dialect);
+            const endStr = serializeArg(endResolved, dialect);
+            if (endStr !== null) {
+              // JSONata $substring uses (str, start, length), JS uses (start, end)
+              // length = end - start
+              if (startResolved.kind === 'literal' && endResolved.kind === 'literal'
+                && typeof startResolved.value === 'number' && typeof endResolved.value === 'number') {
+                const len = endResolved.value - startResolved.value;
+                return { kind: 'intrinsic', path: `$substring(${baseStr}, ${startStr}, ${len})` };
+              }
+              return { kind: 'intrinsic', path: `$substring(${baseStr}, ${startStr}, ${endStr} - ${startStr})` };
+            }
+          }
+        }
+        return jsonataOnlyError(context, expr, 'str.substring()');
+      }
+
+      // str.startsWith(s) → $substring(str, 0, $length(s)) = s  [JSONata only]
+      if (methodName === 'startsWith' && expr.arguments.length === 1) {
+        if (jsonata) {
+          const sResolved = resolveExpression(context, expr.arguments[0], variables, dialect);
+          const sStr = serializeArg(sResolved, dialect);
+          if (sStr !== null) {
+            if (sResolved.kind === 'literal' && typeof sResolved.value === 'string') {
+              const len = sResolved.value.length;
+              return { kind: 'intrinsic', path: `$substring(${baseStr}, 0, ${len}) = ${sStr}` };
+            }
+            return { kind: 'intrinsic', path: `$substring(${baseStr}, 0, $length(${sStr})) = ${sStr}` };
+          }
+        }
+        return jsonataOnlyError(context, expr, 'str.startsWith()');
+      }
+
+      // str.endsWith(s) → $substring(str, $length(str) - $length(s)) = s  [JSONata only]
+      if (methodName === 'endsWith' && expr.arguments.length === 1) {
+        if (jsonata) {
+          const sResolved = resolveExpression(context, expr.arguments[0], variables, dialect);
+          const sStr = serializeArg(sResolved, dialect);
+          if (sStr !== null) {
+            if (sResolved.kind === 'literal' && typeof sResolved.value === 'string') {
+              const len = sResolved.value.length;
+              return { kind: 'intrinsic', path: `$substring(${baseStr}, $length(${baseStr}) - ${len}) = ${sStr}` };
+            }
+            return { kind: 'intrinsic', path: `$substring(${baseStr}, $length(${baseStr}) - $length(${sStr})) = ${sStr}` };
+          }
+        }
+        return jsonataOnlyError(context, expr, 'str.endsWith()');
+      }
+
+      // str.padStart(n, c?) → $pad(str, -n, c)  [JSONata only]
+      if (methodName === 'padStart' && expr.arguments.length >= 1 && expr.arguments.length <= 2) {
+        if (jsonata) {
+          const nResolved = resolveExpression(context, expr.arguments[0], variables, dialect);
+          const nStr = serializeArg(nResolved, dialect);
+          if (nStr !== null) {
+            // JSONata $pad with negative width = left-pad (padStart)
+            const negWidth = nResolved.kind === 'literal' && typeof nResolved.value === 'number'
+              ? String(-nResolved.value)
+              : `-${nStr}`;
+            if (expr.arguments.length === 2) {
+              const cResolved = resolveExpression(context, expr.arguments[1], variables, dialect);
+              const cStr = serializeArg(cResolved, dialect);
+              if (cStr !== null) {
+                return { kind: 'intrinsic', path: `$pad(${baseStr}, ${negWidth}, ${cStr})` };
+              }
+            }
+            return { kind: 'intrinsic', path: `$pad(${baseStr}, ${negWidth})` };
+          }
+        }
+        return jsonataOnlyError(context, expr, 'str.padStart()');
+      }
+
+      // str.padEnd(n, c?) → $pad(str, n, c)  [JSONata only]
+      if (methodName === 'padEnd' && expr.arguments.length >= 1 && expr.arguments.length <= 2) {
+        if (jsonata) {
+          const nResolved = resolveExpression(context, expr.arguments[0], variables, dialect);
+          const nStr = serializeArg(nResolved, dialect);
+          if (nStr !== null) {
+            if (expr.arguments.length === 2) {
+              const cResolved = resolveExpression(context, expr.arguments[1], variables, dialect);
+              const cStr = serializeArg(cResolved, dialect);
+              if (cStr !== null) {
+                return { kind: 'intrinsic', path: `$pad(${baseStr}, ${nStr}, ${cStr})` };
+              }
+            }
+            return { kind: 'intrinsic', path: `$pad(${baseStr}, ${nStr})` };
+          }
+        }
+        return jsonataOnlyError(context, expr, 'str.padEnd()');
+      }
+
+      // str.replace(pattern, replacement) → $replace(str, pattern, replacement)  [JSONata only]
+      if (methodName === 'replace' && expr.arguments.length === 2) {
+        if (jsonata) {
+          const patResolved = resolveExpression(context, expr.arguments[0], variables, dialect);
+          const patStr = serializeArg(patResolved, dialect);
+          const repResolved = resolveExpression(context, expr.arguments[1], variables, dialect);
+          const repStr = serializeArg(repResolved, dialect);
+          if (patStr !== null && repStr !== null) {
+            return { kind: 'intrinsic', path: `$replace(${baseStr}, ${patStr}, ${repStr})` };
+          }
+        }
+        return jsonataOnlyError(context, expr, 'str.replace()');
+      }
+
+      // str.charAt(i) → $substring(str, i, 1)  [JSONata only]
+      if (methodName === 'charAt' && expr.arguments.length === 1) {
+        if (jsonata) {
+          const iResolved = resolveExpression(context, expr.arguments[0], variables, dialect);
+          const iStr = serializeArg(iResolved, dialect);
+          if (iStr !== null) {
+            return { kind: 'intrinsic', path: `$substring(${baseStr}, ${iStr}, 1)` };
+          }
+        }
+        return jsonataOnlyError(context, expr, 'str.charAt()');
+      }
+
+      // str.repeat(n) → $join($map([1..n], function() { str }))  [JSONata only]
+      if (methodName === 'repeat' && expr.arguments.length === 1) {
+        if (jsonata) {
+          const nResolved = resolveExpression(context, expr.arguments[0], variables, dialect);
+          const nStr = serializeArg(nResolved, dialect);
+          if (nStr !== null) {
+            return { kind: 'intrinsic', path: `$join($map([1..${nStr}], function() { ${baseStr} }))` };
+          }
+        }
+        return jsonataOnlyError(context, expr, 'str.repeat()');
+      }
+
+      // str.includes(s) → $contains(str, s)  [JSONata only for strings]
+      // Note: arr.includes(val) falls through to array handler below
+      // We can't statically distinguish string from array here,
+      // so in JSONata mode we try $contains first (works for both).
+
+      // arr.includes(val) → States.ArrayContains(arr, val) or val in arr
       if (methodName === 'includes' && expr.arguments.length === 1) {
-        const valResolved = resolveExpression(context, expr.arguments[0], variables);
-        const valStr = serializeIntrinsicArg(valResolved);
+        const valResolved = resolveExpression(context, expr.arguments[0], variables, dialect);
+        const valStr = serializeArg(valResolved, dialect);
         if (valStr !== null) {
+          if (jsonata) {
+            return { kind: 'intrinsic', path: `${valStr} in ${baseStr}` };
+          }
           return { kind: 'intrinsic', path: `States.ArrayContains(${baseStr}, ${valStr})` };
         }
       }
+
+      // arr.join(sep?) → $join(arr, sep)  [JSONata only]
+      if (methodName === 'join') {
+        if (jsonata) {
+          if (expr.arguments.length === 0) {
+            return { kind: 'intrinsic', path: `$join(${baseStr})` };
+          }
+          if (expr.arguments.length === 1) {
+            const sepResolved = resolveExpression(context, expr.arguments[0], variables, dialect);
+            const sepStr = serializeArg(sepResolved, dialect);
+            if (sepStr !== null) {
+              return { kind: 'intrinsic', path: `$join(${baseStr}, ${sepStr})` };
+            }
+          }
+        }
+        return jsonataOnlyError(context, expr, 'arr.join()');
+      }
+
+      // arr.reverse() → $reverse(arr)  [JSONata only]
+      if (methodName === 'reverse' && expr.arguments.length === 0) {
+        if (jsonata) {
+          return { kind: 'intrinsic', path: `$reverse(${baseStr})` };
+        }
+        return jsonataOnlyError(context, expr, 'arr.reverse()');
+      }
+
+      // arr.sort() → $sort(arr)  [JSONata only]
+      if (methodName === 'sort' && expr.arguments.length === 0) {
+        if (jsonata) {
+          return { kind: 'intrinsic', path: `$sort(${baseStr})` };
+        }
+        return jsonataOnlyError(context, expr, 'arr.sort()');
+      }
+
+      // arr.concat(b) → $append(arr, b)  [JSONata only]
+      if (methodName === 'concat' && expr.arguments.length === 1) {
+        if (jsonata) {
+          const bResolved = resolveExpression(context, expr.arguments[0], variables, dialect);
+          const bStr = serializeArg(bResolved, dialect);
+          if (bStr !== null) {
+            return { kind: 'intrinsic', path: `$append(${baseStr}, ${bStr})` };
+          }
+        }
+        return jsonataOnlyError(context, expr, 'arr.concat()');
+      }
+
+      // --- Callback array methods (JSONata only, pure expressions) ---
+
+      // arr.map(fn) → $map(arr, function($v) { expr })
+      if (methodName === 'map' && expr.arguments.length === 1) {
+        const cbArg = expr.arguments[0];
+        if (jsonata && (ts.isArrowFunction(cbArg) || ts.isFunctionExpression(cbArg))) {
+          const cb = resolveCallbackToJsonata(context, cbArg, variables, dialect);
+          if (cb) {
+            return { kind: 'intrinsic', path: `$map(${baseStr}, function(${cb.params.join(', ')}) { ${cb.body} })` };
+          }
+        }
+        // Don't error — may be handled by cfgBuilder as a Map state for async callbacks
+      }
+
+      // arr.filter(fn) → $filter(arr, function($v) { pred })
+      if (methodName === 'filter' && expr.arguments.length === 1) {
+        const cbArg = expr.arguments[0];
+        if (jsonata && (ts.isArrowFunction(cbArg) || ts.isFunctionExpression(cbArg))) {
+          const cb = resolveCallbackToJsonata(context, cbArg, variables, dialect);
+          if (cb) {
+            return { kind: 'intrinsic', path: `$filter(${baseStr}, function(${cb.params.join(', ')}) { ${cb.body} })` };
+          }
+        }
+      }
+
+      // arr.reduce(fn, init) → $reduce(arr, function($prev, $v) { expr }, init)
+      if (methodName === 'reduce' && expr.arguments.length === 2) {
+        const cbArg = expr.arguments[0];
+        if (jsonata && (ts.isArrowFunction(cbArg) || ts.isFunctionExpression(cbArg))) {
+          const cb = resolveCallbackToJsonata(context, cbArg, variables, dialect);
+          if (cb) {
+            const initResolved = resolveExpression(context, expr.arguments[1], variables, dialect);
+            const initStr = serializeArg(initResolved, dialect);
+            if (initStr !== null) {
+              return { kind: 'intrinsic', path: `$reduce(${baseStr}, function(${cb.params.join(', ')}) { ${cb.body} }, ${initStr})` };
+            }
+          }
+        }
+      }
+
+      // arr.find(fn) → $filter(arr, function($v) { pred })[0]
+      if (methodName === 'find' && expr.arguments.length === 1) {
+        const cbArg = expr.arguments[0];
+        if (jsonata && (ts.isArrowFunction(cbArg) || ts.isFunctionExpression(cbArg))) {
+          const cb = resolveCallbackToJsonata(context, cbArg, variables, dialect);
+          if (cb) {
+            return { kind: 'intrinsic', path: `$filter(${baseStr}, function(${cb.params.join(', ')}) { ${cb.body} })[0]` };
+          }
+        }
+      }
+
+      // arr.some(fn) → $count($filter(arr, function($v) { pred })) > 0
+      if (methodName === 'some' && expr.arguments.length === 1) {
+        const cbArg = expr.arguments[0];
+        if (jsonata && (ts.isArrowFunction(cbArg) || ts.isFunctionExpression(cbArg))) {
+          const cb = resolveCallbackToJsonata(context, cbArg, variables, dialect);
+          if (cb) {
+            return { kind: 'intrinsic', path: `$count($filter(${baseStr}, function(${cb.params.join(', ')}) { ${cb.body} })) > 0` };
+          }
+        }
+      }
+
+      // arr.every(fn) → $count($filter(arr, function($v) { pred })) = $count(arr)
+      if (methodName === 'every' && expr.arguments.length === 1) {
+        const cbArg = expr.arguments[0];
+        if (jsonata && (ts.isArrowFunction(cbArg) || ts.isFunctionExpression(cbArg))) {
+          const cb = resolveCallbackToJsonata(context, cbArg, variables, dialect);
+          if (cb) {
+            return { kind: 'intrinsic', path: `$count($filter(${baseStr}, function(${cb.params.join(', ')}) { ${cb.body} })) = $count(${baseStr})` };
+          }
+        }
+      }
     }
 
-    // JSON.parse(str) → States.StringToJson(str)
+    // JSON.parse(str) → States.StringToJson(str) or $eval(str)
     if (ts.isIdentifier(callee.expression) && callee.expression.text === 'JSON') {
       if (methodName === 'parse' && expr.arguments.length >= 1) {
-        const argResolved = resolveExpression(context, expr.arguments[0], variables);
-        const argStr = serializeIntrinsicArg(argResolved);
+        const argResolved = resolveExpression(context, expr.arguments[0], variables, dialect);
+        const argStr = serializeArg(argResolved, dialect);
         if (argStr !== null) {
-          return { kind: 'intrinsic', path: `States.StringToJson(${argStr})` };
+          return { kind: 'intrinsic', path: jsonata ? `$eval(${argStr})` : `States.StringToJson(${argStr})` };
         }
       }
       if (methodName === 'stringify' && expr.arguments.length >= 1) {
-        const argResolved = resolveExpression(context, expr.arguments[0], variables);
-        const argStr = serializeIntrinsicArg(argResolved);
+        const argResolved = resolveExpression(context, expr.arguments[0], variables, dialect);
+        const argStr = serializeArg(argResolved, dialect);
         if (argStr !== null) {
-          return { kind: 'intrinsic', path: `States.JsonToString(${argStr})` };
+          return { kind: 'intrinsic', path: jsonata ? `$string(${argStr})` : `States.JsonToString(${argStr})` };
         }
       }
     }
 
-    // crypto.randomUUID() → States.UUID()
+    // crypto.randomUUID() → States.UUID() or $uuid()
     if (ts.isIdentifier(callee.expression) && callee.expression.text === 'crypto') {
       if (methodName === 'randomUUID' && expr.arguments.length === 0) {
-        return { kind: 'intrinsic', path: 'States.UUID()' };
+        return { kind: 'intrinsic', path: jsonata ? '$uuid()' : 'States.UUID()' };
+      }
+    }
+
+    // Math.* methods  [JSONata only]
+    if (ts.isIdentifier(callee.expression) && callee.expression.text === 'Math') {
+      const MATH_UNARY: Record<string, string> = {
+        floor: '$floor', ceil: '$ceil', round: '$round',
+        abs: '$abs', sqrt: '$sqrt',
+      };
+      if (methodName in MATH_UNARY && expr.arguments.length === 1) {
+        if (jsonata) {
+          const argResolved = resolveExpression(context, expr.arguments[0], variables, dialect);
+          const argStr = serializeArg(argResolved, dialect);
+          if (argStr !== null) {
+            return { kind: 'intrinsic', path: `${MATH_UNARY[methodName]}(${argStr})` };
+          }
+        }
+        return jsonataOnlyError(context, expr, `Math.${methodName}()`);
+      }
+
+      // Math.pow(a, b) → $power(a, b)
+      if (methodName === 'pow' && expr.arguments.length === 2) {
+        if (jsonata) {
+          const aResolved = resolveExpression(context, expr.arguments[0], variables, dialect);
+          const aStr = serializeArg(aResolved, dialect);
+          const bResolved = resolveExpression(context, expr.arguments[1], variables, dialect);
+          const bStr = serializeArg(bResolved, dialect);
+          if (aStr !== null && bStr !== null) {
+            return { kind: 'intrinsic', path: `$power(${aStr}, ${bStr})` };
+          }
+        }
+        return jsonataOnlyError(context, expr, 'Math.pow()');
+      }
+
+      // Math.min(...args) → $min([args])
+      if (methodName === 'min' && expr.arguments.length >= 1) {
+        if (jsonata) {
+          const parts: string[] = [];
+          for (const arg of expr.arguments) {
+            const r = resolveExpression(context, arg, variables, dialect);
+            const s = serializeArg(r, dialect);
+            if (s === null) break;
+            parts.push(s);
+          }
+          if (parts.length === expr.arguments.length) {
+            return { kind: 'intrinsic', path: `$min([${parts.join(', ')}])` };
+          }
+        }
+        return jsonataOnlyError(context, expr, 'Math.min()');
+      }
+
+      // Math.max(...args) → $max([args])
+      if (methodName === 'max' && expr.arguments.length >= 1) {
+        if (jsonata) {
+          const parts: string[] = [];
+          for (const arg of expr.arguments) {
+            const r = resolveExpression(context, arg, variables, dialect);
+            const s = serializeArg(r, dialect);
+            if (s === null) break;
+            parts.push(s);
+          }
+          if (parts.length === expr.arguments.length) {
+            return { kind: 'intrinsic', path: `$max([${parts.join(', ')}])` };
+          }
+        }
+        return jsonataOnlyError(context, expr, 'Math.max()');
+      }
+
+      // Math.random() → $random()
+      if (methodName === 'random' && expr.arguments.length === 0) {
+        if (jsonata) {
+          return { kind: 'intrinsic', path: '$random()' };
+        }
+        return jsonataOnlyError(context, expr, 'Math.random()');
+      }
+    }
+
+    // Object.keys(o) → $keys(o)  [JSONata only]
+    if (ts.isIdentifier(callee.expression) && callee.expression.text === 'Object') {
+      if (methodName === 'keys' && expr.arguments.length === 1) {
+        if (jsonata) {
+          const argResolved = resolveExpression(context, expr.arguments[0], variables, dialect);
+          const argStr = serializeArg(argResolved, dialect);
+          if (argStr !== null) {
+            return { kind: 'intrinsic', path: `$keys(${argStr})` };
+          }
+        }
+        return jsonataOnlyError(context, expr, 'Object.keys()');
+      }
+
+      // Object.values(o) → $lookup(o, $keys(o))  [JSONata only]
+      if (methodName === 'values' && expr.arguments.length === 1) {
+        if (jsonata) {
+          const argResolved = resolveExpression(context, expr.arguments[0], variables, dialect);
+          const argStr = serializeArg(argResolved, dialect);
+          if (argStr !== null) {
+            return { kind: 'intrinsic', path: `$lookup(${argStr}, $keys(${argStr}))` };
+          }
+        }
+        return jsonataOnlyError(context, expr, 'Object.values()');
+      }
+    }
+
+    // Date.now() → $millis()  [JSONata only]
+    if (ts.isIdentifier(callee.expression) && callee.expression.text === 'Date') {
+      if (methodName === 'now' && expr.arguments.length === 0) {
+        if (jsonata) {
+          return { kind: 'intrinsic', path: '$millis()' };
+        }
+        return jsonataOnlyError(context, expr, 'Date.now()');
+      }
+    }
+
+    // Array.isArray(val) → $type(val) = 'array'  [JSONata only]
+    if (ts.isIdentifier(callee.expression) && callee.expression.text === 'Array') {
+      if (methodName === 'isArray' && expr.arguments.length === 1) {
+        if (jsonata) {
+          const argResolved = resolveExpression(context, expr.arguments[0], variables, dialect);
+          const argStr = serializeArg(argResolved, dialect);
+          if (argStr !== null) {
+            return { kind: 'intrinsic', path: `$type(${argStr}) = 'array'` };
+          }
+        }
+        return jsonataOnlyError(context, expr, 'Array.isArray()');
       }
     }
   }
 
-  // btoa(str) → States.Base64Encode(str)
+  // btoa(str) → States.Base64Encode(str) or $base64encode(str)
   if (ts.isIdentifier(expr.expression) && expr.expression.text === 'btoa' && expr.arguments.length === 1) {
-    const argResolved = resolveExpression(context, expr.arguments[0], variables);
-    const argStr = serializeIntrinsicArg(argResolved);
+    const argResolved = resolveExpression(context, expr.arguments[0], variables, dialect);
+    const argStr = serializeArg(argResolved, dialect);
     if (argStr !== null) {
-      return { kind: 'intrinsic', path: `States.Base64Encode(${argStr})` };
+      return { kind: 'intrinsic', path: jsonata ? `$base64encode(${argStr})` : `States.Base64Encode(${argStr})` };
     }
   }
 
-  // atob(str) → States.Base64Decode(str)
+  // atob(str) → States.Base64Decode(str) or $base64decode(str)
   if (ts.isIdentifier(expr.expression) && expr.expression.text === 'atob' && expr.arguments.length === 1) {
-    const argResolved = resolveExpression(context, expr.arguments[0], variables);
-    const argStr = serializeIntrinsicArg(argResolved);
+    const argResolved = resolveExpression(context, expr.arguments[0], variables, dialect);
+    const argStr = serializeArg(argResolved, dialect);
     if (argStr !== null) {
-      return { kind: 'intrinsic', path: `States.Base64Decode(${argStr})` };
+      return { kind: 'intrinsic', path: jsonata ? `$base64decode(${argStr})` : `States.Base64Decode(${argStr})` };
+    }
+  }
+
+  // Type conversion global functions  [JSONata only]
+  if (ts.isIdentifier(expr.expression) && expr.arguments.length === 1) {
+    const fnName = expr.expression.text;
+    const TYPE_CONV: Record<string, string> = {
+      Number: '$number', String: '$string', Boolean: '$boolean',
+      parseInt: '$number', parseFloat: '$number',
+    };
+    if (fnName in TYPE_CONV) {
+      if (jsonata) {
+        const argResolved = resolveExpression(context, expr.arguments[0], variables, dialect);
+        const argStr = serializeArg(argResolved, dialect);
+        if (argStr !== null) {
+          return { kind: 'intrinsic', path: `${TYPE_CONV[fnName]}(${argStr})` };
+        }
+      }
+      return jsonataOnlyError(context, expr, `${fnName}()`);
     }
   }
 
   return { kind: 'unknown' };
+}
+
+/**
+ * Resolve a Steps.method() call to a native JSONata expression.
+ */
+function resolveJsonataStepsCall(
+  context: CompilerContext,
+  methodName: string,
+  args: ts.NodeArray<ts.Expression>,
+  variables: VariableResolution,
+  dialect?: PathDialect,
+): ResolvedExpression {
+  // Resolve and serialize all arguments
+  const resolved: ResolvedExpression[] = [];
+  const serialized: string[] = [];
+  for (const arg of args) {
+    const r = resolveExpression(context, arg, variables, dialect);
+    resolved.push(r);
+    const s = serializeJsonataArg(r);
+    if (s === null) {
+      context.addError(arg, 'Cannot resolve intrinsic function argument to ASL value', ErrorCodes.Expr.UnresolvableIntrinsicArg.code);
+      return { kind: 'unknown' };
+    }
+    serialized.push(s);
+  }
+
+  switch (methodName) {
+    case 'format':
+      return resolveJsonataStepsFormat(resolved, serialized, args);
+    case 'uuid':
+      return { kind: 'intrinsic', path: '$uuid()' };
+    case 'add':
+      if (serialized.length === 2) return { kind: 'intrinsic', path: `${serialized[0]} + ${serialized[1]}` };
+      break;
+    case 'random':
+      if (serialized.length === 2) return { kind: 'intrinsic', path: `$floor($random() * (${serialized[1]} - ${serialized[0]})) + ${serialized[0]}` };
+      break;
+    case 'base64Encode':
+      if (serialized.length === 1) return { kind: 'intrinsic', path: `$base64encode(${serialized[0]})` };
+      break;
+    case 'base64Decode':
+      if (serialized.length === 1) return { kind: 'intrinsic', path: `$base64decode(${serialized[0]})` };
+      break;
+    case 'array':
+      return { kind: 'intrinsic', path: `[${serialized.join(', ')}]` };
+    case 'arrayContains':
+      if (serialized.length === 2) return { kind: 'intrinsic', path: `${serialized[1]} in ${serialized[0]}` };
+      break;
+    case 'arrayGetItem':
+      if (serialized.length === 2) return { kind: 'intrinsic', path: `${serialized[0]}[${serialized[1]}]` };
+      break;
+    case 'arrayLength':
+      if (serialized.length === 1) return { kind: 'intrinsic', path: `$count(${serialized[0]})` };
+      break;
+    case 'arrayUnique':
+      if (serialized.length === 1) return { kind: 'intrinsic', path: `$distinct(${serialized[0]})` };
+      break;
+    case 'jsonParse':
+      if (serialized.length === 1) return { kind: 'intrinsic', path: `$eval(${serialized[0]})` };
+      break;
+    case 'jsonStringify':
+      if (serialized.length === 1) return { kind: 'intrinsic', path: `$string(${serialized[0]})` };
+      break;
+    case 'merge':
+      if (serialized.length === 2) return { kind: 'intrinsic', path: `$merge([${serialized[0]}, ${serialized[1]}])` };
+      break;
+    // Keep as States.* intrinsics (no clean JSONata equivalent)
+    case 'hash':
+    case 'arrayPartition':
+    case 'arrayRange': {
+      const intrinsicName = STEPS_TO_INTRINSIC[methodName];
+      if (intrinsicName) {
+        return { kind: 'intrinsic', path: `${intrinsicName}(${serialized.join(', ')})` };
+      }
+      break;
+    }
+  }
+
+  return { kind: 'unknown' };
+}
+
+/**
+ * Resolve Steps.format('Hello {}!', name) → 'Hello ' & $name & '!' in JSONata.
+ */
+function resolveJsonataStepsFormat(
+  resolved: ResolvedExpression[],
+  serialized: string[],
+  _args: ts.NodeArray<ts.Expression>,
+): ResolvedExpression {
+  if (resolved.length < 1) return { kind: 'unknown' };
+
+  // First arg must be a literal format string
+  if (resolved[0].kind !== 'literal' || typeof resolved[0].value !== 'string') {
+    return { kind: 'unknown' };
+  }
+
+  const formatStr = resolved[0].value as string;
+  const segments = formatStr.split('{}');
+  const parts: string[] = [];
+
+  for (let i = 0; i < segments.length; i++) {
+    if (segments[i]) {
+      parts.push(`'${segments[i].replace(/'/g, "\\'")}'`);
+    }
+    if (i < serialized.length - 1) {
+      parts.push(serialized[i + 1]);  // skip index 0 (format string)
+    }
+  }
+
+  if (parts.length === 0) return { kind: 'literal', value: '' };
+  if (parts.length === 1) return { kind: 'intrinsic', path: parts[0] };
+  return { kind: 'intrinsic', path: parts.join(' & ') };
 }
 
 /**
@@ -609,6 +1343,7 @@ function resolveObjectLiteral(
   context: CompilerContext,
   expr: ts.ObjectLiteralExpression,
   variables: VariableResolution,
+  dialect?: PathDialect,
 ): ResolvedExpression {
   // Check if any property is a spread assignment
   const hasSpread = expr.properties.some(p => ts.isSpreadAssignment(p));
@@ -618,7 +1353,7 @@ function resolveObjectLiteral(
     const obj: Record<string, unknown> = {};
     for (const prop of expr.properties) {
       if (ts.isPropertyAssignment(prop) && ts.isIdentifier(prop.name)) {
-        const resolved = resolveExpression(context, prop.initializer, variables);
+        const resolved = resolveExpression(context, prop.initializer, variables, dialect);
         if (resolved.kind === 'literal') {
           obj[prop.name.text] = resolved.value;
         } else {
@@ -631,14 +1366,12 @@ function resolveObjectLiteral(
     return { kind: 'literal', value: obj };
   }
 
-  // Has spread: { ...a, ...b } → States.JsonMerge(a, b, false)
-  // Collect spread operands — only pure spread (no interleaved plain props for now)
+  // Has spread: { ...a, ...b } → States.JsonMerge or $merge
   const spreadArgs: ResolvedExpression[] = [];
   for (const prop of expr.properties) {
     if (ts.isSpreadAssignment(prop)) {
-      spreadArgs.push(resolveExpression(context, prop.expression, variables));
+      spreadArgs.push(resolveExpression(context, prop.expression, variables, dialect));
     } else {
-      // Mixed spread + plain properties: not directly expressible as JsonMerge
       return { kind: 'unknown' };
     }
   }
@@ -647,7 +1380,14 @@ function resolveObjectLiteral(
     return { kind: 'unknown' };
   }
 
-  // Build a left-associative JsonMerge chain: JsonMerge(JsonMerge(a, b, false), c, false)
+  if (isJsonata(dialect)) {
+    // JSONata: $merge([a, b, c])
+    const allArgs = spreadArgs.map(a => serializeJsonataArg(a));
+    if (allArgs.some(a => a === null)) return { kind: 'unknown' };
+    return { kind: 'intrinsic', path: `$merge([${allArgs.join(', ')}])` };
+  }
+
+  // JSONPath: left-associative JsonMerge chain
   let result = serializeIntrinsicArg(spreadArgs[0]);
   if (result === null) return { kind: 'unknown' };
 
@@ -669,24 +1409,28 @@ function resolveArrayLiteral(
   context: CompilerContext,
   expr: ts.ArrayLiteralExpression,
   variables: VariableResolution,
+  dialect?: PathDialect,
 ): ResolvedExpression {
   if (expr.elements.length === 0) {
     return { kind: 'literal', value: [] };
   }
 
-  const resolved = expr.elements.map(e => resolveExpression(context, e, variables));
+  const resolved = expr.elements.map(e => resolveExpression(context, e, variables, dialect));
 
   // If all elements are literals, fold at compile time
   if (resolved.every(r => r.kind === 'literal')) {
     return { kind: 'literal', value: resolved.map(r => r.value) };
   }
 
-  // Any dynamic element → States.Array(elem1, elem2, ...)
-  const serialized = resolved.map(r => serializeIntrinsicArg(r));
+  // Any dynamic element → States.Array(...) or [a, b] in JSONata
+  const serialized = resolved.map(r => serializeArg(r, dialect));
   if (serialized.some(s => s === null)) {
     return { kind: 'unknown' };
   }
 
+  if (isJsonata(dialect)) {
+    return { kind: 'intrinsic', path: `[${serialized.join(', ')}]` };
+  }
   return { kind: 'intrinsic', path: `States.Array(${serialized.join(', ')})` };
 }
 
@@ -698,11 +1442,12 @@ function buildIntrinsicFromArgs(
   intrinsicName: string,
   args: ts.NodeArray<ts.Expression>,
   variables: VariableResolution,
+  dialect?: PathDialect,
 ): ResolvedExpression {
   const serializedArgs: string[] = [];
   for (const arg of args) {
-    const resolved = resolveExpression(context, arg, variables);
-    const serialized = serializeIntrinsicArg(resolved);
+    const resolved = resolveExpression(context, arg, variables, dialect);
+    const serialized = serializeArg(resolved, dialect);
     if (serialized === null) {
       context.addError(arg, 'Cannot resolve intrinsic function argument to ASL value', ErrorCodes.Expr.UnresolvableIntrinsicArg.code);
       return { kind: 'unknown' };
@@ -723,20 +1468,26 @@ function resolveBinaryExpression(
   context: CompilerContext,
   expr: ts.BinaryExpression,
   variables: VariableResolution,
+  dialect?: PathDialect,
 ): ResolvedExpression {
   const op = expr.operatorToken.kind;
 
-  // Unsupported operators — emit helpful errors
+  // JSONata mode: native arithmetic operators supported
+  if (isJsonata(dialect)) {
+    return resolveJsonataBinaryExpression(context, expr, variables, dialect);
+  }
+
+  // Unsupported operators — emit helpful errors (JSONPath mode only)
   if (op === ts.SyntaxKind.AsteriskToken) {
-    context.addError(expr, 'The * operator cannot be compiled to ASL (no States.MathMultiply intrinsic). Use a compile-time constant or a Lambda function instead', ErrorCodes.Expr.MultiplyNotSupported.code);
+    context.addError(expr, "The '*' operator is not supported in JSONPath mode. Switch to JSONata mode (queryLanguage: 'JSONata') for native arithmetic, or use a compile-time constant.", ErrorCodes.Expr.MultiplyNotSupported.code);
     return { kind: 'unknown' };
   }
   if (op === ts.SyntaxKind.SlashToken) {
-    context.addError(expr, 'The / operator cannot be compiled to ASL (no States.MathDivide intrinsic). Use a compile-time constant or a Lambda function instead', ErrorCodes.Expr.DivideNotSupported.code);
+    context.addError(expr, "The '/' operator is not supported in JSONPath mode. Switch to JSONata mode (queryLanguage: 'JSONata') for native arithmetic, or use a compile-time constant.", ErrorCodes.Expr.DivideNotSupported.code);
     return { kind: 'unknown' };
   }
   if (op === ts.SyntaxKind.PercentToken) {
-    context.addError(expr, 'The % operator cannot be compiled to ASL (no States.MathModulo intrinsic). Use a compile-time constant or a Lambda function instead', ErrorCodes.Expr.ModuloNotSupported.code);
+    context.addError(expr, "The '%' operator is not supported in JSONPath mode. Switch to JSONata mode (queryLanguage: 'JSONata') for native arithmetic, or use a compile-time constant.", ErrorCodes.Expr.ModuloNotSupported.code);
     return { kind: 'unknown' };
   }
 
@@ -744,8 +1495,8 @@ function resolveBinaryExpression(
     return { kind: 'unknown' };
   }
 
-  const left = resolveExpression(context, expr.left, variables);
-  const right = resolveExpression(context, expr.right, variables);
+  const left = resolveExpression(context, expr.left, variables, dialect);
+  const right = resolveExpression(context, expr.right, variables, dialect);
 
   // Constant folding: if both sides are literals, fold at compile time
   if (left.kind === 'literal' && right.kind === 'literal') {
@@ -762,8 +1513,8 @@ function resolveBinaryExpression(
       if (leftStr === null) return { kind: 'unknown' };
       return { kind: 'intrinsic', path: `States.MathAdd(${leftStr}, ${-right.value})` };
     }
-    // Dynamic subtraction is not possible in ASL
-    context.addError(expr, 'Subtraction with a dynamic right-hand side cannot be compiled to ASL. Only `a - <literal>` is supported (compiled as States.MathAdd(a, -literal)). Use a compile-time constant or a Lambda function instead', ErrorCodes.Expr.DynamicSubtraction.code);
+    // Dynamic subtraction is not possible in JSONPath ASL
+    context.addError(expr, "Dynamic subtraction is not supported in JSONPath mode (only 'a - <literal>' works). Switch to JSONata mode (queryLanguage: 'JSONata') for native arithmetic.", ErrorCodes.Expr.DynamicSubtraction.code);
     return { kind: 'unknown' };
   }
 
@@ -792,6 +1543,78 @@ function resolveBinaryExpression(
 
   // Otherwise use MathAdd (numbers, jsonpaths, intrinsics)
   return { kind: 'intrinsic', path: `States.MathAdd(${leftStr}, ${rightStr})` };
+}
+
+/**
+ * JSONata binary expression resolution: native +, -, *, /, % operators.
+ * Lifts SS530-SS533 restrictions.
+ */
+function resolveJsonataBinaryExpression(
+  context: CompilerContext,
+  expr: ts.BinaryExpression,
+  variables: VariableResolution,
+  dialect?: PathDialect,
+): ResolvedExpression {
+  const op = expr.operatorToken.kind;
+
+  // Supported operators: arithmetic + comparison
+  const JSONATA_BINARY_OPS: Record<number, string> = {
+    [ts.SyntaxKind.PlusToken]: '+',
+    [ts.SyntaxKind.MinusToken]: '-',
+    [ts.SyntaxKind.AsteriskToken]: '*',
+    [ts.SyntaxKind.SlashToken]: '/',
+    [ts.SyntaxKind.PercentToken]: '%',
+    [ts.SyntaxKind.EqualsEqualsEqualsToken]: '=',
+    [ts.SyntaxKind.ExclamationEqualsEqualsToken]: '!=',
+    [ts.SyntaxKind.EqualsEqualsToken]: '=',
+    [ts.SyntaxKind.ExclamationEqualsToken]: '!=',
+    [ts.SyntaxKind.GreaterThanToken]: '>',
+    [ts.SyntaxKind.GreaterThanEqualsToken]: '>=',
+    [ts.SyntaxKind.LessThanToken]: '<',
+    [ts.SyntaxKind.LessThanEqualsToken]: '<=',
+    [ts.SyntaxKind.AmpersandAmpersandToken]: 'and',
+    [ts.SyntaxKind.BarBarToken]: 'or',
+  };
+
+  if (!(op in JSONATA_BINARY_OPS)) {
+    return { kind: 'unknown' };
+  }
+
+  const left = resolveExpression(context, expr.left, variables, dialect);
+  const right = resolveExpression(context, expr.right, variables, dialect);
+
+  // Constant folding (arithmetic only)
+  if (left.kind === 'literal' && right.kind === 'literal') {
+    const folded = foldBinaryLiterals(left.value, right.value, op);
+    if (folded !== undefined) {
+      return { kind: 'literal', value: folded };
+    }
+  }
+
+  const leftStr = serializeJsonataArg(left);
+  const rightStr = serializeJsonataArg(right);
+  if (leftStr === null || rightStr === null) {
+    return { kind: 'unknown' };
+  }
+
+  // Parenthesize compound sub-expressions for correct precedence
+  const wrapL = left.kind === 'intrinsic' && /[+\-*/%&=<>!]|and|or/.test(leftStr) ? `(${leftStr})` : leftStr;
+  const wrapR = right.kind === 'intrinsic' && /[+\-*/%&=<>!]|and|or/.test(rightStr) ? `(${rightStr})` : rightStr;
+
+  // Detect string types for + → & (concatenation)
+  if (op === ts.SyntaxKind.PlusToken) {
+    const leftIsString = left.kind === 'literal' && typeof left.value === 'string';
+    const rightIsString = right.kind === 'literal' && typeof right.value === 'string';
+    const leftType = context.checker.getTypeAtLocation(expr.left);
+    const rightType = context.checker.getTypeAtLocation(expr.right);
+    const isStrType = (t: ts.Type) => !!(t.flags & (ts.TypeFlags.String | ts.TypeFlags.StringLiteral));
+    if (leftIsString || rightIsString || isStrType(leftType) || isStrType(rightType)) {
+      return { kind: 'intrinsic', path: `${wrapL} & ${wrapR}` };
+    }
+    return { kind: 'intrinsic', path: `${wrapL} + ${wrapR}` };
+  }
+
+  return { kind: 'intrinsic', path: `${wrapL} ${JSONATA_BINARY_OPS[op]} ${wrapR}` };
 }
 
 // ---------------------------------------------------------------------------

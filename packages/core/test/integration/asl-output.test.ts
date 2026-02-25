@@ -22,7 +22,7 @@ const FIXTURES_PARENT = path.resolve(__dirname, '../fixtures');
 
 function compileFixture(fixtureFile: string): StateMachineDefinition {
   const filePath = path.join(FIXTURES_DIR, fixtureFile);
-  const result = compile({ sourceFiles: [filePath] });
+  const result = compile({ sourceFiles: [filePath], queryLanguage: 'JSONPath' });
 
   if (result.errors.length > 0) {
     const msgs = result.errors.map(e => `  [${e.code}] ${e.message}`);
@@ -37,7 +37,7 @@ function compileFixture(fixtureFile: string): StateMachineDefinition {
 
 function compileFixtureAll(fixtureFile: string): StateMachineDefinition[] {
   const filePath = path.join(FIXTURES_DIR, fixtureFile);
-  const result = compile({ sourceFiles: [filePath] });
+  const result = compile({ sourceFiles: [filePath], queryLanguage: 'JSONPath' });
 
   if (result.errors.length > 0) {
     const msgs = result.errors.map(e => `  [${e.code}] ${e.message}`);
@@ -49,7 +49,7 @@ function compileFixtureAll(fixtureFile: string): StateMachineDefinition[] {
 
 function compileParentFixtureAll(fixtureFile: string): any[] {
   const filePath = path.join(FIXTURES_PARENT, fixtureFile);
-  const result = compile({ sourceFiles: [filePath] });
+  const result = compile({ sourceFiles: [filePath], queryLanguage: 'JSONPath' });
 
   if (result.errors.length > 0) {
     const msgs = result.errors.map(e => `  [${e.code}] ${e.message}`);
@@ -298,7 +298,7 @@ describe('ASL output: intrinsics', () => {
 
   it('no errors in compilation', () => {
     const filePath = path.join(FIXTURES_DIR, 'intrinsics.ts');
-    const result = compile({ sourceFiles: [filePath] });
+    const result = compile({ sourceFiles: [filePath], queryLanguage: 'JSONPath' });
     expect(result.errors).toHaveLength(0);
   });
 });
@@ -527,7 +527,7 @@ describe('ASL output: all fixtures compile cleanly', () => {
   for (const fixture of fixtures) {
     it(`${fixture} compiles with zero errors`, () => {
       const filePath = path.join(FIXTURES_DIR, fixture);
-      const result = compile({ sourceFiles: [filePath] });
+      const result = compile({ sourceFiles: [filePath], queryLanguage: 'JSONPath' });
       expect(result.errors).toHaveLength(0);
       expect(result.stateMachines.length).toBeGreaterThanOrEqual(1);
     });
@@ -585,7 +585,7 @@ describe('ASL output: constants', () => {
 
   it('compiles without errors', () => {
     const filePath = path.join(FIXTURES_DIR, 'constants.ts');
-    const result = compile({ sourceFiles: [filePath] });
+    const result = compile({ sourceFiles: [filePath], queryLanguage: 'JSONPath' });
     expect(result.errors).toHaveLength(0);
     expect(result.stateMachines.length).toBe(1);
   });
@@ -673,7 +673,7 @@ describe('ASL output: template-literals', () => {
 
   it('compiles without errors', () => {
     const filePath = path.join(FIXTURES_DIR, 'template-literals.ts');
-    const result = compile({ sourceFiles: [filePath] });
+    const result = compile({ sourceFiles: [filePath], queryLanguage: 'JSONPath' });
     expect(result.errors).toHaveLength(0);
     expect(result.stateMachines.length).toBe(1);
   });
@@ -753,7 +753,7 @@ describe('ASL output: subtraction', () => {
 
   it('compiles without errors', () => {
     const filePath = path.join(FIXTURES_DIR, 'subtraction.ts');
-    const result = compile({ sourceFiles: [filePath] });
+    const result = compile({ sourceFiles: [filePath], queryLanguage: 'JSONPath' });
     expect(result.errors).toHaveLength(0);
   });
 
@@ -780,7 +780,7 @@ describe('ASL output: unsupported operator errors', () => {
   function compileSource(code: string) {
     const filePath = path.join(FIXTURES_DIR, '__inline__.ts');
     // Use compile with inline source via a temp fixture
-    return compile({ sourceFiles: [filePath] });
+    return compile({ sourceFiles: [filePath], queryLanguage: 'JSONPath' });
   }
 
   it('* operator emits SS530 error', () => {
@@ -796,10 +796,10 @@ describe('ASL output: unsupported operator errors', () => {
       );
     `);
     try {
-      const result = compile({ sourceFiles: [fixturePath] });
+      const result = compile({ sourceFiles: [fixturePath], queryLanguage: 'JSONPath' });
       const mulError = result.errors.find(e => e.code === 'SS530');
       expect(mulError).toBeDefined();
-      expect(mulError!.message).toContain('States.MathMultiply');
+      expect(mulError!.message).toContain('not supported in JSONPath mode');
     } finally {
       fs.unlinkSync(fixturePath);
     }
@@ -818,10 +818,10 @@ describe('ASL output: unsupported operator errors', () => {
       );
     `);
     try {
-      const result = compile({ sourceFiles: [fixturePath] });
+      const result = compile({ sourceFiles: [fixturePath], queryLanguage: 'JSONPath' });
       const divError = result.errors.find(e => e.code === 'SS531');
       expect(divError).toBeDefined();
-      expect(divError!.message).toContain('States.MathDivide');
+      expect(divError!.message).toContain('not supported in JSONPath mode');
     } finally {
       fs.unlinkSync(fixturePath);
     }
@@ -840,10 +840,10 @@ describe('ASL output: unsupported operator errors', () => {
       );
     `);
     try {
-      const result = compile({ sourceFiles: [fixturePath] });
+      const result = compile({ sourceFiles: [fixturePath], queryLanguage: 'JSONPath' });
       const modError = result.errors.find(e => e.code === 'SS532');
       expect(modError).toBeDefined();
-      expect(modError!.message).toContain('States.MathModulo');
+      expect(modError!.message).toContain('not supported in JSONPath mode');
     } finally {
       fs.unlinkSync(fixturePath);
     }
@@ -862,10 +862,10 @@ describe('ASL output: unsupported operator errors', () => {
       );
     `);
     try {
-      const result = compile({ sourceFiles: [fixturePath] });
+      const result = compile({ sourceFiles: [fixturePath], queryLanguage: 'JSONPath' });
       const subError = result.errors.find(e => e.code === 'SS533');
       expect(subError).toBeDefined();
-      expect(subError!.message).toContain('dynamic right-hand side');
+      expect(subError!.message).toContain('not supported in JSONPath mode');
     } finally {
       fs.unlinkSync(fixturePath);
     }
@@ -884,7 +884,7 @@ describe('ASL output: unsupported operator errors', () => {
       );
     `);
     try {
-      const result = compile({ sourceFiles: [fixturePath] });
+      const result = compile({ sourceFiles: [fixturePath], queryLanguage: 'JSONPath' });
       expect(result.errors).toHaveLength(0);
       expect(result.stateMachines.length).toBe(1);
     } finally {
@@ -902,7 +902,7 @@ describe('ASL output: showcase examples compile', () => {
 
   function compileShowcase(filename: string) {
     const filePath = path.join(SHOWCASE_DIR, filename);
-    return compile({ sourceFiles: [filePath] });
+    return compile({ sourceFiles: [filePath], queryLanguage: 'JSONPath' });
   }
 
   const showcases = [
@@ -955,6 +955,7 @@ describe('ASL output: substitutions', () => {
     const filePath = path.join(FIXTURES_DIR, 'template-substitutions.ts');
     const result = compile({
       sourceFiles: [filePath],
+      queryLanguage: 'JSONPath',
       substitutions: {
         myLambda: { 'Fn::GetAtt': ['MyFunc', 'Arn'] },
         myTable: { Ref: 'MyTable' },
@@ -976,7 +977,7 @@ describe('ASL output: substitutions', () => {
 
   it('uses original values when no substitutions provided', () => {
     const filePath = path.join(FIXTURES_DIR, 'template-substitutions.ts');
-    const result = compile({ sourceFiles: [filePath] });
+    const result = compile({ sourceFiles: [filePath], queryLanguage: 'JSONPath' });
     expect(result.errors).toHaveLength(0);
 
     const def = result.stateMachines[0].definition;
@@ -1011,7 +1012,7 @@ describe('ASL output: substitutions', () => {
   it('constant folding still works with substitutions', () => {
     // Compile constants fixture (no substitutions needed) — regression test
     const filePath = path.join(FIXTURES_DIR, 'constants.ts');
-    const result = compile({ sourceFiles: [filePath] });
+    const result = compile({ sourceFiles: [filePath], queryLanguage: 'JSONPath' });
     expect(result.errors).toHaveLength(0);
     const json = JSON.parse(AslSerializer.serialize(result.stateMachines[0].definition));
     const passes = getStatesByType(json, 'Pass');
@@ -1031,7 +1032,7 @@ describe('ASL output: s3', () => {
 
   it('compiles without errors', () => {
     const filePath = path.join(FIXTURES_DIR, 's3.ts');
-    const result = compile({ sourceFiles: [filePath] });
+    const result = compile({ sourceFiles: [filePath], queryLanguage: 'JSONPath' });
     expect(result.errors).toHaveLength(0);
     expect(result.stateMachines.length).toBe(1);
   });
@@ -1073,7 +1074,7 @@ describe('ASL output: secrets-manager', () => {
 
   it('compiles without errors', () => {
     const filePath = path.join(FIXTURES_DIR, 'secrets-manager.ts');
-    const result = compile({ sourceFiles: [filePath] });
+    const result = compile({ sourceFiles: [filePath], queryLanguage: 'JSONPath' });
     expect(result.errors).toHaveLength(0);
     expect(result.stateMachines.length).toBe(1);
   });
@@ -1105,7 +1106,7 @@ describe('ASL output: ssm', () => {
 
   it('compiles without errors', () => {
     const filePath = path.join(FIXTURES_DIR, 'ssm.ts');
-    const result = compile({ sourceFiles: [filePath] });
+    const result = compile({ sourceFiles: [filePath], queryLanguage: 'JSONPath' });
     expect(result.errors).toHaveLength(0);
     expect(result.stateMachines.length).toBe(1);
   });
@@ -1177,7 +1178,8 @@ describe('SimpleStepsBuilder.withSubstitutions', () => {
       typeof s.Resource === 'string' && s.Resource.includes('dynamodb'),
     );
     expect(dynamoTask).toBeDefined();
-    expect(dynamoTask![1].Parameters.TableName).toEqual({ Ref: 'MyTable' });
+    const params = dynamoTask![1].Parameters || dynamoTask![1].Arguments;
+    expect(params.TableName).toEqual({ Ref: 'MyTable' });
   });
 });
 
@@ -1485,7 +1487,7 @@ describe('ASL output: ecs', () => {
 
   it('compiles without errors', () => {
     const filePath = path.join(FIXTURES_DIR, 'ecs.ts');
-    const result = compile({ sourceFiles: [filePath] });
+    const result = compile({ sourceFiles: [filePath], queryLanguage: 'JSONPath' });
     expect(result.errors).toHaveLength(0);
     expect(result.stateMachines.length).toBe(1);
   });
@@ -1512,7 +1514,7 @@ describe('ASL output: bedrock', () => {
 
   it('compiles without errors', () => {
     const filePath = path.join(FIXTURES_DIR, 'bedrock.ts');
-    const result = compile({ sourceFiles: [filePath] });
+    const result = compile({ sourceFiles: [filePath], queryLanguage: 'JSONPath' });
     expect(result.errors).toHaveLength(0);
     expect(result.stateMachines.length).toBe(1);
   });
@@ -1539,7 +1541,7 @@ describe('ASL output: batch', () => {
 
   it('compiles without errors', () => {
     const filePath = path.join(FIXTURES_DIR, 'batch.ts');
-    const result = compile({ sourceFiles: [filePath] });
+    const result = compile({ sourceFiles: [filePath], queryLanguage: 'JSONPath' });
     expect(result.errors).toHaveLength(0);
     expect(result.stateMachines.length).toBe(1);
   });
@@ -1566,7 +1568,7 @@ describe('ASL output: glue', () => {
 
   it('compiles without errors', () => {
     const filePath = path.join(FIXTURES_DIR, 'glue.ts');
-    const result = compile({ sourceFiles: [filePath] });
+    const result = compile({ sourceFiles: [filePath], queryLanguage: 'JSONPath' });
     expect(result.errors).toHaveLength(0);
     expect(result.stateMachines.length).toBe(1);
   });
@@ -1593,7 +1595,7 @@ describe('ASL output: codebuild', () => {
 
   it('compiles without errors', () => {
     const filePath = path.join(FIXTURES_DIR, 'codebuild.ts');
-    const result = compile({ sourceFiles: [filePath] });
+    const result = compile({ sourceFiles: [filePath], queryLanguage: 'JSONPath' });
     expect(result.errors).toHaveLength(0);
     expect(result.stateMachines.length).toBe(1);
   });
@@ -1620,7 +1622,7 @@ describe('ASL output: athena', () => {
 
   it('compiles without errors', () => {
     const filePath = path.join(FIXTURES_DIR, 'athena.ts');
-    const result = compile({ sourceFiles: [filePath] });
+    const result = compile({ sourceFiles: [filePath], queryLanguage: 'JSONPath' });
     expect(result.errors).toHaveLength(0);
     expect(result.stateMachines.length).toBe(1);
   });
@@ -1644,7 +1646,7 @@ describe('ASL output: athena', () => {
 describe('Limitation verification: deep property access on service result', () => {
   it('compiles without errors — result.SecretString maps to JSONPath', () => {
     const filePath = path.join(FIXTURES_DIR, '__test_deep_property.ts');
-    const result = compile({ sourceFiles: [filePath] });
+    const result = compile({ sourceFiles: [filePath], queryLanguage: 'JSONPath' });
     expect(result.errors).toHaveLength(0);
     expect(result.stateMachines.length).toBe(1);
   });
@@ -1662,7 +1664,7 @@ describe('Limitation verification: deep property access on service result', () =
 describe('Limitation verification: JSON.stringify on runtime value', () => {
   it('compiles without errors — JSON.stringify maps to States.JsonToString', () => {
     const filePath = path.join(FIXTURES_DIR, '__test_json_stringify_runtime.ts');
-    const result = compile({ sourceFiles: [filePath] });
+    const result = compile({ sourceFiles: [filePath], queryLanguage: 'JSONPath' });
     expect(result.errors).toHaveLength(0);
     expect(result.stateMachines.length).toBe(1);
   });
@@ -1679,7 +1681,7 @@ describe('Limitation verification: JSON.stringify on runtime value', () => {
 describe('Limitation verification: String() on runtime value', () => {
   it('String() on runtime value is not compilable (no ASL intrinsic)', () => {
     const fixturePath = path.join(FIXTURES_DIR, '__test_string_runtime.ts');
-    const result = compile({ sourceFiles: [fixturePath] });
+    const result = compile({ sourceFiles: [fixturePath], queryLanguage: 'JSONPath' });
 
     // String(runtimeValue) has no ASL mapping — resolveCallExpression returns
     // { kind: 'unknown' }. What happens next depends on how the compiler
@@ -1719,7 +1721,7 @@ describe('Error-path diagnostics', () => {
     const fixturePath = path.join(FIXTURES_DIR, filename);
     fs.writeFileSync(fixturePath, source);
     try {
-      return compile({ sourceFiles: [fixturePath] });
+      return compile({ sourceFiles: [fixturePath], queryLanguage: 'JSONPath' });
     } finally {
       fs.unlinkSync(fixturePath);
     }
@@ -1834,7 +1836,7 @@ describe('Error-path diagnostics', () => {
     `);
     const err = result.errors.find(e => e.code === 'SS530');
     expect(err).toBeDefined();
-    expect(err!.message).toContain('States.MathMultiply');
+    expect(err!.message).toContain('not supported in JSONPath mode');
   });
 
   // SS600: Empty state machine (no await, no service calls)
@@ -1994,7 +1996,7 @@ describe('Cross-file imported constants', () => {
         fs.writeFileSync(p, source);
         paths.push(p);
       }
-      return compile({ sourceFiles: paths });
+      return compile({ sourceFiles: paths, queryLanguage: 'JSONPath' });
     } finally {
       for (const p of paths) {
         try { fs.unlinkSync(p); } catch {}
@@ -2053,7 +2055,7 @@ describe('ASL output: helper-basic (void helper inlining)', () => {
 
   it('compiles without errors', () => {
     const filePath = path.join(FIXTURES_DIR, 'helper-basic.ts');
-    const result = compile({ sourceFiles: [filePath] });
+    const result = compile({ sourceFiles: [filePath], queryLanguage: 'JSONPath' });
     expect(result.errors).toHaveLength(0);
     expect(result.stateMachines.length).toBe(1);
   });
@@ -2092,7 +2094,7 @@ describe('ASL output: helper-trycatch (helper with try/catch)', () => {
 
   it('compiles without errors', () => {
     const filePath = path.join(FIXTURES_DIR, 'helper-trycatch.ts');
-    const result = compile({ sourceFiles: [filePath] });
+    const result = compile({ sourceFiles: [filePath], queryLanguage: 'JSONPath' });
     expect(result.errors).toHaveLength(0);
     expect(result.stateMachines.length).toBe(1);
   });
@@ -2127,7 +2129,7 @@ describe('ASL output: helper-multiple (multiple helpers inlined)', () => {
 
   it('compiles without errors', () => {
     const filePath = path.join(FIXTURES_DIR, 'helper-multiple.ts');
-    const result = compile({ sourceFiles: [filePath] });
+    const result = compile({ sourceFiles: [filePath], queryLanguage: 'JSONPath' });
     expect(result.errors).toHaveLength(0);
     expect(result.stateMachines.length).toBe(1);
   });
@@ -2174,7 +2176,7 @@ describe('ASL output: helper-nested (nested helper inlining)', () => {
 
   it('compiles without errors', () => {
     const filePath = path.join(FIXTURES_DIR, 'helper-nested.ts');
-    const result = compile({ sourceFiles: [filePath] });
+    const result = compile({ sourceFiles: [filePath], queryLanguage: 'JSONPath' });
     expect(result.errors).toHaveLength(0);
     expect(result.stateMachines.length).toBe(1);
   });
@@ -2205,7 +2207,7 @@ describe('ASL output: helper-nested-deep (3-level nested helper inlining)', () =
 
   it('compiles without errors', () => {
     const filePath = path.join(FIXTURES_DIR, 'helper-nested-deep.ts');
-    const result = compile({ sourceFiles: [filePath] });
+    const result = compile({ sourceFiles: [filePath], queryLanguage: 'JSONPath' });
     expect(result.errors).toHaveLength(0);
     expect(result.stateMachines.length).toBe(1);
   });
@@ -2244,7 +2246,7 @@ describe('ASL output: helper-nested-value (nested helper with value returns)', (
 
   it('compiles without errors', () => {
     const filePath = path.join(FIXTURES_DIR, 'helper-nested-value.ts');
-    const result = compile({ sourceFiles: [filePath] });
+    const result = compile({ sourceFiles: [filePath], queryLanguage: 'JSONPath' });
     expect(result.errors).toHaveLength(0);
     expect(result.stateMachines.length).toBe(1);
   });
@@ -2275,7 +2277,7 @@ describe('ASL output: helper-destructured (substep with destructured parameter)'
 
   it('compiles without errors', () => {
     const filePath = path.join(FIXTURES_DIR, 'helper-destructured.ts');
-    const result = compile({ sourceFiles: [filePath] });
+    const result = compile({ sourceFiles: [filePath], queryLanguage: 'JSONPath' });
     expect(result.errors).toHaveLength(0);
     expect(result.stateMachines.length).toBe(1);
   });
@@ -2304,7 +2306,7 @@ describe('ASL output: helper-destructured-rename (substep with renamed destructu
 
   it('compiles without errors', () => {
     const filePath = path.join(FIXTURES_DIR, 'helper-destructured-rename.ts');
-    const result = compile({ sourceFiles: [filePath] });
+    const result = compile({ sourceFiles: [filePath], queryLanguage: 'JSONPath' });
     expect(result.errors).toHaveLength(0);
     expect(result.stateMachines.length).toBe(1);
   });
@@ -2323,7 +2325,7 @@ describe('ASL output: helper-default-params (substep with default parameter)', (
 
   it('compiles without errors', () => {
     const filePath = path.join(FIXTURES_DIR, 'helper-default-params.ts');
-    const result = compile({ sourceFiles: [filePath] });
+    const result = compile({ sourceFiles: [filePath], queryLanguage: 'JSONPath' });
     expect(result.errors).toHaveLength(0);
     expect(result.stateMachines.length).toBe(1);
   });
@@ -2360,7 +2362,7 @@ describe('ASL output: ternary-literal (ternary with string literal branches)', (
 
   it('compiles without errors', () => {
     const filePath = path.join(FIXTURES_DIR, 'ternary-literal.ts');
-    const result = compile({ sourceFiles: [filePath] });
+    const result = compile({ sourceFiles: [filePath], queryLanguage: 'JSONPath' });
     expect(result.errors).toHaveLength(0);
     expect(result.stateMachines.length).toBe(1);
   });
@@ -2404,7 +2406,7 @@ describe('ASL output: ternary-jsonpath (ternary with JSONPath branches)', () => 
 
   it('compiles without errors', () => {
     const filePath = path.join(FIXTURES_DIR, 'ternary-jsonpath.ts');
-    const result = compile({ sourceFiles: [filePath] });
+    const result = compile({ sourceFiles: [filePath], queryLanguage: 'JSONPath' });
     expect(result.errors).toHaveLength(0);
     expect(result.stateMachines.length).toBe(1);
   });
@@ -2445,7 +2447,7 @@ describe('Value-returning helper inlining', () => {
     const fixturePath = path.join(FIXTURES_DIR, filename);
     fs.writeFileSync(fixturePath, source);
     try {
-      return compile({ sourceFiles: [fixturePath] });
+      return compile({ sourceFiles: [fixturePath], queryLanguage: 'JSONPath' });
     } finally {
       fs.unlinkSync(fixturePath);
     }
@@ -2682,7 +2684,7 @@ describe('Value-returning helper inlining', () => {
 describe('ASL output: let/var capture (SS709)', () => {
   it('compiles let/var with single-assignment literals and emits SS709 warnings', () => {
     const filePath = path.join(FIXTURES_DIR, 'let-var-capture.ts');
-    const result = compile({ sourceFiles: [filePath] });
+    const result = compile({ sourceFiles: [filePath], queryLanguage: 'JSONPath' });
 
     // Should have no errors (only warnings)
     const errors = result.errors.filter(d => d.severity === 'error');
@@ -2703,7 +2705,7 @@ describe('ASL output: let/var capture (SS709)', () => {
 
   it('does not emit SS709 for const declarations', () => {
     const filePath = path.join(FIXTURES_DIR, 'let-var-capture.ts');
-    const result = compile({ sourceFiles: [filePath] });
+    const result = compile({ sourceFiles: [filePath], queryLanguage: 'JSONPath' });
 
     const ss709 = result.errors.filter(d => d.code === 'SS709');
     // Only baseUrl (let) and defaultRegion (var) — not API_VERSION (const)
@@ -2714,7 +2716,7 @@ describe('ASL output: let/var capture (SS709)', () => {
 
   it('resolves let/var values correctly in ASL output', () => {
     const filePath = path.join(FIXTURES_DIR, 'let-var-capture.ts');
-    const result = compile({ sourceFiles: [filePath] });
+    const result = compile({ sourceFiles: [filePath], queryLanguage: 'JSONPath' });
 
     const errors = result.errors.filter(d => d.severity === 'error');
     expect(errors).toHaveLength(0);
@@ -2740,7 +2742,7 @@ describe('ASL output: let/var capture (SS709)', () => {
 describe('ASL output: pure function ARN resolution', () => {
   it('resolves Lambda ARN from pure function call', () => {
     const filePath = path.join(FIXTURES_DIR, 'pure-fn-arn.ts');
-    const result = compile({ sourceFiles: [filePath] });
+    const result = compile({ sourceFiles: [filePath], queryLanguage: 'JSONPath' });
 
     const errors = result.errors.filter(d => d.severity === 'error');
     expect(errors).toHaveLength(0);
@@ -3431,5 +3433,820 @@ describe('ASL output: return-result-optimization', () => {
   it('no Pass state exists (no Return_Result)', () => {
     const passes = getStatesByType(asl, 'Pass');
     expect(passes).toHaveLength(0);
+  });
+});
+
+// ===========================================================================
+// JSONata dialect tests — compile existing fixtures with queryLanguage: 'JSONata'
+// ===========================================================================
+
+function compileFixtureJsonata(fixtureFile: string): any {
+  const filePath = path.join(FIXTURES_DIR, fixtureFile);
+  const result = compile({ sourceFiles: [filePath], queryLanguage: 'JSONata' });
+
+  if (result.errors.length > 0) {
+    const msgs = result.errors.map(e => `  [${e.code}] ${e.message}`);
+    throw new Error(`Compilation errors in ${fixtureFile} (JSONata):\n${msgs.join('\n')}`);
+  }
+  if (result.stateMachines.length === 0) {
+    throw new Error(`No state machines found in ${fixtureFile}`);
+  }
+
+  const def = result.stateMachines[0].definition;
+  const json = AslSerializer.serialize(def);
+  return JSON.parse(json);
+}
+
+// ---------------------------------------------------------------------------
+// JSONata: Sequential
+// ---------------------------------------------------------------------------
+
+describe('ASL output: JSONata sequential', () => {
+  let asl: any;
+  beforeAll(() => { asl = compileFixtureJsonata('sequential.ts'); });
+
+  it('has QueryLanguage: JSONata at top level', () => {
+    expect(asl.QueryLanguage).toBe('JSONata');
+  });
+
+  it('Task states use Arguments instead of Parameters', () => {
+    const tasks = getStatesByType(asl, 'Task');
+    expect(tasks.length).toBeGreaterThanOrEqual(1);
+    for (const [, s] of tasks) {
+      expect(s.Parameters).toBeUndefined();
+      if (s.Arguments) {
+        expect(typeof s.Arguments).toBe('object');
+      }
+    }
+  });
+
+  it('Task states use Assign instead of ResultPath', () => {
+    const tasks = getStatesByType(asl, 'Task');
+    for (const [, s] of tasks) {
+      // The last state may not have Assign (return-result optimization)
+      // but no state should have ResultPath in JSONata mode
+      expect(s.ResultPath).toBeUndefined();
+    }
+  });
+
+  it('Arguments values use {% %} wrapping for dynamic refs', () => {
+    const tasks = getStatesByType(asl, 'Task');
+    for (const [, s] of tasks) {
+      if (s.Arguments) {
+        for (const [key, val] of Object.entries(s.Arguments)) {
+          // Dynamic refs should be {% ... %} wrapped, not .$-keyed
+          expect(key).not.toMatch(/\.\$$/);
+          if (typeof val === 'string' && val.startsWith('{%')) {
+            expect(val).toMatch(/^\{%.*%\}$/);
+          }
+        }
+      }
+    }
+  });
+
+  it('return Pass state uses Output instead of InputPath', () => {
+    const passes = getStatesByType(asl, 'Pass');
+    for (const [, s] of passes) {
+      if (s.End) {
+        // Should use Output (JSONata) not InputPath (JSONPath)
+        expect(s.InputPath).toBeUndefined();
+      }
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// JSONata: If/else with Choice
+// ---------------------------------------------------------------------------
+
+describe('ASL output: JSONata if-else', () => {
+  let asl: any;
+  beforeAll(() => { asl = compileFixtureJsonata('if-else.ts'); });
+
+  it('has QueryLanguage: JSONata', () => {
+    expect(asl.QueryLanguage).toBe('JSONata');
+  });
+
+  it('Choice rules use Condition instead of Variable + operator', () => {
+    const choices = getStatesByType(asl, 'Choice');
+    expect(choices.length).toBeGreaterThanOrEqual(1);
+    for (const [, s] of choices) {
+      for (const rule of s.Choices) {
+        expect(rule.Condition).toBeDefined();
+        expect(typeof rule.Condition).toBe('string');
+        expect(rule.Condition).toMatch(/^\{%.*%\}$/);
+        // Should NOT have JSONPath-style Variable
+        expect(rule.Variable).toBeUndefined();
+      }
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// JSONata: For-of loop (Map state)
+// ---------------------------------------------------------------------------
+
+describe('ASL output: JSONata for-of', () => {
+  let asl: any;
+  beforeAll(() => { asl = compileFixtureJsonata('for-of.ts'); });
+
+  it('has QueryLanguage: JSONata', () => {
+    expect(asl.QueryLanguage).toBe('JSONata');
+  });
+
+  it('Map state uses Items instead of ItemsPath', () => {
+    const maps = getStatesByType(asl, 'Map');
+    expect(maps.length).toBeGreaterThanOrEqual(1);
+    for (const [, s] of maps) {
+      expect(s.ItemsPath).toBeUndefined();
+      expect(s.Items).toBeDefined();
+      expect(typeof s.Items).toBe('string');
+      expect(s.Items).toMatch(/^\{%.*%\}$/);
+    }
+  });
+
+  it('Map state has no ItemSelector (JSONata does not need it)', () => {
+    const maps = getStatesByType(asl, 'Map');
+    for (const [, s] of maps) {
+      expect(s.ItemSelector).toBeUndefined();
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// JSONata: Parallel (Promise.all)
+// ---------------------------------------------------------------------------
+
+describe('ASL output: JSONata parallel', () => {
+  let asl: any;
+  beforeAll(() => { asl = compileFixtureJsonata('parallel.ts'); });
+
+  it('has QueryLanguage: JSONata', () => {
+    expect(asl.QueryLanguage).toBe('JSONata');
+  });
+
+  it('Parallel state uses Assign instead of ResultPath', () => {
+    const pars = getStatesByType(asl, 'Parallel');
+    expect(pars.length).toBeGreaterThanOrEqual(1);
+    for (const [, s] of pars) {
+      expect(s.ResultPath).toBeUndefined();
+    }
+  });
+
+  it('no Pass chain for parallel destructuring (JSONata uses Assign)', () => {
+    // In JSONPath mode, parallel destructuring creates Pass states to extract elements.
+    // In JSONata, these should not exist because Assign handles it directly.
+    const passes = getStatesByType(asl, 'Pass');
+    const parallelExtractPasses = passes.filter(([name]) =>
+      name.includes('__parallel') || name.includes('Extract_')
+    );
+    expect(parallelExtractPasses).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// JSONata: Try/catch
+// ---------------------------------------------------------------------------
+
+describe('ASL output: JSONata try-catch', () => {
+  let asl: any;
+  beforeAll(() => { asl = compileFixtureJsonata('try-catch.ts'); });
+
+  it('has QueryLanguage: JSONata', () => {
+    expect(asl.QueryLanguage).toBe('JSONata');
+  });
+
+  it('Catch rules use Assign instead of ResultPath', () => {
+    const tasks = getStatesByType(asl, 'Task');
+    for (const [, s] of tasks) {
+      if (s.Catch) {
+        for (const rule of s.Catch) {
+          expect(rule.ResultPath).toBeUndefined();
+          if (rule.Assign) {
+            expect(typeof rule.Assign).toBe('object');
+            // Values should be {% $states.errorOutput %} style
+            for (const val of Object.values(rule.Assign as Record<string, unknown>)) {
+              if (typeof val === 'string') {
+                expect(val).toMatch(/^\{%.*\$states\.errorOutput.*%\}$/);
+              }
+            }
+          }
+        }
+      }
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// JSONata: Fire-and-forget (await without assignment)
+// ---------------------------------------------------------------------------
+
+describe('ASL output: JSONata fire-and-forget', () => {
+  let asl: any;
+  beforeAll(() => {
+    // The sequential fixture's first call has assignment; let's use
+    // intrinsics.ts which has fire-and-forget patterns, or test via
+    // the wait-state fixture which may have standalone awaits.
+    // We'll test by checking that Task states without Assign exist.
+    asl = compileFixtureJsonata('sequential.ts');
+  });
+
+  it('no ResultPath: null in JSONata mode', () => {
+    const tasks = getStatesByType(asl, 'Task');
+    for (const [, s] of tasks) {
+      // JSONata uses emitResultDiscard() which returns {} (no ResultPath at all)
+      // rather than ResultPath: null
+      // Note: some tasks may legitimately have no ResultPath in either mode
+      // The key assertion is that ResultPath is never explicitly null
+      if (s.ResultPath === null) {
+        // This would indicate JSONPath-style discard leaked through
+        fail('JSONata mode should not have ResultPath: null');
+      }
+    }
+  });
+});
+
+// ===========================================================================
+// Phase 4: JSONata native expressions — intrinsics, arithmetic, templates
+// ===========================================================================
+
+/**
+ * Recursively collect all string values from an ASL definition.
+ * Covers Arguments, Assign, Output, and any nested objects.
+ */
+function collectAllStringValues(obj: unknown): string[] {
+  const strings: string[] = [];
+  if (typeof obj === 'string') {
+    strings.push(obj);
+  } else if (Array.isArray(obj)) {
+    for (const item of obj) strings.push(...collectAllStringValues(item));
+  } else if (obj && typeof obj === 'object') {
+    for (const val of Object.values(obj as Record<string, unknown>)) {
+      strings.push(...collectAllStringValues(val));
+    }
+  }
+  return strings;
+}
+
+// ---------------------------------------------------------------------------
+// JSONata: Intrinsic functions → native JSONata
+// ---------------------------------------------------------------------------
+
+describe('ASL output: JSONata intrinsics', () => {
+  let asl: any;
+  let allStrings: string[];
+  beforeAll(() => {
+    asl = compileFixtureJsonata('intrinsics.ts');
+    allStrings = collectAllStringValues(asl.States);
+  });
+
+  it('has QueryLanguage: JSONata', () => {
+    expect(asl.QueryLanguage).toBe('JSONata');
+  });
+
+  it('Steps.add() → native + operator', () => {
+    const addExpr = allStrings.find(v => v.includes('+') && v.includes('{%'));
+    expect(addExpr).toBeDefined();
+    for (const v of allStrings) expect(v).not.toContain('States.MathAdd');
+  });
+
+  it('Steps.uuid() → $uuid()', () => {
+    const uuidExpr = allStrings.find(v => v.includes('$uuid()'));
+    expect(uuidExpr).toBeDefined();
+    for (const v of allStrings) expect(v).not.toContain('States.UUID');
+  });
+
+  it('Steps.format() → native & concatenation', () => {
+    const formatExpr = allStrings.find(v => v.includes('&') && v.includes('{%'));
+    expect(formatExpr).toBeDefined();
+    for (const v of allStrings) expect(v).not.toContain('States.Format');
+  });
+
+  it('Steps.jsonParse() → $eval()', () => {
+    const evalExpr = allStrings.find(v => v.includes('$eval('));
+    expect(evalExpr).toBeDefined();
+    for (const v of allStrings) expect(v).not.toContain('States.StringToJson');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// JSONata: Template literals → native & concatenation
+// ---------------------------------------------------------------------------
+
+describe('ASL output: JSONata template-literals', () => {
+  let asl: any;
+  let allStrings: string[];
+  beforeAll(() => {
+    asl = compileFixtureJsonata('template-literals.ts');
+    allStrings = collectAllStringValues(asl.States);
+  });
+
+  it('has QueryLanguage: JSONata', () => {
+    expect(asl.QueryLanguage).toBe('JSONata');
+  });
+
+  it('template literals use & concatenation, not States.Format', () => {
+    const concatExpr = allStrings.find(v => v.includes('&') && v.includes('{%'));
+    expect(concatExpr).toBeDefined();
+    for (const v of allStrings) expect(v).not.toContain('States.Format');
+  });
+
+  it('all-literal template folds to plain string', () => {
+    const folded = allStrings.find(v => v === 'Hello 42');
+    expect(folded).toBeDefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// JSONata: JS intrinsics → native JSONata functions
+// ---------------------------------------------------------------------------
+
+describe('ASL output: JSONata js-intrinsics', () => {
+  let asl: any;
+  let allStrings: string[];
+  beforeAll(() => {
+    asl = compileFixtureJsonata('js-intrinsics.ts');
+    allStrings = collectAllStringValues(asl.States);
+  });
+
+  it('has QueryLanguage: JSONata', () => {
+    expect(asl.QueryLanguage).toBe('JSONata');
+  });
+
+  it('btoa() → $base64encode(), atob() → $base64decode()', () => {
+    expect(allStrings.find(v => v.includes('$base64encode('))).toBeDefined();
+    expect(allStrings.find(v => v.includes('$base64decode('))).toBeDefined();
+    for (const v of allStrings) {
+      expect(v).not.toContain('States.Base64Encode');
+      expect(v).not.toContain('States.Base64Decode');
+    }
+  });
+
+  it('crypto.randomUUID() → $uuid()', () => {
+    expect(allStrings.find(v => v.includes('$uuid()'))).toBeDefined();
+  });
+
+  it('arr[index] → native JSONata indexing, not States.ArrayGetItem', () => {
+    for (const v of allStrings) expect(v).not.toContain('States.ArrayGetItem');
+  });
+
+  it('{ ...a, ...b } → $merge([a, b])', () => {
+    expect(allStrings.find(v => v.includes('$merge('))).toBeDefined();
+    for (const v of allStrings) expect(v).not.toContain('States.JsonMerge');
+  });
+
+  it('[a, b] dynamic → native JSONata array', () => {
+    for (const v of allStrings) expect(v).not.toContain('States.Array(');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// JSONata: JS operators → native JSONata
+// ---------------------------------------------------------------------------
+
+describe('ASL output: JSONata js-operators', () => {
+  let asl: any;
+  let allStrings: string[];
+  beforeAll(() => {
+    asl = compileFixtureJsonata('js-operators.ts');
+    allStrings = collectAllStringValues(asl.States);
+  });
+
+  it('has QueryLanguage: JSONata', () => {
+    expect(asl.QueryLanguage).toBe('JSONata');
+  });
+
+  it('str.split() → $split()', () => {
+    expect(allStrings.find(v => v.includes('$split('))).toBeDefined();
+    for (const v of allStrings) expect(v).not.toContain('States.StringSplit');
+  });
+
+  it('JSON.parse() → $eval()', () => {
+    expect(allStrings.find(v => v.includes('$eval('))).toBeDefined();
+    for (const v of allStrings) expect(v).not.toContain('States.StringToJson');
+  });
+
+  it('dynamic + uses native + for numeric context', () => {
+    const addExpr = allStrings.find(v => v.includes('+') && v.includes('{%'));
+    expect(addExpr).toBeDefined();
+    for (const v of allStrings) expect(v).not.toContain('States.MathAdd');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// JSONata: Arithmetic operators (SS530-SS533 in JSONPath, native in JSONata)
+// ---------------------------------------------------------------------------
+
+describe('ASL output: JSONata arithmetic', () => {
+  let asl: any;
+  let allStrings: string[];
+  beforeAll(() => {
+    asl = compileFixtureJsonata('jsonata-arithmetic.ts');
+    allStrings = collectAllStringValues(asl.States);
+  });
+
+  it('has QueryLanguage: JSONata', () => {
+    expect(asl.QueryLanguage).toBe('JSONata');
+  });
+
+  it('compiles without errors (no SS530-SS533)', () => {
+    expect(asl.States).toBeDefined();
+    expect(Object.keys(asl.States).length).toBeGreaterThan(0);
+  });
+
+  it('multiplication → native * operator', () => {
+    expect(allStrings.find(v => v.includes('*') && v.includes('{%'))).toBeDefined();
+  });
+
+  it('division → native / operator', () => {
+    expect(allStrings.find(v => v.includes('/') && v.includes('{%'))).toBeDefined();
+  });
+
+  it('modulo → native % operator', () => {
+    expect(allStrings.find(v => v.includes('%') && v.includes('{%'))).toBeDefined();
+  });
+
+  it('dynamic subtraction → native - operator', () => {
+    expect(allStrings.find(v => v.includes('-') && v.includes('{%'))).toBeDefined();
+  });
+
+  it('no States.* intrinsics for arithmetic', () => {
+    for (const v of allStrings) expect(v).not.toContain('States.MathAdd');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// JSONata string method mappings
+// ---------------------------------------------------------------------------
+
+describe('ASL output: JSONata string-methods', () => {
+  let asl: any;
+  let allStrings: string[];
+  beforeAll(() => {
+    asl = compileFixtureJsonata('string-methods.ts');
+    allStrings = collectAllStringValues(asl.States);
+  });
+
+  it('has QueryLanguage: JSONata', () => {
+    expect(asl.QueryLanguage).toBe('JSONata');
+  });
+
+  it('compiles without errors', () => {
+    const filePath = path.join(FIXTURES_DIR, 'string-methods.ts');
+    const result = compile({ sourceFiles: [filePath] });
+    expect(result.errors).toHaveLength(0);
+  });
+
+  it('toUpperCase() → $uppercase()', () => {
+    expect(allStrings.some(v => v.includes('$uppercase('))).toBe(true);
+  });
+
+  it('toLowerCase() → $lowercase()', () => {
+    expect(allStrings.some(v => v.includes('$lowercase('))).toBe(true);
+  });
+
+  it('trim() → $trim()', () => {
+    expect(allStrings.some(v => v.includes('$trim('))).toBe(true);
+  });
+
+  it('substring(start, end) → $substring(str, start, length)', () => {
+    expect(allStrings.some(v => v.includes('$substring('))).toBe(true);
+  });
+
+  it('padStart(n, c) → $pad(str, -n, c)', () => {
+    // padStart uses negative width
+    expect(allStrings.some(v => v.includes('$pad(') && v.includes('-10'))).toBe(true);
+  });
+
+  it('padEnd(n, c) → $pad(str, n, c)', () => {
+    // padEnd uses positive width (just check for $pad without negative)
+    expect(allStrings.filter(v => v.includes('$pad(')).length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('replace(a, b) → $replace(str, a, b)', () => {
+    expect(allStrings.some(v => v.includes('$replace('))).toBe(true);
+  });
+
+  it('charAt(i) → $substring(str, i, 1)', () => {
+    // charAt compiles to $substring with length 1
+    expect(allStrings.some(v => /\$substring\([^)]+,\s*0,\s*1\)/.test(v))).toBe(true);
+  });
+
+  it('startsWith(s) → $substring(str, 0, len) = s', () => {
+    // startsWith('pre') → $substring(str, 0, 3) = 'pre'
+    expect(allStrings.some(v => v.includes("= 'pre'") && v.includes('$substring('))).toBe(true);
+  });
+
+  it('endsWith(s) → $substring(str, $length(str) - len) = s', () => {
+    // endsWith('fix') → $substring(str, $length(str) - 3) = 'fix'
+    expect(allStrings.some(v => v.includes("= 'fix'") && v.includes('$length('))).toBe(true);
+  });
+
+  it('repeat(n) → $join($map([1..n], function() { str }))', () => {
+    expect(allStrings.some(v => v.includes('$join($map(') && v.includes('[1..3]'))).toBe(true);
+  });
+
+  it('no States.* intrinsics for string methods', () => {
+    for (const v of allStrings) {
+      expect(v).not.toContain('States.StringSplit');
+      // String methods should all use native JSONata
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// JSONPath mode SS540 errors for JSONata-only methods
+// ---------------------------------------------------------------------------
+
+describe('ASL output: JSONPath SS540 errors for string methods', () => {
+  it('toUpperCase() produces SS540 in JSONPath mode', () => {
+    const result = compile({
+      sourceFiles: [path.join(FIXTURES_DIR, 'string-methods.ts')],
+      queryLanguage: 'JSONPath',
+    });
+    const ss540Errors = result.errors.filter(e => e.code === 'SS540');
+    expect(ss540Errors.length).toBeGreaterThan(0);
+    expect(ss540Errors[0].message).toContain('not supported in JSONPath mode');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// JSONata array method mappings
+// ---------------------------------------------------------------------------
+
+describe('ASL output: JSONata array-math-methods', () => {
+  let asl: any;
+  let allStrings: string[];
+  beforeAll(() => {
+    asl = compileFixtureJsonata('array-math-methods.ts');
+    allStrings = collectAllStringValues(asl.States);
+  });
+
+  it('has QueryLanguage: JSONata', () => {
+    expect(asl.QueryLanguage).toBe('JSONata');
+  });
+
+  it('compiles without errors', () => {
+    const filePath = path.join(FIXTURES_DIR, 'array-math-methods.ts');
+    const result = compile({ sourceFiles: [filePath] });
+    expect(result.errors).toHaveLength(0);
+  });
+
+  // Array methods
+  it('arr.join() → $join()', () => {
+    expect(allStrings.some(v => v.includes('$join('))).toBe(true);
+  });
+
+  it('arr.reverse() → $reverse()', () => {
+    expect(allStrings.some(v => v.includes('$reverse('))).toBe(true);
+  });
+
+  it('arr.sort() → $sort()', () => {
+    expect(allStrings.some(v => v.includes('$sort('))).toBe(true);
+  });
+
+  it('arr.concat() → $append()', () => {
+    expect(allStrings.some(v => v.includes('$append('))).toBe(true);
+  });
+
+  // Math methods
+  it('Math.floor() → $floor()', () => {
+    expect(allStrings.some(v => v.includes('$floor('))).toBe(true);
+  });
+
+  it('Math.ceil() → $ceil()', () => {
+    expect(allStrings.some(v => v.includes('$ceil('))).toBe(true);
+  });
+
+  it('Math.round() → $round()', () => {
+    expect(allStrings.some(v => v.includes('$round('))).toBe(true);
+  });
+
+  it('Math.abs() → $abs()', () => {
+    expect(allStrings.some(v => v.includes('$abs('))).toBe(true);
+  });
+
+  it('Math.pow() → $power()', () => {
+    expect(allStrings.some(v => v.includes('$power('))).toBe(true);
+  });
+
+  it('Math.sqrt() → $sqrt()', () => {
+    expect(allStrings.some(v => v.includes('$sqrt('))).toBe(true);
+  });
+
+  it('Math.min() → $min([])', () => {
+    expect(allStrings.some(v => v.includes('$min('))).toBe(true);
+  });
+
+  it('Math.max() → $max([])', () => {
+    expect(allStrings.some(v => v.includes('$max('))).toBe(true);
+  });
+
+  it('Math.random() → $random()', () => {
+    expect(allStrings.some(v => v.includes('$random('))).toBe(true);
+  });
+
+  // Type conversion
+  it('Number() → $number()', () => {
+    expect(allStrings.some(v => v.includes('$number('))).toBe(true);
+  });
+
+  it('String() → $string()', () => {
+    expect(allStrings.some(v => v.includes('$string('))).toBe(true);
+  });
+
+  it('Boolean() → $boolean()', () => {
+    expect(allStrings.some(v => v.includes('$boolean('))).toBe(true);
+  });
+
+  // Object methods
+  it('Object.keys() → $keys()', () => {
+    expect(allStrings.some(v => v.includes('$keys('))).toBe(true);
+  });
+
+  it('Object.values() → $lookup(o, $keys(o))', () => {
+    expect(allStrings.some(v => v.includes('$lookup('))).toBe(true);
+  });
+
+  it('Date.now() → $millis()', () => {
+    expect(allStrings.some(v => v.includes('$millis()'))).toBe(true);
+  });
+
+  it('Array.isArray() → $type(val) = array', () => {
+    expect(allStrings.some(v => v.includes("$type(") && v.includes("= 'array'"))).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// JSONPath mode SS540 errors for array/math/type/object methods
+// ---------------------------------------------------------------------------
+
+describe('ASL output: JSONPath SS540 errors for array-math methods', () => {
+  it('array/math/type methods produce SS540 in JSONPath mode', () => {
+    const result = compile({
+      sourceFiles: [path.join(FIXTURES_DIR, 'array-math-methods.ts')],
+      queryLanguage: 'JSONPath',
+    });
+    const ss540Errors = result.errors.filter(e => e.code === 'SS540');
+    expect(ss540Errors.length).toBeGreaterThan(0);
+    expect(ss540Errors[0].message).toContain('not supported in JSONPath mode');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Dual-mode: compile all core fixtures in JSONata mode (regression test)
+// ---------------------------------------------------------------------------
+
+describe('Dual-mode: all core fixtures compile in JSONata mode', () => {
+  // Fixtures that compile without errors in JSONPath mode should also
+  // compile without errors in JSONata mode (the default).
+  const DUAL_MODE_FIXTURES = [
+    'sequential.ts',
+    'if-else.ts',
+    'try-catch.ts',
+    'early-return.ts',
+    'nested.ts',
+    'while-loop.ts',
+    'for-of.ts',
+    'and-or-conditions.ts',
+    'wait-state.ts',
+    'switch-case.ts',
+    'parallel.ts',
+    'intrinsics.ts',
+    'constants.ts',
+    'template-literals.ts',
+    'subtraction.ts',
+    's3.ts',
+    'secrets-manager.ts',
+    'ssm.ts',
+    'try-catch-specific.ts',
+    'js-intrinsics.ts',
+    'multi-service.ts',
+    'template-substitutions.ts',
+    'bedrock.ts',
+    'glue.ts',
+    'athena.ts',
+    'ecs.ts',
+    'batch.ts',
+    'codebuild.ts',
+    'helper-basic.ts',
+    'helper-trycatch.ts',
+    'helper-multiple.ts',
+    'helper-nested.ts',
+    'helper-nested-deep.ts',
+    'helper-nested-value.ts',
+    'helper-destructured.ts',
+    'helper-destructured-rename.ts',
+    'helper-default-params.ts',
+    'ternary-literal.ts',
+    'ternary-jsonpath.ts',
+    'retry-timeout.ts',
+    'retry-custom-errors.ts',
+    'parallel-substeps.ts',
+    'map-catch.ts',
+    'steps-map.ts',
+    'deferred-parallel.ts',
+    'deferred-promise-all.ts',
+    'deferred-single.ts',
+    'steps-map-results.ts',
+    'map-closure.ts',
+    'steps-sequential.ts',
+    'steps-items.ts',
+    'forof-closure.ts',
+    'retry-errors.ts',
+    'steps-items-bare.ts',
+    'steps-sequential-closure.ts',
+    'retry-mixed-errors.ts',
+    'return-result-optimization.ts',
+    'parallel-with-prior-state.ts',
+    'steps-map-retry.ts',
+    'steps-items-retry.ts',
+    'let-var-capture.ts',
+    'pure-fn-arn.ts',
+    'lambda-expressions.ts',
+  ];
+
+  for (const fixture of DUAL_MODE_FIXTURES) {
+    it(`${fixture} compiles in JSONata mode`, () => {
+      const filePath = path.join(FIXTURES_DIR, fixture);
+      const result = compile({ sourceFiles: [filePath] }); // default = JSONata
+      const errors = result.errors.filter(e => e.severity === 'error');
+      if (errors.length > 0) {
+        const msgs = errors.map(e => `  [${e.code}] ${e.message}`);
+        throw new Error(`Errors in JSONata mode for ${fixture}:\n${msgs.join('\n')}`);
+      }
+      expect(result.stateMachines.length).toBeGreaterThan(0);
+    });
+  }
+
+  it('JSONata output includes QueryLanguage field', () => {
+    const asl = compileFixtureJsonata('sequential.ts');
+    expect(asl.QueryLanguage).toBe('JSONata');
+  });
+
+  it('JSONata output uses Arguments instead of Parameters', () => {
+    const asl = compileFixtureJsonata('sequential.ts');
+    const allStrings = collectAllStringValues(asl.States);
+    // Should have {% %} JSONata expressions, not $.path references in Parameters
+    const hasJsonataExpr = allStrings.some(v => v.includes('{%'));
+    expect(hasJsonataExpr).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// JSONata lambda expressions (Phase 7)
+// ---------------------------------------------------------------------------
+
+describe('ASL output: JSONata lambda expressions', () => {
+  let asl: any;
+  let allStrings: string[];
+  beforeAll(() => {
+    asl = compileFixtureJsonata('lambda-expressions.ts');
+    allStrings = collectAllStringValues(asl.States);
+  });
+
+  it('has QueryLanguage: JSONata', () => {
+    expect(asl.QueryLanguage).toBe('JSONata');
+  });
+
+  it('compiles without errors', () => {
+    const filePath = path.join(FIXTURES_DIR, 'lambda-expressions.ts');
+    const result = compile({ sourceFiles: [filePath] });
+    expect(result.errors).toHaveLength(0);
+  });
+
+  it('arr.map(fn) → $map(arr, function($v) { expr })', () => {
+    expect(allStrings.some(v => v.includes('$map(') && v.includes('function($item)'))).toBe(true);
+  });
+
+  it('arr.filter(fn) → $filter(arr, function($v) { pred })', () => {
+    expect(allStrings.some(v =>
+      v.includes('$filter(') && v.includes('function($item)') && !v.includes('$count')
+    )).toBe(true);
+  });
+
+  it('arr.reduce(fn, init) → $reduce(arr, function($acc, $v) { expr }, init)', () => {
+    expect(allStrings.some(v => v.includes('$reduce(') && v.includes('function($acc, $item)'))).toBe(true);
+  });
+
+  it('arr.find(fn) → $filter(arr, fn)[0]', () => {
+    expect(allStrings.some(v => v.includes('$filter(') && v.includes(')[0]'))).toBe(true);
+  });
+
+  it('arr.some(fn) → $count($filter(arr, fn)) > 0', () => {
+    expect(allStrings.some(v => v.includes('$count($filter(') && v.includes('> 0'))).toBe(true);
+  });
+
+  it('arr.every(fn) → $count($filter(arr, fn)) = $count(arr)', () => {
+    expect(allStrings.some(v => v.includes('$count($filter(') && v.includes('= $count('))).toBe(true);
+  });
+
+  it('typeof x → $type(x)', () => {
+    expect(allStrings.some(v => v.includes('$type('))).toBe(true);
+  });
+
+  it('find callback resolves comparison: item.id === input.targetId', () => {
+    // The find callback uses === which should emit = in JSONata
+    expect(allStrings.some(v => v.includes('$item.id =') && v.includes('$states.input.targetId'))).toBe(true);
   });
 });

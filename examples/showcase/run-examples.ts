@@ -44,6 +44,11 @@ const examples = [
   '31-steps-map.ts',
   '32-deferred-await.ts',
   '33-retry-timeout.ts',
+  '34-string-methods.ts',
+  '35-math-methods.ts',
+  '36-array-methods.ts',
+  '37-lambda-expressions.ts',
+  '38-full-data-transform.ts',
 ];
 
 fs.mkdirSync(OUTPUT_DIR, { recursive: true });

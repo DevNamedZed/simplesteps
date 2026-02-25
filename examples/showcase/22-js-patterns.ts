@@ -2,6 +2,9 @@
 //
 // Every JS pattern the compiler maps to ASL, in one place.
 //
+// See also 34-37 for JSONata-only methods (string, math, array,
+// and higher-order functions like map/filter/reduce).
+//
 // Mapping table:
 //   a + b (numbers)       → States.MathAdd(a, b)
 //   a - 5 (literal right) → States.MathAdd(a, -5)

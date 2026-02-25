@@ -6,6 +6,7 @@
 // ---- Top-level definition -------------------------------------------------
 
 export interface StateMachineDefinition {
+  readonly QueryLanguage?: 'JSONPath' | 'JSONata';
   readonly Comment?: string;
   readonly StartAt: string;
   readonly States: Readonly<Record<string, State>>;
@@ -47,7 +48,10 @@ export interface TaskState extends StateBase, TerminalFields {
   readonly Type: 'Task';
   readonly Resource: string | Record<string, unknown>;
   readonly Parameters?: Readonly<Record<string, unknown>>;
+  readonly Arguments?: Readonly<Record<string, unknown>>;
   readonly ResultPath?: string | null;
+  readonly Assign?: Readonly<Record<string, unknown>>;
+  readonly Output?: unknown;
   readonly ResultSelector?: Readonly<Record<string, unknown>>;
   readonly TimeoutSeconds?: number;
   readonly TimeoutSecondsPath?: string;
@@ -62,6 +66,9 @@ export interface PassState extends StateBase, TerminalFields {
   readonly Result?: unknown;
   readonly ResultPath?: string | null;
   readonly Parameters?: Readonly<Record<string, unknown>>;
+  readonly Arguments?: Readonly<Record<string, unknown>>;
+  readonly Assign?: Readonly<Record<string, unknown>>;
+  readonly Output?: unknown;
 }
 
 export interface ChoiceState extends StateBase {
@@ -91,6 +98,7 @@ export interface ParallelState extends StateBase, TerminalFields {
   readonly Type: 'Parallel';
   readonly Branches: readonly StateMachineDefinition[];
   readonly ResultPath?: string | null;
+  readonly Assign?: Readonly<Record<string, unknown>>;
   readonly ResultSelector?: Readonly<Record<string, unknown>>;
   readonly Retry?: readonly RetryRule[];
   readonly Catch?: readonly CatchRule[];
@@ -99,12 +107,15 @@ export interface ParallelState extends StateBase, TerminalFields {
 export interface MapState extends StateBase, TerminalFields {
   readonly Type: 'Map';
   readonly ItemsPath?: string;
+  readonly Items?: string;
   readonly ItemProcessor: StateMachineDefinition;
   readonly ItemSelector?: Readonly<Record<string, unknown>>;
   readonly MaxConcurrency?: number;
   readonly ResultPath?: string | null;
+  readonly Assign?: Readonly<Record<string, unknown>>;
   readonly ResultSelector?: Readonly<Record<string, unknown>>;
   readonly Parameters?: Readonly<Record<string, unknown>>;
+  readonly Arguments?: Readonly<Record<string, unknown>>;
   readonly Retry?: readonly RetryRule[];
   readonly Catch?: readonly CatchRule[];
 }
@@ -122,6 +133,7 @@ export type ChoiceRule = ComparisonRule | NotRule | AndRule | OrRule;
 
 export interface ComparisonRule {
   readonly Variable?: string;
+  readonly Condition?: string;
   readonly Next: string;
 
   // String comparisons
@@ -204,4 +216,5 @@ export interface CatchRule {
   readonly ErrorEquals: readonly string[];
   readonly Next: string;
   readonly ResultPath?: string | null;
+  readonly Assign?: Readonly<Record<string, unknown>>;
 }

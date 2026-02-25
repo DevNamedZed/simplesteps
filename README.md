@@ -3,7 +3,7 @@
 [![CI](https://github.com/DevNamedZed/simplesteps/actions/workflows/ci.yml/badge.svg)](https://github.com/DevNamedZed/simplesteps/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-TypeScript-to-ASL compiler for AWS Step Functions. Define workflows as typed async functions, compile to Amazon States Language with full data flow inference, and deploy with CDK or the CLI.
+TypeScript-to-ASL compiler for AWS Step Functions. Define workflows as typed async functions, compile to Amazon States Language with full data flow inference, and deploy with CDK or the CLI. Supports both JSONata (default) and JSONPath query languages.
 
 [Playground](https://devnamedzed.github.io/simplesteps/) | [Getting Started](docs/getting-started.md) | [CDK Integration](docs/cdk-integration.md) | [Language Reference](docs/language-reference.md)
 
@@ -11,7 +11,7 @@ TypeScript-to-ASL compiler for AWS Step Functions. Define workflows as typed asy
 
 At my previous company we had dozens of Step Functions deployed with CDK. They were incredibly hard to read and maintain. The CDK approach defines a program by stringing together a tree of construct objects — `.next().next().next()` chains with raw JSONPath and `sfn.CustomState` workarounds. That's exactly the kind of work a compiler should handle.
 
-SimpleSteps compiles typed async functions to ASL state machines. The compiler performs whole-program data flow analysis and derives all JSONPath expressions (`Parameters`, `ResultPath`, `InputPath`, `ResultSelector`) from variable usage. Service bindings are resolved at compile time, with CDK token substitution at synth time.
+SimpleSteps compiles typed async functions to ASL state machines. The compiler performs whole-program data flow analysis and derives all data flow fields from variable usage — you never write path expressions. In JSONata mode (the default), standard JavaScript methods like `Math.round()`, `str.toUpperCase()`, and `arr.filter()` compile directly to JSONata built-ins. Service bindings are resolved at compile time, with CDK token substitution at synth time.
 
 **Input:**
 
@@ -31,7 +31,31 @@ export const helloWorld = Steps.createFunction(
 );
 ```
 
-**Output:**
+**Output (JSONata — default):**
+
+```json
+{
+  "QueryLanguage": "JSONata",
+  "StartAt": "Invoke_helloFn",
+  "States": {
+    "Invoke_helloFn": {
+      "Type": "Task",
+      "Resource": "arn:aws:lambda:us-east-1:123456789:function:Hello",
+      "Arguments": { "name": "{% $states.input.name %}" },
+      "Assign": { "result": "{% $states.result %}" },
+      "Next": "Return_Result"
+    },
+    "Return_Result": {
+      "Type": "Pass",
+      "Arguments": { "greeting": "{% $result.greeting %}" },
+      "End": true
+    }
+  }
+}
+```
+
+<details>
+<summary>JSONPath output (--query-language jsonpath)</summary>
 
 ```json
 {
@@ -52,6 +76,8 @@ export const helloWorld = Steps.createFunction(
   }
 }
 ```
+
+</details>
 
 ## Quick Start
 
@@ -125,6 +151,9 @@ Workflows can also be defined in [separate files](docs/cdk-integration.md) using
 ```bash
 npm install @simplesteps/core
 npx simplesteps compile workflow.ts -o output/
+
+# Use JSONPath mode instead of JSONata (default)
+npx simplesteps compile workflow.ts -o output/ --query-language jsonpath
 ```
 
 ## Language Support
@@ -145,14 +174,34 @@ npx simplesteps compile workflow.ts -o output/
 | `return value` | Succeed / End state |
 | `try { ... } catch (e) { ... }` | Catch rules |
 | `.call(input, { retry, timeoutSeconds, heartbeatSeconds })` | Retry / Timeout / Heartbeat |
-| `` `Hello ${name}` `` | `States.Format` |
-| `a + b` (numbers) | `States.MathAdd` |
-| `str.split(',')` | `States.StringSplit` |
-| `JSON.parse(str)` | `States.StringToJson` |
-| `Steps.uuid()` / `crypto.randomUUID()` | `States.UUID` |
+| `` `Hello ${name}` `` | `States.Format` / string concatenation |
+| `a + b`, `a * b`, `a - b`, `a / b`, `a % b` | Native arithmetic (JSONata) / `States.MathAdd` (JSONPath) |
+| `str.split(',')` | `$split()` / `States.StringSplit` |
+| `JSON.parse(str)` | `$eval()` / `States.StringToJson` |
+| `Steps.uuid()` / `crypto.randomUUID()` | `$uuid()` / `States.UUID` |
+
+### JSONata-Only Methods (default mode)
+
+| TypeScript | JSONata |
+|---|---|
+| `str.toUpperCase()`, `.toLowerCase()`, `.trim()` | `$uppercase`, `$lowercase`, `$trim` |
+| `str.substring()`, `.replace()`, `.charAt()`, `.repeat()` | `$substring`, `$replace`, `$pad` |
+| `str.startsWith()`, `.endsWith()`, `.padStart()`, `.padEnd()` | Composed expressions |
+| `Math.floor/ceil/round/abs/pow/sqrt/min/max/random` | `$floor`, `$ceil`, `$round`, `$abs`, `$power`, `$sqrt`, `$min`, `$max`, `$random` |
+| `Number()`, `String()`, `Boolean()`, `typeof` | `$number`, `$string`, `$boolean`, `$type` |
+| `Object.keys()`, `Object.values()` | `$keys`, `$lookup` |
+| `Date.now()`, `Array.isArray()` | `$millis`, `$type(x) = 'array'` |
+| `arr.join()`, `.reverse()`, `.sort()`, `.concat()` | `$join`, `$reverse`, `$sort`, `$append` |
+| `arr.map(v => expr)` | `$map(arr, function($v) { expr })` |
+| `arr.filter(v => pred)` | `$filter(arr, function($v) { pred })` |
+| `arr.reduce((a, v) => e, init)` | `$reduce(arr, function($a, $v) { e }, init)` |
+| `arr.find()`, `.some()`, `.every()` | Composed from `$filter` + `$count` |
 
 ## Compiler Features
 
+- **Dual query language support** — JSONata (default) and JSONPath, switchable via `--query-language`
+- **55+ JS method → JSONata mappings** — string, math, array, type conversion, and higher-order functions compile directly
+- **Lambda expression analysis** — pure callbacks in `.map()`, `.filter()`, `.reduce()` auto-compile to JSONata higher-order functions
 - **Whole-program data flow analysis** with constant propagation lattice across modules
 - **Cross-file import resolution** with demand-driven analysis and cycle detection
 - **Pure function inlining** for compile-time constant derivation
@@ -180,7 +229,7 @@ npx simplesteps compile workflow.ts -o output/
 ## Examples
 
 - [Starter projects](examples/starters/) — CLI, library API, and CDK templates
-- [Showcase](examples/showcase/) — 30+ examples covering every language feature
+- [Showcase](examples/showcase/) — 38 examples covering every language feature, including JSONata methods
 
 ## License
 

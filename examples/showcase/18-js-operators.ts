@@ -6,6 +6,9 @@
 //
 // Compare the generated ASL output — it's identical!
 //
+// See also 34-37 for JSONata-only methods (string, math, array,
+// and higher-order functions like map/filter/reduce).
+//
 // Mapping table:
 //   a + b              → States.MathAdd(a, b)
 //   a - 5              → States.MathAdd(a, -5)

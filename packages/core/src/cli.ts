@@ -15,6 +15,7 @@ let inputPath = '';
 let outputDir = '';
 let indent = 2;
 let verbose = false;
+let queryLanguage: 'JSONata' | 'JSONPath' = 'JSONata';
 
 for (let i = 0; i < args.length; i++) {
   const arg = args[i];
@@ -22,6 +23,16 @@ for (let i = 0; i < args.length; i++) {
     outputDir = args[++i] ?? '';
   } else if (arg === '--indent') {
     indent = parseInt(args[++i] ?? '2', 10);
+  } else if (arg === '--query-language') {
+    const val = (args[++i] ?? '').toLowerCase();
+    if (val === 'jsonpath') {
+      queryLanguage = 'JSONPath';
+    } else if (val === 'jsonata') {
+      queryLanguage = 'JSONata';
+    } else {
+      console.error(`Error: --query-language must be 'jsonata' or 'jsonpath'`);
+      process.exit(1);
+    }
   } else if (arg === '-v' || arg === '--verbose') {
     verbose = true;
   } else if (arg === '-h' || arg === '--help') {
@@ -43,14 +54,16 @@ function printUsage(): void {
 Usage: simplesteps compile <file-or-tsconfig> [options]
 
 Options:
-  -o, --output <dir>   Write .asl.json files to this directory
-  --indent <N>         JSON indentation (default: 2)
-  -v, --verbose        Verbose output
-  -h, --help           Show this help message
+  -o, --output <dir>              Write .asl.json files to this directory
+  --query-language <jsonata|jsonpath>  ASL query language (default: jsonata)
+  --indent <N>                    JSON indentation (default: 2)
+  -v, --verbose                   Verbose output
+  -h, --help                      Show this help message
 
 Examples:
   simplesteps compile src/workflow.ts
   simplesteps compile tsconfig.json -o dist/
+  simplesteps compile src/workflow.ts --query-language jsonpath
   simplesteps compile src/workflow.ts --indent 4
 `.trim());
 }
@@ -76,8 +89,8 @@ const isTsConfig = path.basename(resolvedInput).startsWith('tsconfig');
 
 const result = compile(
   isTsConfig
-    ? { tsconfigPath: resolvedInput, cwd: path.dirname(resolvedInput) }
-    : { sourceFiles: [resolvedInput] },
+    ? { tsconfigPath: resolvedInput, cwd: path.dirname(resolvedInput), queryLanguage }
+    : { sourceFiles: [resolvedInput], queryLanguage },
 );
 
 // Report errors

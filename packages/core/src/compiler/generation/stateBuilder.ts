@@ -13,6 +13,7 @@ import {
 } from '../analysis/variableResolver.js';
 import { StepVariableType } from '../analysis/types.js';
 import { buildParameters, buildChoiceRule } from './expressionMapper.js';
+import { type PathDialect, JSON_PATH_DIALECT } from './pathDialect.js';
 import { STEP_ERROR_NAMES } from '../../runtime/index.js';
 import { SDK_PARAM_SHAPE, SDK_RESOURCE_INJECT } from '../../runtime/services/metadata.js';
 import type {
@@ -54,6 +55,7 @@ interface BuildContext {
   readonly blockFirstState: Map<string, string>;
   readonly usedNames: Set<string>;
   readonly tryCatchScopes: TryCatchScope[];
+  readonly dialect: PathDialect;
 }
 
 // ---------------------------------------------------------------------------
@@ -69,6 +71,7 @@ export function buildStateMachine(
   callSite: StepFunctionCallSite,
   serviceRegistry: ServiceRegistry,
   variables: VariableResolutionBuilder,
+  dialect: PathDialect = JSON_PATH_DIALECT,
 ): StateMachineDefinition {
   const buildCtx: BuildContext = {
     compilerContext: context,
@@ -81,6 +84,7 @@ export function buildStateMachine(
     blockFirstState: new Map(),
     usedNames: new Set(),
     tryCatchScopes: [],
+    dialect,
   };
 
   const startState = processBlock(buildCtx, cfg.entry);
@@ -99,7 +103,11 @@ export function buildStateMachine(
     states[name] = state;
   }
 
-  return { StartAt: startState, States: states };
+  return {
+    ...(dialect.queryLanguage && { QueryLanguage: dialect.queryLanguage }),
+    StartAt: startState,
+    States: states,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -137,16 +145,21 @@ function processBlock(ctx: BuildContext, blockId: string): string | null {
     const { name, symbol, expression } = block.returnTargetVar;
 
     if (!expression) {
-      // return await svc.call(...) → override the last Task state's ResultPath
-      const resultPath = `$.${name}`;
+      // return await svc.call(...) → override the last Task state's result assignment
+      const varPath = ctx.dialect.variablePath(name);
       const lastEmittedName = stateNames[stateNames.length - 1];
       if (lastEmittedName) {
         const lastState = ctx.states.get(lastEmittedName);
         if (lastState && lastState.Type === 'Task') {
           const taskState = lastState as TaskState;
-          if (taskState.ResultPath === null) {
-            const { ResultPath: _, ...rest } = taskState;
-            ctx.states.set(lastEmittedName, { ...rest, ResultPath: resultPath } as State);
+          // In JSONPath: fire-and-forget has ResultPath: null
+          // In JSONata: fire-and-forget has no Assign/ResultPath
+          const isFireAndForget = ctx.dialect.isJsonata()
+            ? !taskState.Assign
+            : taskState.ResultPath === null;
+          if (isFireAndForget) {
+            const { ResultPath: _, Assign: _a, ...rest } = taskState;
+            ctx.states.set(lastEmittedName, { ...rest, ...ctx.dialect.emitResultAssignment(name) } as State);
           }
         }
       }
@@ -154,13 +167,13 @@ function processBlock(ctx: BuildContext, blockId: string): string | null {
       ctx.variables.addVariable(symbol, {
         symbol,
         type: StepVariableType.StateOutput,
-        jsonPath: resultPath,
+        jsonPath: varPath,
         definitelyAssigned: true,
         constant: false,
       });
     } else {
       // return expr (non-await) → resolve expression and create variable binding
-      const resolved = resolveExpression(ctx.compilerContext, expression, ctx.variables.toResolution());
+      const resolved = resolveExpression(ctx.compilerContext, expression, ctx.variables.toResolution(), ctx.dialect);
       if (resolved.kind === 'jsonpath' && resolved.path) {
         ctx.variables.addVariable(symbol, {
           symbol,
@@ -226,6 +239,7 @@ function processStatement(ctx: BuildContext, stmt: ts.Statement): string | null 
           ctx.compilerContext,
           decl.initializer,
           ctx.variables.toResolution(),
+          ctx.dialect,
         );
         if (resolved.kind === 'intrinsic') {
           const sym = ctx.compilerContext.checker.getSymbolAtLocation(decl.name);
@@ -304,7 +318,7 @@ function processAwaitAssignment(
 
   // Get the variable name for ResultPath
   const varName = ts.isIdentifier(decl.name) ? decl.name.text : undefined;
-  const resultPath = varName ? `$.${varName}` : null;
+  const resultPath = varName ? ctx.dialect.resultPath(varName) : null;
 
   // Register the variable as StateOutput
   if (varName && ts.isIdentifier(decl.name)) {
@@ -328,8 +342,8 @@ function processAwaitAssignment(
   const taskState: TaskState = {
     Type: 'Task',
     Resource: serviceCall.resource,
-    ...(serviceCall.parameters && { Parameters: serviceCall.parameters }),
-    ...(resultPath && { ResultPath: resultPath }),
+    ...(serviceCall.parameters && ctx.dialect.emitParameters(serviceCall.parameters)),
+    ...(varName ? ctx.dialect.emitResultAssignment(varName) : ctx.dialect.emitResultDiscard()),
     ...(serviceCall.retry && { Retry: serviceCall.retry }),
     ...(serviceCall.timeoutSeconds != null && { TimeoutSeconds: serviceCall.timeoutSeconds }),
     ...(serviceCall.timeoutSecondsPath && { TimeoutSecondsPath: serviceCall.timeoutSecondsPath }),
@@ -369,8 +383,8 @@ function processAwaitFireAndForget(
   const taskState: TaskState = {
     Type: 'Task',
     Resource: serviceCall.resource,
-    ...(serviceCall.parameters && { Parameters: serviceCall.parameters }),
-    ResultPath: null,
+    ...(serviceCall.parameters && ctx.dialect.emitParameters(serviceCall.parameters)),
+    ...ctx.dialect.emitResultDiscard(),
     ...(serviceCall.retry && { Retry: serviceCall.retry }),
     ...(serviceCall.timeoutSeconds != null && { TimeoutSeconds: serviceCall.timeoutSeconds }),
     ...(serviceCall.timeoutSecondsPath && { TimeoutSecondsPath: serviceCall.timeoutSecondsPath }),
@@ -394,14 +408,17 @@ function processAwaitReassignment(
   const serviceCall = extractServiceCall(ctx, callExpr);
   if (!serviceCall) return null;
 
-  // Resolve the LHS identifier to get its existing jsonPath
-  let resultPath: string | null = null;
+  // Resolve the LHS identifier to get its variable name for result assignment
+  let resultAssignment: Record<string, unknown> = {};
   if (ts.isIdentifier(expr.left)) {
     const sym = ctx.compilerContext.checker.getSymbolAtLocation(expr.left);
     if (sym) {
       const varInfo = ctx.variables.getBySymbol(sym);
       if (varInfo && varInfo.jsonPath) {
-        resultPath = varInfo.jsonPath;
+        const varName = ctx.dialect.extractVarName(varInfo.jsonPath);
+        if (varName) {
+          resultAssignment = ctx.dialect.emitResultAssignment(varName);
+        }
       }
     }
   }
@@ -414,8 +431,8 @@ function processAwaitReassignment(
   const taskState: TaskState = {
     Type: 'Task',
     Resource: serviceCall.resource,
-    ...(serviceCall.parameters && { Parameters: serviceCall.parameters }),
-    ...(resultPath && { ResultPath: resultPath }),
+    ...(serviceCall.parameters && ctx.dialect.emitParameters(serviceCall.parameters)),
+    ...resultAssignment,
     ...(serviceCall.retry && { Retry: serviceCall.retry }),
     ...(serviceCall.timeoutSeconds != null && { TimeoutSeconds: serviceCall.timeoutSeconds }),
     ...(serviceCall.timeoutSecondsPath && { TimeoutSecondsPath: serviceCall.timeoutSecondsPath }),
@@ -450,7 +467,7 @@ function processStepsDelay(
   for (const prop of arg.properties) {
     if (!ts.isPropertyAssignment(prop) || !ts.isIdentifier(prop.name)) continue;
     const key = prop.name.text;
-    const resolved = resolveExpression(ctx.compilerContext, prop.initializer, ctx.variables.toResolution());
+    const resolved = resolveExpression(ctx.compilerContext, prop.initializer, ctx.variables.toResolution(), ctx.dialect);
 
     if (key === 'seconds') {
       if (resolved.kind === 'literal' && typeof resolved.value === 'number') {
@@ -531,6 +548,7 @@ function processTerminator(
         term.condition,
         thenTarget,
         ctx.variables.toResolution(),
+        ctx.dialect,
       );
 
       const choiceName = generateChoiceStateName(ctx, term.condition);
@@ -551,13 +569,13 @@ function processTerminator(
     }
 
     case 'ternaryAssign': {
-      const resultPath = `$.${term.variableName}`;
+      const varPath = ctx.dialect.variablePath(term.variableName);
 
       // Register variable BEFORE processing continuation (so it's in scope)
       ctx.variables.addVariable(term.variableSymbol, {
         symbol: term.variableSymbol,
         type: StepVariableType.StateOutput,
-        jsonPath: resultPath,
+        jsonPath: varPath,
         definitelyAssigned: true,
         constant: false,
       });
@@ -566,15 +584,15 @@ function processTerminator(
       const contFirst = processBlock(ctx, term.continuation);
 
       // Resolve then/else values
-      const thenResolved = resolveExpression(ctx.compilerContext, term.thenExpression, ctx.variables.toResolution());
-      const elseResolved = resolveExpression(ctx.compilerContext, term.elseExpression, ctx.variables.toResolution());
+      const thenResolved = resolveExpression(ctx.compilerContext, term.thenExpression, ctx.variables.toResolution(), ctx.dialect);
+      const elseResolved = resolveExpression(ctx.compilerContext, term.elseExpression, ctx.variables.toResolution(), ctx.dialect);
 
       // Build Pass states for each branch
       const thenStateName = generateStateName(`Assign_${term.variableName}_true`, ctx.usedNames);
       const elseStateName = generateStateName(`Assign_${term.variableName}_false`, ctx.usedNames);
 
-      buildTernaryBranchPass(ctx, thenStateName, thenResolved, resultPath, contFirst);
-      buildTernaryBranchPass(ctx, elseStateName, elseResolved, resultPath, contFirst);
+      buildTernaryBranchPass(ctx, thenStateName, thenResolved, term.variableName, contFirst);
+      buildTernaryBranchPass(ctx, elseStateName, elseResolved, term.variableName, contFirst);
 
       // Build Choice state
       const choiceRule = buildChoiceRule(
@@ -582,6 +600,7 @@ function processTerminator(
         term.condition,
         thenStateName,
         ctx.variables.toResolution(),
+        ctx.dialect,
       );
       const choiceName = generateChoiceStateName(ctx, term.condition);
       const choiceState: ChoiceState = {
@@ -616,6 +635,7 @@ function processTerminator(
         term.condition,
         bodyTarget,
         ctx.variables.toResolution(),
+        ctx.dialect,
       );
 
       const choiceState: ChoiceState = {
@@ -774,6 +794,7 @@ function processMapStateTerminator(
     ctx.compilerContext,
     term.itemsExpression,
     ctx.variables.toResolution(),
+    ctx.dialect,
   );
   let itemsPath: string;
   if (resolved.kind === 'jsonpath') {
@@ -792,13 +813,13 @@ function processMapStateTerminator(
   // Detect captured variables (outer StateOutput vars referenced inside body)
   const capturedVars = findCapturedVariables(ctx, term.bodyBlock, term.iterVarSymbol);
 
-  // Build ItemSelector if there are captured variables
+  // Build ItemSelector if there are captured variables (JSONPath only)
   let itemSelector: Record<string, string> | undefined;
-  if (capturedVars.size > 0) {
+  if (ctx.dialect.needsItemSelector() && capturedVars.size > 0) {
     itemSelector = {};
-    itemSelector[`${term.iterVarName}.$`] = '$$.Map.Item.Value';
+    itemSelector[ctx.dialect.dynamicKey(term.iterVarName)] = ctx.dialect.mapItemValuePath();
     for (const [, capture] of capturedVars) {
-      itemSelector[`${capture.name}.$`] = capture.jsonPath;
+      itemSelector[ctx.dialect.dynamicKey(capture.name)] = capture.jsonPath;
     }
   }
 
@@ -825,26 +846,27 @@ function processMapStateTerminator(
     );
   }
 
-  // Determine ResultPath: collect results into a named variable, or discard
-  const collectResultPath = term.collectResults && term.resultBindingName
-    ? `$.${term.resultBindingName}`
-    : undefined;
-
   // Extract retry rules from the options expression, if present
   const mapRetry = term.retryExpression
     ? extractRetryRules(ctx, term.retryExpression)
     : undefined;
 
+  // Determine result assignment
+  const collectsResults = term.collectResults && term.resultBindingName;
+  const resultFields = collectsResults
+    ? ctx.dialect.emitResultAssignment(term.resultBindingName!)
+    : ctx.dialect.emitResultDiscard();
+
   const mapState: MapState = {
     Type: 'Map',
-    ItemsPath: itemsPath,
+    ...ctx.dialect.emitItemsPath(itemsPath),
     ...(itemSelector && { ItemSelector: itemSelector }),
     ItemProcessor: {
       StartAt: bodyFirst ?? 'Empty',
       States: subStates,
     },
     ...(term.maxConcurrency != null && { MaxConcurrency: term.maxConcurrency }),
-    ...(collectResultPath ? { ResultPath: collectResultPath } : { ResultPath: null }),
+    ...resultFields,
     ...(mapRetry && { Retry: mapRetry }),
     ...buildCatchRules(ctx),
   };
@@ -852,7 +874,8 @@ function processMapStateTerminator(
   ctx.states.set(mapStateName, mapState);
 
   // Register result variable so downstream states can reference it
-  if (collectResultPath && term.resultSymbol) {
+  if (collectsResults && term.resultSymbol) {
+    const collectResultPath = ctx.dialect.variablePath(term.resultBindingName!);
     ctx.variables.addVariable(term.resultSymbol, {
       symbol: term.resultSymbol,
       type: StepVariableType.StateOutput,
@@ -921,29 +944,33 @@ function processParallelTerminator(
     }
   }
 
-  // --- ResultPath strategy ---
-  // In ASL, omitting ResultPath defaults to "$" which replaces the entire
-  // state input with the Parallel output — destroying any pre-existing
-  // variables.  We use explicit ResultPath to preserve state.
-  let parallelResultPath: string | null;
+  // --- Result assignment strategy ---
+  const isFireAndForget = term.resultBindings.length === 0 ||
+    (term.resultBindings.length === 1 && term.resultBindings[0] === '_');
+  const isSingleBinding = term.resultBindings.length === 1 && !isFireAndForget;
+  const isDestructured = term.resultBindings.length > 1;
 
-  if (term.resultBindings.length === 0 ||
-      (term.resultBindings.length === 1 && term.resultBindings[0] === '_')) {
-    // Fire-and-forget: discard output
-    parallelResultPath = null;
-  } else if (term.resultBindings.length === 1) {
-    // Single binding: store array directly
-    parallelResultPath = `$.${term.resultBindings[0]}`;
+  let parallelResultFields: Record<string, unknown>;
+  if (isFireAndForget) {
+    parallelResultFields = ctx.dialect.emitResultDiscard();
+  } else if (isSingleBinding) {
+    parallelResultFields = ctx.dialect.emitResultAssignment(term.resultBindings[0]);
+  } else if (ctx.dialect.needsParallelPassChain()) {
+    // JSONPath: store at temp key, redistribute via Pass states
+    parallelResultFields = { ResultPath: ctx.dialect.parallelTempResultPath() };
   } else {
-    // Destructured: store at temp key, redistribute via Pass states
-    parallelResultPath = '$.__parallel';
+    // JSONata: emit Assign directly on the Parallel state
+    const bindings = term.resultBindings
+      .map((name, i) => ({ name, index: i }))
+      .filter(b => b.name !== '_');
+    parallelResultFields = ctx.dialect.emitParallelAssignment(bindings);
   }
 
   const parallelStateName = generateStateName('Parallel', ctx.usedNames);
   const parallelState: ParallelState = {
     Type: 'Parallel',
     Branches: branchDefs,
-    ResultPath: parallelResultPath,
+    ...parallelResultFields,
     ...buildCatchRules(ctx),
   };
 
@@ -953,10 +980,11 @@ function processParallelTerminator(
     patchNext(ctx.states, lastStateName, parallelStateName);
   }
 
-  // For destructured bindings: emit Pass states to redistribute each
+  // For destructured bindings in JSONPath: emit Pass states to redistribute each
   // element from $.__parallel[i] into its own $.varName slot.
+  // In JSONata mode, this is handled by the Assign on the Parallel state above.
   let lastChainedState = parallelStateName;
-  if (term.resultBindings.length > 1) {
+  if (isDestructured && ctx.dialect.needsParallelPassChain()) {
     for (let i = 0; i < term.resultBindings.length; i++) {
       const name = term.resultBindings[i];
       const sym = term.resultSymbols[i];
@@ -965,8 +993,8 @@ function processParallelTerminator(
       const assignName = generateStateName(`Assign_${name}`, ctx.usedNames);
       const assignState: PassState = {
         Type: 'Pass',
-        InputPath: `$.__parallel[${i}]`,
-        ResultPath: `$.${name}`,
+        InputPath: ctx.dialect.parallelElementInputPath(i),
+        ResultPath: ctx.dialect.resultPath(name),
       };
       ctx.states.set(assignName, assignState);
       patchNext(ctx.states, lastChainedState, assignName);
@@ -976,20 +1004,37 @@ function processParallelTerminator(
         ctx.variables.addVariable(sym, {
           symbol: sym,
           type: StepVariableType.StateOutput,
-          jsonPath: `$.${name}`,
+          jsonPath: ctx.dialect.variablePath(name),
           definitelyAssigned: true,
           constant: false,
         });
       }
     }
-  } else if (term.resultBindings.length === 1 && term.resultBindings[0] !== '_') {
+  } else if (isDestructured) {
+    // JSONata: register variables (Assign already on the Parallel state)
+    for (let i = 0; i < term.resultBindings.length; i++) {
+      const name = term.resultBindings[i];
+      const sym = term.resultSymbols[i];
+      if (name === '_') continue;
+
+      if (sym) {
+        ctx.variables.addVariable(sym, {
+          symbol: sym,
+          type: StepVariableType.StateOutput,
+          jsonPath: ctx.dialect.variablePath(name),
+          definitelyAssigned: true,
+          constant: false,
+        });
+      }
+    }
+  } else if (isSingleBinding) {
     // Single binding — register variable
     const sym = term.resultSymbols[0];
     if (sym) {
       ctx.variables.addVariable(sym, {
         symbol: sym,
         type: StepVariableType.StateOutput,
-        jsonPath: `$.${term.resultBindings[0]}`,
+        jsonPath: ctx.dialect.variablePath(term.resultBindings[0]),
         definitelyAssigned: true,
         constant: false,
       });
@@ -1028,6 +1073,7 @@ function createParallelBranchContext(ctx: BuildContext): BuildContext {
     usedNames: new Set<string>(),
     blockFirstState: new Map<string, string>(),
     tryCatchScopes: [],
+    dialect: ctx.dialect,
   };
 }
 
@@ -1058,7 +1104,7 @@ function processBranchExpression(
   const taskState: TaskState = {
     Type: 'Task',
     Resource: serviceCall.resource,
-    ...(serviceCall.parameters && { Parameters: serviceCall.parameters }),
+    ...(serviceCall.parameters && ctx.dialect.emitParameters(serviceCall.parameters)),
     ...(serviceCall.retry && { Retry: serviceCall.retry }),
     ...(serviceCall.timeoutSeconds != null && { TimeoutSeconds: serviceCall.timeoutSeconds }),
     ...(serviceCall.timeoutSecondsPath && { TimeoutSecondsPath: serviceCall.timeoutSecondsPath }),
@@ -1095,7 +1141,7 @@ function processReturnTerminator(
       const taskState: TaskState = {
         Type: 'Task',
         Resource: serviceCall.resource,
-        ...(serviceCall.parameters && { Parameters: serviceCall.parameters }),
+        ...(serviceCall.parameters && ctx.dialect.emitParameters(serviceCall.parameters)),
         ...(serviceCall.retry && { Retry: serviceCall.retry }),
         ...(serviceCall.timeoutSeconds != null && { TimeoutSeconds: serviceCall.timeoutSeconds }),
         ...(serviceCall.timeoutSecondsPath && { TimeoutSecondsPath: serviceCall.timeoutSecondsPath }),
@@ -1118,12 +1164,13 @@ function processReturnTerminator(
       ctx.compilerContext,
       expression,
       ctx.variables.toResolution(),
+      ctx.dialect,
     );
 
     const stateName = generateStateName('Return_Result', ctx.usedNames);
     const passState: PassState = {
       Type: 'Pass',
-      Parameters: params,
+      ...ctx.dialect.emitParameters(params),
       End: true,
     };
 
@@ -1141,26 +1188,32 @@ function processReturnTerminator(
     ctx.compilerContext,
     expression,
     ctx.variables.toResolution(),
+    ctx.dialect,
   );
 
   if (resolved.kind === 'jsonpath') {
     // Optimization: if returning the full result of the preceding Task state,
-    // merge by removing ResultPath and setting End: true on the Task directly.
+    // merge by removing ResultPath/Assign and setting End: true on the Task directly.
     // This avoids emitting a redundant Pass state.
     if (lastStateName) {
       const lastState = ctx.states.get(lastStateName);
-      if (lastState && lastState.Type === 'Task' &&
-          (lastState as TaskState).ResultPath === resolved.path) {
-        const { ResultPath, ...rest } = lastState as TaskState;
-        ctx.states.set(lastStateName, { ...rest, End: true } as unknown as TaskState);
-        return lastStateName;
+      if (lastState && lastState.Type === 'Task') {
+        const task = lastState as TaskState;
+        const hasMatchingResult = ctx.dialect.isJsonata()
+          ? task.Assign && Object.values(task.Assign).some(v => v === '{% $states.result %}')
+          : task.ResultPath === resolved.path;
+        if (hasMatchingResult) {
+          const { ResultPath, Assign, ...rest } = task;
+          ctx.states.set(lastStateName, { ...rest, End: true } as unknown as TaskState);
+          return lastStateName;
+        }
       }
     }
 
     const stateName = generateStateName('Return_Result', ctx.usedNames);
     const passState: PassState = {
       Type: 'Pass',
-      InputPath: resolved.path,
+      ...ctx.dialect.emitReturnPath(resolved.path!),
       End: true,
     };
     ctx.states.set(stateName, passState);
@@ -1175,7 +1228,7 @@ function processReturnTerminator(
     const stateName = generateStateName('Return_Result', ctx.usedNames);
     const passState: PassState = {
       Type: 'Pass',
-      Parameters: { 'result.$': resolved.path },
+      ...ctx.dialect.emitParameters(ctx.dialect.wrapIntrinsicResult('result', resolved.path!)),
       End: true,
     };
     ctx.states.set(stateName, passState);
@@ -1234,6 +1287,7 @@ function processThrowTerminator(
         ctx.compilerContext,
         firstArg,
         ctx.variables.toResolution(),
+        ctx.dialect,
       );
       if (resolved.kind === 'literal' && typeof resolved.value === 'string') {
         failState = { Type: 'Fail', Error: errorName, Cause: resolved.value };
@@ -1340,6 +1394,7 @@ function extractServiceCall(
       ctx.compilerContext,
       arg,
       ctx.variables.toResolution(),
+      ctx.dialect,
     );
   }
 
@@ -1403,14 +1458,14 @@ function extractTaskOptions(
     if (name === 'retry') {
       result.retry = extractRetryRules(ctx, prop.initializer);
     } else if (name === 'timeoutSeconds') {
-      const resolved = resolveExpression(ctx.compilerContext, prop.initializer, ctx.variables.toResolution());
+      const resolved = resolveExpression(ctx.compilerContext, prop.initializer, ctx.variables.toResolution(), ctx.dialect);
       if (resolved.kind === 'literal' && typeof resolved.value === 'number') {
         result.timeoutSeconds = resolved.value;
       } else if (resolved.kind === 'jsonpath') {
         result.timeoutSecondsPath = resolved.path;
       }
     } else if (name === 'heartbeatSeconds') {
-      const resolved = resolveExpression(ctx.compilerContext, prop.initializer, ctx.variables.toResolution());
+      const resolved = resolveExpression(ctx.compilerContext, prop.initializer, ctx.variables.toResolution(), ctx.dialect);
       if (resolved.kind === 'literal' && typeof resolved.value === 'number') {
         result.heartbeatSeconds = resolved.value;
       } else if (resolved.kind === 'jsonpath') {
@@ -1468,14 +1523,14 @@ function extractSingleRetryRule(
   for (const prop of obj.properties) {
     if (!ts.isPropertyAssignment(prop) || !ts.isIdentifier(prop.name)) continue;
     const name = prop.name.text;
-    const resolved = resolveExpression(ctx.compilerContext, prop.initializer, ctx.variables.toResolution());
+    const resolved = resolveExpression(ctx.compilerContext, prop.initializer, ctx.variables.toResolution(), ctx.dialect);
 
     switch (name) {
       case 'errorEquals':
         if (ts.isArrayLiteralExpression(prop.initializer)) {
           errorEquals = errorEquals ?? [];
           for (const el of prop.initializer.elements) {
-            const elResolved = resolveExpression(ctx.compilerContext, el, ctx.variables.toResolution());
+            const elResolved = resolveExpression(ctx.compilerContext, el, ctx.variables.toResolution(), ctx.dialect);
             if (elResolved.kind === 'literal' && typeof elResolved.value === 'string') {
               errorEquals.push(elResolved.value);
             }
@@ -1540,13 +1595,13 @@ function buildCatchRules(ctx: BuildContext): { Catch?: readonly CatchRule[] } {
   if (ctx.tryCatchScopes.length === 0) return {};
 
   const scope = ctx.tryCatchScopes[ctx.tryCatchScopes.length - 1];
-  const resultPath = scope.catchParam ? `$.${scope.catchParam}` : '$.error';
+  const catchAssignment = ctx.dialect.emitCatchAssignment(scope.catchParam ?? 'error');
 
   return {
     Catch: scope.catchRules.map(rule => ({
       ErrorEquals: rule.errorEquals,
       Next: rule.target,
-      ResultPath: resultPath,
+      ...catchAssignment,
     })),
   };
 }
@@ -1614,10 +1669,10 @@ function findCapturedVariables(
       if (sym && sym !== iterVarSymbol && !captured.has(sym)) {
         const varInfo = ctx.variables.getBySymbol(sym);
         if (varInfo && varInfo.type === StepVariableType.StateOutput && varInfo.jsonPath) {
-          // Extract the top-level binding name from the jsonPath (e.g., "$.prefix" → "prefix")
-          const match = varInfo.jsonPath.match(/^\$\.(\w+)/);
-          if (match) {
-            captured.set(sym, { name: match[1], jsonPath: varInfo.jsonPath });
+          // Extract the top-level binding name from the jsonPath
+          const varName = ctx.dialect.extractVarName(varInfo.jsonPath);
+          if (varName) {
+            captured.set(sym, { name: varName, jsonPath: varInfo.jsonPath });
           }
         }
       }
@@ -1659,7 +1714,7 @@ function createSubContext(
   }
 
   // With captures: iteration var is at $.iterVarName instead of $
-  const iterPath = capturedVars?.size ? `$.${iterationVarName}` : '$';
+  const iterPath = capturedVars?.size ? ctx.dialect.variablePath(iterationVarName) : '$';
 
   // Register the iteration variable
   if (iterationVarSymbol) {
@@ -1679,7 +1734,7 @@ function createSubContext(
       subVariables.addVariable(sym, {
         symbol: sym,
         type: StepVariableType.StateOutput,
-        jsonPath: `$.${capture.name}`,
+        jsonPath: ctx.dialect.variablePath(capture.name),
         definitelyAssigned: true,
         constant: false,
       });
@@ -1697,6 +1752,7 @@ function createSubContext(
     blockFirstState: new Map(),
     usedNames: new Set(),
     tryCatchScopes: [],
+    dialect: ctx.dialect,
   };
 }
 
@@ -1708,17 +1764,17 @@ function buildTernaryBranchPass(
   ctx: BuildContext,
   stateName: string,
   resolved: { kind: string; value?: unknown; path?: string },
-  resultPath: string,
+  varName: string,
   nextState: string | null,
 ): void {
-  const passState: Record<string, unknown> = { Type: 'Pass', ResultPath: resultPath };
+  const passState: Record<string, unknown> = { Type: 'Pass', ...ctx.dialect.emitResultAssignment(varName) };
 
   if (resolved.kind === 'literal') {
     passState.Result = resolved.value;
   } else if (resolved.kind === 'jsonpath' && resolved.path) {
-    passState.InputPath = resolved.path;
+    Object.assign(passState, ctx.dialect.emitReturnPath(resolved.path));
   } else if (resolved.kind === 'intrinsic' && resolved.path) {
-    passState.Parameters = { 'value.$': resolved.path };
+    Object.assign(passState, ctx.dialect.emitParameters(ctx.dialect.wrapIntrinsicResult('value', resolved.path!)));
   }
 
   if (nextState) {

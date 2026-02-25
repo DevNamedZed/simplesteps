@@ -23,6 +23,62 @@ Every TypeScript construct supported by SimpleSteps and its ASL mapping.
 | `if (e instanceof TimeoutError)` | Typed error matching |
 | `.call(input, { retry, timeoutSeconds, heartbeatSeconds })` | Retry / Timeout / Heartbeat |
 
+## Query Language
+
+SimpleSteps supports two ASL query languages. JSONata is the default and recommended mode.
+
+### JSONata (default)
+
+JSONata provides native arithmetic, string manipulation, type conversion, higher-order array functions, and more — most JavaScript patterns compile directly:
+
+```typescript
+// Arithmetic — all operators work
+const total = price * quantity;
+const tax = total * 0.08;
+const discounted = total - discount;
+
+// String methods → $uppercase, $lowercase, $trim, $substring, $pad, $replace
+const upper = name.toUpperCase();
+const trimmed = raw.trim();
+const first5 = text.substring(0, 5);
+const padded = id.padStart(10, '0');
+
+// Math functions → $floor, $ceil, $round, $abs, $power, $sqrt, $min, $max, $random
+const rounded = Math.round(amount);
+const clamped = Math.min(value, 100);
+
+// Type conversion → $number, $string, $boolean, $type, $millis
+const num = Number(input.text);
+const keys = Object.keys(config);
+const priceType = typeof input.price;
+const now = Date.now();
+const isArr = Array.isArray(input.items);
+
+// Array methods → $join, $reverse, $sort, $append
+const sorted = items.sort();
+const csv = items.join(', ');
+
+// Higher-order functions → $map, $filter, $reduce
+const names = items.map(item => item.name);
+const active = items.filter(item => item.active);
+const total = items.reduce((sum, item) => sum + item.price, 0);
+const found = items.find(item => item.id === targetId);
+const hasActive = items.some(item => item.active);
+const allValid = items.every(item => item.valid);
+```
+
+Higher-order functions require pure expression callbacks (no `await`). For callbacks with service calls, use `Steps.map()` instead (see below).
+
+### JSONPath
+
+The original ASL query language. Use `queryLanguage: 'JSONPath'` to opt in:
+
+```typescript
+compile({ sourceFiles: ['workflow.ts'], queryLanguage: 'JSONPath' });
+```
+
+JSONPath mode has more restrictions — no arithmetic beyond addition, no string/Math methods. See [Limitations](./limitations.md) for details.
+
 ## Entry Points
 
 ### `Steps.createFunction()`
@@ -257,17 +313,16 @@ Substeps can contain any supported control flow: `if/else`, `try/catch`, loops, 
 
 See [Limitations](./limitations.md#substeps) for constraints.
 
-## Automatic Data Flow (No JSONPath)
+## Automatic Data Flow
 
-One of SimpleSteps' key design goals: **you never write JSONPath or data flow fields**. The compiler derives all of them from your variable usage.
+One of SimpleSteps' key design goals: **you never write path expressions or data flow fields**. The compiler derives all of them from your variable usage.
 
-| ASL Field | Derived From |
-|---|---|
-| `Parameters` | Service call arguments — the compiler maps each argument to a `"field.$": "$.variable"` reference |
-| `ResultPath` | Variable assignment — `const x = await svc.call(...)` stores the result at `$.x` |
-| `InputPath` | Variable references in service call arguments — the compiler determines what data the state needs |
-| `ResultSelector` | Automatic `.Payload` extraction for Lambda results (so you access `result.field`, not `result.Payload.field`) |
-| `OutputPath` | *Not yet implemented* — planned optimization for payload size reduction via variable liveness analysis |
+In **JSONata mode** (default), the compiler emits `Arguments` with `{% %}` expressions. In **JSONPath mode**, it emits `Parameters` with `"field.$": "$.variable"` references. Either way, you write plain TypeScript:
+
+| Your Code | JSONata ASL | JSONPath ASL |
+|---|---|---|
+| `await svc.call({ id: x.id })` | `Arguments: { id: "{% $x.id %}" }` | `Parameters: { "id.$": "$.x.id" }` |
+| `const x = await svc.call(...)` | `Assign: { x: "{% $states.result %}" }` | `ResultPath: "$.x"` |
 
 In CDK, you'd write `sfn.JsonPath.stringAt('$.order.total')` and manually set `outputPath: '$.Payload'`. In SimpleSteps, you write `order.total` and the compiler handles the rest.
 

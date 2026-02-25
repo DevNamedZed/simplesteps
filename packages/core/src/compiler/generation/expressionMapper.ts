@@ -4,21 +4,23 @@ import { ErrorCodes } from '../diagnosticCodes.js';
 import { resolveExpression, type VariableResolution } from '../analysis/variableResolver.js';
 import { StepVariableType } from '../analysis/types.js';
 import type { ChoiceRule, ComparisonRule, NotRule, AndRule, OrRule } from '../../asl/types.js';
+import { type PathDialect, JSON_PATH_DIALECT } from './pathDialect.js';
 
 // ---------------------------------------------------------------------------
 // Parameter building
 // ---------------------------------------------------------------------------
 
 /**
- * Convert a TS object literal expression to ASL Parameters.
+ * Convert a TS object literal expression to ASL Parameters/Arguments.
  *
- * { id: input.id, name: "fixed" }
- * → { "id.$": "$.id", "name": "fixed" }
+ * JSONPath: { id: input.id, name: "fixed" } → { "id.$": "$.id", "name": "fixed" }
+ * JSONata: { id: input.id, name: "fixed" } → { "id": "{% $states.input.id %}", "name": "fixed" }
  */
 export function buildParameters(
   context: CompilerContext,
   expr: ts.ObjectLiteralExpression,
   variables: VariableResolution,
+  dialect: PathDialect = JSON_PATH_DIALECT,
 ): Record<string, unknown> {
   const result: Record<string, unknown> = {};
 
@@ -44,7 +46,7 @@ export function buildParameters(
         if (resolved.kind === 'unknown' && variables.deferredBindings) {
           const argExpr = variables.deferredBindings.get(valueSym);
           if (argExpr) {
-            resolved = resolveExpression(context, argExpr, variables);
+            resolved = resolveExpression(context, argExpr, variables, dialect);
           }
         }
       }
@@ -54,10 +56,10 @@ export function buildParameters(
           result[propName] = resolved.value;
           break;
         case 'jsonpath':
-          result[`${propName}.$`] = resolved.path;
+          result[dialect.dynamicKey(propName)] = dialect.wrapDynamicValue(resolved.path!);
           break;
         case 'intrinsic':
-          result[`${propName}.$`] = resolved.path;
+          result[dialect.dynamicKey(propName)] = dialect.wrapDynamicValue(resolved.path!);
           break;
         case 'unknown': {
           const exprText = prop.name.text;
@@ -87,21 +89,21 @@ export function buildParameters(
 
     // Nested object literal: recurse into buildParameters
     if (ts.isObjectLiteralExpression(prop.initializer)) {
-      result[propName] = buildParameters(context, prop.initializer, variables);
+      result[propName] = buildParameters(context, prop.initializer, variables, dialect);
       continue;
     }
 
-    const resolved = resolveExpression(context, prop.initializer, variables);
+    const resolved = resolveExpression(context, prop.initializer, variables, dialect);
 
     switch (resolved.kind) {
       case 'literal':
         result[propName] = resolved.value;
         break;
       case 'jsonpath':
-        result[`${propName}.$`] = resolved.path;
+        result[dialect.dynamicKey(propName)] = dialect.wrapDynamicValue(resolved.path!);
         break;
       case 'intrinsic':
-        result[`${propName}.$`] = resolved.path;
+        result[dialect.dynamicKey(propName)] = dialect.wrapDynamicValue(resolved.path!);
         break;
       case 'unknown': {
         const exprText = prop.initializer.getText().substring(0, 80);
@@ -127,23 +129,30 @@ export function buildParameters(
 /**
  * Convert a TS condition expression to an ASL ChoiceRule.
  *
- * input.mode === 'fast' → { Variable: "$.mode", StringEquals: "fast", Next }
- * !validation.valid → { Not: { Variable: "$.validation.valid", BooleanEquals: true, Next: "" }, Next }
+ * JSONPath: input.mode === 'fast' → { Variable: "$.mode", StringEquals: "fast", Next }
+ * JSONata: input.mode === 'fast' → { Condition: "{% $states.input.mode = 'fast' %}", Next }
  */
 export function buildChoiceRule(
   context: CompilerContext,
   expr: ts.Expression,
   nextState: string,
   variables: VariableResolution,
+  dialect: PathDialect = JSON_PATH_DIALECT,
 ): ChoiceRule {
+  if (dialect.isJsonata()) {
+    return buildJsonataChoiceRule(context, expr, nextState, variables, dialect);
+  }
+
+  // ── JSONPath choice rule logic (unchanged) ──────────────────────
+
   // Negation: !expr
   if (ts.isPrefixUnaryExpression(expr) && expr.operator === ts.SyntaxKind.ExclamationToken) {
-    const inner = buildComparisonFromExpression(context, expr.operand, '', variables);
+    const inner = buildComparisonFromExpression(context, expr.operand, '', variables, dialect);
     if (inner) {
       return { Not: inner, Next: nextState } as NotRule;
     }
     // Fallback: treat as boolean check on the operand
-    const resolved = resolveExpression(context, expr.operand, variables);
+    const resolved = resolveExpression(context, expr.operand, variables, dialect);
     if (resolved.kind === 'jsonpath') {
       return {
         Not: { Variable: resolved.path, BooleanEquals: true, Next: '' } as ComparisonRule,
@@ -154,25 +163,25 @@ export function buildChoiceRule(
 
   // And: a && b
   if (ts.isBinaryExpression(expr) && expr.operatorToken.kind === ts.SyntaxKind.AmpersandAmpersandToken) {
-    const left = buildChoiceRule(context, expr.left, '', variables);
-    const right = buildChoiceRule(context, expr.right, '', variables);
+    const left = buildChoiceRule(context, expr.left, '', variables, dialect);
+    const right = buildChoiceRule(context, expr.right, '', variables, dialect);
     return { And: [stripNext(left), stripNext(right)], Next: nextState } as AndRule;
   }
 
   // Or: a || b
   if (ts.isBinaryExpression(expr) && expr.operatorToken.kind === ts.SyntaxKind.BarBarToken) {
-    const left = buildChoiceRule(context, expr.left, '', variables);
-    const right = buildChoiceRule(context, expr.right, '', variables);
+    const left = buildChoiceRule(context, expr.left, '', variables, dialect);
+    const right = buildChoiceRule(context, expr.right, '', variables, dialect);
     return { Or: [stripNext(left), stripNext(right)], Next: nextState } as OrRule;
   }
 
   // Binary comparison: a === b, a !== b, a > b, etc.
   if (ts.isBinaryExpression(expr)) {
-    return buildChoiceRuleFromBinary(context, expr, nextState, variables);
+    return buildChoiceRuleFromBinary(context, expr, nextState, variables, dialect);
   }
 
   // Bare truthiness check: variable.field
-  const resolved = resolveExpression(context, expr, variables);
+  const resolved = resolveExpression(context, expr, variables, dialect);
   if (resolved.kind === 'jsonpath') {
     return {
       Variable: resolved.path,
@@ -186,7 +195,162 @@ export function buildChoiceRule(
 }
 
 // ---------------------------------------------------------------------------
-// Internal helpers
+// JSONata choice rule building
+// ---------------------------------------------------------------------------
+
+/**
+ * Build a JSONata Condition-based ChoiceRule.
+ *
+ * Instead of JSONPath's { Variable, StringEquals, ... }, JSONata uses a single
+ * Condition field with a boolean expression: { Condition: "{% expr %}", Next }.
+ */
+function buildJsonataChoiceRule(
+  context: CompilerContext,
+  expr: ts.Expression,
+  nextState: string,
+  variables: VariableResolution,
+  dialect?: PathDialect,
+): ChoiceRule {
+  const condition = buildJsonataConditionExpr(context, expr, variables, dialect);
+  return { Condition: `{% ${condition} %}`, Next: nextState } as ComparisonRule;
+}
+
+/**
+ * Recursively build a JSONata boolean expression string from a TS expression.
+ */
+function buildJsonataConditionExpr(
+  context: CompilerContext,
+  expr: ts.Expression,
+  variables: VariableResolution,
+  dialect?: PathDialect,
+): string {
+  // Negation: !expr
+  if (ts.isPrefixUnaryExpression(expr) && expr.operator === ts.SyntaxKind.ExclamationToken) {
+    const inner = buildJsonataConditionExpr(context, expr.operand, variables, dialect);
+    return `$not(${inner})`;
+  }
+
+  // And: a && b
+  if (ts.isBinaryExpression(expr) && expr.operatorToken.kind === ts.SyntaxKind.AmpersandAmpersandToken) {
+    const left = buildJsonataConditionExpr(context, expr.left, variables, dialect);
+    const right = buildJsonataConditionExpr(context, expr.right, variables, dialect);
+    return `(${left}) and (${right})`;
+  }
+
+  // Or: a || b
+  if (ts.isBinaryExpression(expr) && expr.operatorToken.kind === ts.SyntaxKind.BarBarToken) {
+    const left = buildJsonataConditionExpr(context, expr.left, variables, dialect);
+    const right = buildJsonataConditionExpr(context, expr.right, variables, dialect);
+    return `(${left}) or (${right})`;
+  }
+
+  // Binary comparison: a === b, a !== b, a > b, etc.
+  if (ts.isBinaryExpression(expr)) {
+    return buildJsonataBinaryCondition(context, expr, variables, dialect);
+  }
+
+  // Bare truthiness check
+  const resolved = resolveExpression(context, expr, variables, dialect);
+  if (resolved.kind === 'jsonpath' || resolved.kind === 'intrinsic') {
+    return resolved.path!;
+  }
+  if (resolved.kind === 'literal') {
+    return serializeJsonataValue(resolved.value);
+  }
+
+  context.addError(expr, 'Cannot compile condition expression to JSONata Condition', ErrorCodes.Expr.UncompilableCondition.code);
+  return 'true';
+}
+
+/**
+ * Build a JSONata binary comparison expression.
+ */
+function buildJsonataBinaryCondition(
+  context: CompilerContext,
+  expr: ts.BinaryExpression,
+  variables: VariableResolution,
+  dialect?: PathDialect,
+): string {
+  const op = expr.operatorToken.kind;
+  const left = resolveExpression(context, expr.left, variables, dialect);
+  const right = resolveExpression(context, expr.right, variables, dialect);
+
+  const leftStr = serializeJsonataOperand(left);
+  const rightStr = serializeJsonataOperand(right);
+
+  if (leftStr === null || rightStr === null) {
+    context.addError(expr, 'Cannot compile comparison to JSONata Condition', ErrorCodes.Expr.UncompilableComparison.code);
+    return 'true';
+  }
+
+  const isNot = op === ts.SyntaxKind.ExclamationEqualsEqualsToken ||
+                op === ts.SyntaxKind.ExclamationEqualsToken;
+
+  let jsonataOp: string;
+  switch (op) {
+    case ts.SyntaxKind.EqualsEqualsEqualsToken:
+    case ts.SyntaxKind.EqualsEqualsToken:
+      jsonataOp = '=';
+      break;
+    case ts.SyntaxKind.ExclamationEqualsEqualsToken:
+    case ts.SyntaxKind.ExclamationEqualsToken:
+      jsonataOp = '='; // will be wrapped in $not()
+      break;
+    case ts.SyntaxKind.LessThanToken:
+      jsonataOp = '<';
+      break;
+    case ts.SyntaxKind.GreaterThanToken:
+      jsonataOp = '>';
+      break;
+    case ts.SyntaxKind.LessThanEqualsToken:
+      jsonataOp = '<=';
+      break;
+    case ts.SyntaxKind.GreaterThanEqualsToken:
+      jsonataOp = '>=';
+      break;
+    default:
+      context.addError(expr, 'Unsupported comparison operator for JSONata Condition', ErrorCodes.Expr.UnsupportedOperator.code);
+      return 'true';
+  }
+
+  const comparison = `${leftStr} ${jsonataOp} ${rightStr}`;
+  return isNot ? `$not(${comparison})` : comparison;
+}
+
+/**
+ * Serialize a resolved expression as a JSONata operand in a Condition.
+ */
+function serializeJsonataOperand(resolved: ReturnType<typeof resolveExpression>): string | null {
+  switch (resolved.kind) {
+    case 'jsonpath':
+    case 'intrinsic':
+      return resolved.path!;
+    case 'literal':
+      return serializeJsonataValue(resolved.value);
+    default:
+      return null;
+  }
+}
+
+/**
+ * Serialize a literal value as a JSONata expression.
+ */
+function serializeJsonataValue(value: unknown): string {
+  if (typeof value === 'string') {
+    // Single-quote strings in JSONata, escape single quotes
+    return `'${value.replace(/'/g, "\\'")}'`;
+  }
+  if (typeof value === 'number' || typeof value === 'boolean') {
+    return String(value);
+  }
+  if (value === null) {
+    return 'null';
+  }
+  return String(value);
+}
+
+// ---------------------------------------------------------------------------
+// Internal helpers (JSONPath)
 // ---------------------------------------------------------------------------
 
 function getPropertyName(name: ts.PropertyName): string | undefined {
@@ -201,15 +365,16 @@ function buildComparisonFromExpression(
   expr: ts.Expression,
   next: string,
   variables: VariableResolution,
+  dialect?: PathDialect,
 ): ComparisonRule | null {
   // Binary comparison
   if (ts.isBinaryExpression(expr)) {
-    const rule = buildChoiceRuleFromBinary(context, expr, next, variables);
+    const rule = buildChoiceRuleFromBinary(context, expr, next, variables, dialect);
     if ('Variable' in rule) return rule as ComparisonRule;
   }
 
   // Bare expression → boolean check
-  const resolved = resolveExpression(context, expr, variables);
+  const resolved = resolveExpression(context, expr, variables, dialect);
   if (resolved.kind === 'jsonpath') {
     return { Variable: resolved.path, BooleanEquals: true, Next: next } as ComparisonRule;
   }
@@ -222,10 +387,11 @@ function buildChoiceRuleFromBinary(
   expr: ts.BinaryExpression,
   nextState: string,
   variables: VariableResolution,
+  dialect?: PathDialect,
 ): ChoiceRule {
   const op = expr.operatorToken.kind;
-  const left = resolveExpression(context, expr.left, variables);
-  const right = resolveExpression(context, expr.right, variables);
+  const left = resolveExpression(context, expr.left, variables, dialect);
+  const right = resolveExpression(context, expr.right, variables, dialect);
 
   // Ensure we have a variable on one side and a value on the other
   let variable: string | undefined;

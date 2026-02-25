@@ -53,7 +53,7 @@ count += 5;                   // States.MathAdd($.count, 5)
 count -= 3;                   // States.MathAdd($.count, -3)
 ```
 
-Multiplication, division, and modulo are **not supported** -- ASL only provides `States.MathAdd`.
+In **JSONPath mode**, multiplication, division, and modulo are not supported — ASL only provides `States.MathAdd`. In **JSONata mode** (the default), all arithmetic operators work natively: `*`, `/`, `%`, `-`, `+`.
 
 ## JSON (`States.StringToJson` / `States.JsonToString`)
 

@@ -186,11 +186,12 @@ describe('AdvancedWorkflowStack', () => {
       expect(hasResourcePattern(definition, 'sns')).toBe(true);
     });
 
-    test('has a Pass state with parameter containing States.UUID() or States.Format intrinsic', () => {
+    test('has a Pass state with intrinsic or JSONata expression for UUID/Format', () => {
       const passes = getStatesByType(definition, 'Pass');
       const hasIntrinsic = passes.some(([, s]) => {
-        const params = JSON.stringify(s.Parameters || s.Result || {});
-        return params.includes('States.UUID()') || params.includes('States.Format');
+        const params = JSON.stringify(s.Parameters || s.Arguments || s.Result || {});
+        return params.includes('States.UUID()') || params.includes('States.Format')
+          || params.includes('$uuid()') || params.includes('&');
       });
       expect(hasIntrinsic).toBe(true);
     });

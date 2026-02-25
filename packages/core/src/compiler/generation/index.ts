@@ -8,6 +8,7 @@ import { StepVariableType } from '../analysis/types.js';
 import type { InlineBinding } from '../analysis/asyncHelperAnalyzer.js';
 import type { WholeProgramAnalyzer } from '../analysis/wholeProgramAnalyzer.js';
 import { buildStateMachine } from './stateBuilder.js';
+import { type PathDialect, JSON_PATH_DIALECT } from './pathDialect.js';
 import type { StateMachineDefinition } from '../../asl/types.js';
 
 // ---------------------------------------------------------------------------
@@ -25,8 +26,9 @@ export function generateStateMachine(
   substitutions?: Readonly<Record<string, unknown>>,
   analyzer?: WholeProgramAnalyzer,
   inlineBindings?: readonly InlineBinding[],
+  dialect: PathDialect = JSON_PATH_DIALECT,
 ): StateMachineDefinition {
-  const variables = resolveVariables(context, callSite, serviceRegistry, substitutions, analyzer);
+  const variables = resolveVariables(context, callSite, serviceRegistry, substitutions, analyzer, dialect);
 
   // Apply inline bindings: map helper parameter symbols to the same
   // variable info as the call-site argument expressions.
@@ -36,7 +38,7 @@ export function generateStateMachine(
   if (inlineBindings && inlineBindings.length > 0) {
     for (const binding of inlineBindings) {
       // Try eager resolution first (works for input refs, literals, intrinsics)
-      const resolved = resolveExpression(context, binding.argExpression, variables.toResolution());
+      const resolved = resolveExpression(context, binding.argExpression, variables.toResolution(), dialect);
 
       if (resolved.kind === 'jsonpath' && resolved.path) {
         variables.addVariable(binding.paramSymbol, {
@@ -70,7 +72,7 @@ export function generateStateMachine(
     }
   }
 
-  return buildStateMachine(context, cfg, callSite, serviceRegistry, variables);
+  return buildStateMachine(context, cfg, callSite, serviceRegistry, variables, dialect);
 }
 
 /**
@@ -101,3 +103,4 @@ export function deriveStateMachineName(callSite: StepFunctionCallSite): string {
 // Re-exports
 export { buildStateMachine } from './stateBuilder.js';
 export { buildParameters, buildChoiceRule } from './expressionMapper.js';
+export { type PathDialect, JsonPathDialect, JSON_PATH_DIALECT, JsonataDialect, JSONATA_DIALECT } from './pathDialect.js';

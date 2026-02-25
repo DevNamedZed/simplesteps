@@ -15,6 +15,7 @@ simplesteps compile <file-or-tsconfig> [options]
 | Flag | Description | Default |
 |---|---|---|
 | `-o, --output <dir>` | Write `.asl.json` files to this directory | stdout |
+| `--query-language <jsonata\|jsonpath>` | ASL query language | `jsonata` |
 | `--indent <N>` | JSON indentation spaces | `2` |
 | `-v, --verbose` | Verbose output | off |
 | `-h, --help` | Show help | |
@@ -33,6 +34,9 @@ npx simplesteps compile tsconfig.json -o dist/
 
 # Custom indentation
 npx simplesteps compile src/workflow.ts --indent 4
+
+# Compile with JSONPath instead of JSONata (default)
+npx simplesteps compile src/workflow.ts --query-language jsonpath
 ```
 
 ## Input Detection

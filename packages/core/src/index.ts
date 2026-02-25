@@ -7,7 +7,8 @@ import { createCallGraph, type CallGraphNode } from './compiler/discovery/callGr
 import { discoverServices } from './compiler/discovery/serviceDiscovery.js';
 import { buildCFG, type BuildCFGResult } from './compiler/cfg/index.js';
 import { analyzeHelperFunctions, type InlinableHelper, type InlineBinding } from './compiler/analysis/index.js';
-import { generateStateMachine, deriveStateMachineName } from './compiler/generation/index.js';
+import { generateStateMachine, deriveStateMachineName, JSON_PATH_DIALECT, JSONATA_DIALECT } from './compiler/generation/index.js';
+import type { PathDialect } from './compiler/generation/index.js';
 import { WholeProgramAnalyzer } from './compiler/analysis/wholeProgramAnalyzer.js';
 
 // Re-export ASL types
@@ -51,6 +52,8 @@ export interface CompileOptions {
   /** Deploy-time value overrides for service binding variables.
    *  Keys are variable names; values are resource identifiers (strings or CF intrinsic objects). */
   readonly substitutions?: Readonly<Record<string, unknown>>;
+  /** Query language for ASL path expressions. Defaults to 'JSONata'. */
+  readonly queryLanguage?: 'JSONPath' | 'JSONata';
 }
 
 /**
@@ -118,7 +121,13 @@ export {
   buildStateMachine,
   buildParameters,
   buildChoiceRule,
+  JSON_PATH_DIALECT,
+  JSONATA_DIALECT,
+  JsonPathDialect,
+  JsonataDialect,
 } from './compiler/generation/index.js';
+
+export type { PathDialect } from './compiler/generation/index.js';
 
 // Re-export analysis types
 export {
@@ -299,9 +308,10 @@ export function compile(options: CompileOptions): CompileResult {
   }
 
   // ── Stage 5: ASL generation ──────────────────────────────────────────
+  const dialect: PathDialect = options.queryLanguage === 'JSONPath' ? JSON_PATH_DIALECT : JSONATA_DIALECT;
   const stateMachines: CompiledStateMachine[] = [];
   for (const { callSite, cfg, inlineBindings } of compilationUnits) {
-    const definition = generateStateMachine(context, callSite, cfg, serviceRegistry, options.substitutions, analyzer, inlineBindings);
+    const definition = generateStateMachine(context, callSite, cfg, serviceRegistry, options.substitutions, analyzer, inlineBindings, dialect);
     const name = deriveStateMachineName(callSite);
 
     // Collect service names used by this state machine
@@ -343,6 +353,8 @@ export interface CompileFromProgramOptions {
   readonly skipPatterns?: readonly string[];
   /** Deploy-time value overrides for service binding variables. */
   readonly substitutions?: Readonly<Record<string, unknown>>;
+  /** Query language for ASL path expressions. Defaults to 'JSONata'. */
+  readonly queryLanguage?: 'JSONPath' | 'JSONata';
 }
 
 /**
@@ -413,9 +425,10 @@ export function compileFromProgram(options: CompileFromProgramOptions): CompileR
   }
 
   // Stage 5: ASL generation
+  const dialect2: PathDialect = options.queryLanguage === 'JSONPath' ? JSON_PATH_DIALECT : JSONATA_DIALECT;
   const stateMachines: CompiledStateMachine[] = [];
   for (const { callSite, cfg, inlineBindings } of compilationUnits) {
-    const definition = generateStateMachine(context, callSite, cfg, serviceRegistry, options.substitutions, analyzer2, inlineBindings);
+    const definition = generateStateMachine(context, callSite, cfg, serviceRegistry, options.substitutions, analyzer2, inlineBindings, dialect2);
     const name = deriveStateMachineName(callSite);
 
     const services: string[] = [];

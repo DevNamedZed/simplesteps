@@ -39,6 +39,7 @@ interface CompileOptions {
   sourceFiles?: string[];      // Specific files to compile
   cwd?: string;                // Working directory (default: process.cwd())
   substitutions?: Record<string, unknown>;  // Deploy-time value overrides
+  queryLanguage?: 'JSONata' | 'JSONPath';   // ASL query language (default: 'JSONata')
 }
 ```
 

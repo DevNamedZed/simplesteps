@@ -123,9 +123,12 @@ export const orderWorkflow = Steps.createFunction(
 
 ```bash
 npx simplesteps compile workflows/order.ts -o output/
+
+# Use JSONPath instead of JSONata (the default)
+npx simplesteps compile workflows/order.ts -o output/ --query-language jsonpath
 ```
 
-This produces `output/orderWorkflow.asl.json` — useful for reviewing the generated state machine before deploying.
+This produces `output/orderWorkflow.asl.json` — useful for reviewing the generated state machine before deploying. The default query language is JSONata, which supports richer expressions (arithmetic, string methods, Math functions, higher-order array functions). Use `--query-language jsonpath` if you need the original ASL query language.
 
 ## Next Steps
 
