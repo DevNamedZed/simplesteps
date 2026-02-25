@@ -16,8 +16,8 @@ export interface BarrelInput {
 export function emitBarrel(input: BarrelInput): string {
   const lines: string[] = [HEADER];
 
-  // Always re-export RetryPolicy from types.ts (hand-maintained)
-  lines.push(`export type { RetryPolicy } from './types';`);
+  // Always re-export RetryPolicy and TaskOptions from types.ts (hand-maintained)
+  lines.push(`export type { RetryPolicy, TaskOptions } from './types';`);
 
   // Re-export metadata for compiler consumption
   lines.push(`export {`);

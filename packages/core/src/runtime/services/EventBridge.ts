@@ -1,5 +1,5 @@
 // @generated — DO NOT EDIT. Run `npx tsx tools/codegen/generate.ts` to regenerate.
-import type { RetryPolicy } from './types';
+import type { RetryPolicy, TaskOptions } from './types';
 
 const BINDING_ERROR =
   'SimpleSteps service bindings cannot be called directly. They exist only for the compiler.';
@@ -12,10 +12,7 @@ export interface EventBridgeEvent {
 }
 
 /** Options for EventBridge operations. */
-export interface EventBridgeOptions {
-  retry?: RetryPolicy;
-  timeoutSeconds?: number;
-  heartbeatSeconds?: number;
+export interface EventBridgeOptions extends TaskOptions {
 }
 
 /** EventBridge binding for the SimpleSteps compiler. */

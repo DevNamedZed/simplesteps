@@ -747,16 +747,43 @@ function processForOfStatement(
     }
   }
 
+  // Detect Steps.sequential() / Steps.items() wrappers and unwrap to the real items expression
+  let itemsExpression: ts.Expression = stmt.expression;
+  let maxConcurrency: number | undefined;
+  let retryExpression: ts.Expression | undefined;
+
+  if (ts.isCallExpression(stmt.expression)) {
+    if (isStepsCall(stmt.expression, 'sequential')) {
+      itemsExpression = stmt.expression.arguments[0];
+      maxConcurrency = 1;
+    } else if (isStepsCall(stmt.expression, 'items')) {
+      itemsExpression = stmt.expression.arguments[0];
+      const optionsArg = stmt.expression.arguments[1];
+      if (optionsArg && ts.isObjectLiteralExpression(optionsArg)) {
+        for (const prop of optionsArg.properties) {
+          if (!ts.isPropertyAssignment(prop) || !ts.isIdentifier(prop.name)) continue;
+          if (prop.name.text === 'maxConcurrency' && ts.isNumericLiteral(prop.initializer)) {
+            maxConcurrency = Number(prop.initializer.text);
+          } else if (prop.name.text === 'retry') {
+            retryExpression = prop.initializer;
+          }
+        }
+      }
+    }
+  }
+
   // Finalize current block with mapState terminator
   state.addBlock(currentBlockId, accumulated, {
     kind: 'mapState',
     expression: stmt,
-    itemsExpression: stmt.expression,
+    itemsExpression,
     iterVarName,
     iterVarSymbol,
     bodyBlock: bodyBlockId,
     exitBlock: exitBlockId,
     collectResults,
+    ...(maxConcurrency != null && { maxConcurrency }),
+    ...(retryExpression && { retryExpression }),
   });
 
   // Process body — break/continue targets loop exit/body start
@@ -1404,13 +1431,16 @@ function tryExtractStepsMap(
     return undefined;
   }
 
-  // Extract maxConcurrency from options
+  // Extract maxConcurrency and retry from options
   let maxConcurrency: number | undefined;
+  let retryExpression: ts.Expression | undefined;
   if (optionsArg && ts.isObjectLiteralExpression(optionsArg)) {
     for (const prop of optionsArg.properties) {
-      if (ts.isPropertyAssignment(prop) && ts.isIdentifier(prop.name) &&
-          prop.name.text === 'maxConcurrency' && ts.isNumericLiteral(prop.initializer)) {
+      if (!ts.isPropertyAssignment(prop) || !ts.isIdentifier(prop.name)) continue;
+      if (prop.name.text === 'maxConcurrency' && ts.isNumericLiteral(prop.initializer)) {
         maxConcurrency = Number(prop.initializer.text);
+      } else if (prop.name.text === 'retry') {
+        retryExpression = prop.initializer;
       }
     }
   }
@@ -1438,6 +1468,7 @@ function tryExtractStepsMap(
     maxConcurrency,
     ...(resultBindingName && { resultBindingName }),
     ...(resultSymbol && { resultSymbol }),
+    ...(retryExpression && { retryExpression }),
   });
 
   // Process the callback body
@@ -1464,6 +1495,15 @@ function isStepsMapCall(call: ts.CallExpression): boolean {
   const prop = call.expression;
   return ts.isIdentifier(prop.expression) && prop.expression.text === 'Steps' &&
          prop.name.text === 'map';
+}
+
+/** Check if an expression is a call to Steps.<method>() */
+function isStepsCall(expr: ts.Expression, method: string): boolean {
+  if (!ts.isCallExpression(expr)) return false;
+  if (!ts.isPropertyAccessExpression(expr.expression)) return false;
+  const prop = expr.expression;
+  return ts.isIdentifier(prop.expression) && prop.expression.text === 'Steps' &&
+         prop.name.text === method;
 }
 
 // ---------------------------------------------------------------------------

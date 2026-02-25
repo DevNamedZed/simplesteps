@@ -35,6 +35,7 @@ export interface DelayOptions {
 
 export interface MapOptions {
   readonly maxConcurrency?: number;
+  readonly retry?: import('./services/types').RetryPolicy | readonly import('./services/types').RetryPolicy[];
 }
 
 // ---------------------------------------------------------------------------
@@ -75,6 +76,22 @@ export class Steps {
   }
 
   static sequential<T>(_array: readonly T[]): SequentialIterable<T> {
+    throw new Error(RUNTIME_ERROR_MESSAGE);
+  }
+
+  /**
+   * Wrap an array for use with for...of, with optional Map state configuration.
+   * Supports maxConcurrency and closures (outer variable capture).
+   *
+   * @example
+   *   for (const item of Steps.items(input.items, { maxConcurrency: 5 })) {
+   *     await processItem.call({ item, prefix: config.prefix });
+   *   }
+   */
+  static items<T>(
+    _array: readonly T[],
+    _options?: MapOptions,
+  ): Iterable<T> {
     throw new Error(RUNTIME_ERROR_MESSAGE);
   }
 

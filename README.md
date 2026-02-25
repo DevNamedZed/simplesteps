@@ -11,7 +11,7 @@ TypeScript-to-ASL compiler for AWS Step Functions. Define workflows as typed asy
 
 At my previous company we had dozens of Step Functions deployed with CDK. They were incredibly hard to read and maintain. The CDK approach defines a program by stringing together a tree of construct objects — `.next().next().next()` chains with raw JSONPath and `sfn.CustomState` workarounds. That's exactly the kind of work a compiler should handle.
 
-SimpleSteps compiles typed async functions to ASL state machines. The compiler performs whole-program data flow analysis and derives all JSONPath expressions (`Parameters`, `ResultPath`, `InputPath`, `ResultSelector`, `OutputPath`) from variable usage. Service bindings are resolved at compile time, with CDK token substitution at synth time.
+SimpleSteps compiles typed async functions to ASL state machines. The compiler performs whole-program data flow analysis and derives all JSONPath expressions (`Parameters`, `ResultPath`, `InputPath`, `ResultSelector`) from variable usage. Service bindings are resolved at compile time, with CDK token substitution at synth time.
 
 **Input:**
 
@@ -135,8 +135,9 @@ npx simplesteps compile workflow.ts -o output/
 | `const x = { ... }` | Pass state |
 | `if/else`, `switch/case` | Choice state |
 | `while`, `do...while` | Choice + back-edge loop |
-| `for (const item of array)` | Map state (parallel) |
+| `for (const item of array)` | Map state (parallel, with closures) |
 | `await Steps.map(items, cb, opts?)` | Map state (results, closures, MaxConcurrency) |
+| `for (const item of Steps.items(arr, opts?))` | Map state (for...of + MaxConcurrency) |
 | `await Promise.all([...])` | Parallel state |
 | Deferred-await (`const p = call(); await p`) | Parallel state (auto-batched) |
 | `await Steps.delay({ seconds: 30 })` | Wait state |

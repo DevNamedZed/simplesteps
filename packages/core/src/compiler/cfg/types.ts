@@ -61,6 +61,8 @@ export interface MapStateTerminator {
   readonly resultBindingName?: string;
   /** Symbol of the result variable for registration in the variable resolver. */
   readonly resultSymbol?: ts.Symbol;
+  /** Retry policy extracted from options (for Steps.map/items). */
+  readonly retryExpression?: ts.Expression;
 }
 
 export interface ReturnTerminator {

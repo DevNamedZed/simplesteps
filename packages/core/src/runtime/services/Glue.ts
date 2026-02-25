@@ -1,14 +1,11 @@
 // @generated — DO NOT EDIT. Run `npx tsx tools/codegen/generate.ts` to regenerate.
-import type { RetryPolicy } from './types';
+import type { RetryPolicy, TaskOptions } from './types';
 
 const BINDING_ERROR =
   'SimpleSteps service bindings cannot be called directly. They exist only for the compiler.';
 
 /** Options for Glue operations. */
-export interface GlueOptions {
-  retry?: RetryPolicy;
-  timeoutSeconds?: number;
-  heartbeatSeconds?: number;
+export interface GlueOptions extends TaskOptions {
 }
 
 export interface NotificationProperty {

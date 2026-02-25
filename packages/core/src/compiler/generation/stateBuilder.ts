@@ -764,6 +764,7 @@ function processMapStateTerminator(
     readonly maxConcurrency?: number;
     readonly resultBindingName?: string;
     readonly resultSymbol?: ts.Symbol;
+    readonly retryExpression?: ts.Expression;
   },
   block: BasicBlock,
   lastStateName: string | null,
@@ -829,6 +830,11 @@ function processMapStateTerminator(
     ? `$.${term.resultBindingName}`
     : undefined;
 
+  // Extract retry rules from the options expression, if present
+  const mapRetry = term.retryExpression
+    ? extractRetryRules(ctx, term.retryExpression)
+    : undefined;
+
   const mapState: MapState = {
     Type: 'Map',
     ItemsPath: itemsPath,
@@ -839,6 +845,7 @@ function processMapStateTerminator(
     },
     ...(term.maxConcurrency != null && { MaxConcurrency: term.maxConcurrency }),
     ...(collectResultPath ? { ResultPath: collectResultPath } : { ResultPath: null }),
+    ...(mapRetry && { Retry: mapRetry }),
     ...buildCatchRules(ctx),
   };
 
@@ -914,29 +921,29 @@ function processParallelTerminator(
     }
   }
 
-  const parallelStateName = generateStateName('Parallel', ctx.usedNames);
+  // --- ResultPath strategy ---
+  // In ASL, omitting ResultPath defaults to "$" which replaces the entire
+  // state input with the Parallel output — destroying any pre-existing
+  // variables.  We use explicit ResultPath to preserve state.
+  let parallelResultPath: string | null;
 
-  // Build ResultSelector if we have named result bindings from destructuring
-  let resultSelector: Record<string, unknown> | undefined;
-  const isDestructured = term.resultBindings.length > 1 ||
-    (term.resultBindings.length === 1 && term.resultBindings[0] !== '_');
-
-  if (isDestructured && term.resultBindings.length > 1) {
-    // Array destructuring: const [a, b] = await Promise.all([...])
-    // Parallel state output is an array; use ResultSelector to map positions to names
-    resultSelector = {};
-    for (let i = 0; i < term.resultBindings.length; i++) {
-      const name = term.resultBindings[i];
-      if (name !== '_') {
-        resultSelector[`${name}.$`] = `$[${i}]`;
-      }
-    }
+  if (term.resultBindings.length === 0 ||
+      (term.resultBindings.length === 1 && term.resultBindings[0] === '_')) {
+    // Fire-and-forget: discard output
+    parallelResultPath = null;
+  } else if (term.resultBindings.length === 1) {
+    // Single binding: store array directly
+    parallelResultPath = `$.${term.resultBindings[0]}`;
+  } else {
+    // Destructured: store at temp key, redistribute via Pass states
+    parallelResultPath = '$.__parallel';
   }
 
+  const parallelStateName = generateStateName('Parallel', ctx.usedNames);
   const parallelState: ParallelState = {
     Type: 'Parallel',
     Branches: branchDefs,
-    ...(resultSelector && { ResultSelector: resultSelector }),
+    ResultPath: parallelResultPath,
     ...buildCatchRules(ctx),
   };
 
@@ -946,13 +953,26 @@ function processParallelTerminator(
     patchNext(ctx.states, lastStateName, parallelStateName);
   }
 
-  // Register result variables in the main context
+  // For destructured bindings: emit Pass states to redistribute each
+  // element from $.__parallel[i] into its own $.varName slot.
+  let lastChainedState = parallelStateName;
   if (term.resultBindings.length > 1) {
-    // Array destructuring — each binding maps to $.bindingName
     for (let i = 0; i < term.resultBindings.length; i++) {
       const name = term.resultBindings[i];
       const sym = term.resultSymbols[i];
-      if (name !== '_' && sym) {
+      if (name === '_') continue;
+
+      const assignName = generateStateName(`Assign_${name}`, ctx.usedNames);
+      const assignState: PassState = {
+        Type: 'Pass',
+        InputPath: `$.__parallel[${i}]`,
+        ResultPath: `$.${name}`,
+      };
+      ctx.states.set(assignName, assignState);
+      patchNext(ctx.states, lastChainedState, assignName);
+      lastChainedState = assignName;
+
+      if (sym) {
         ctx.variables.addVariable(sym, {
           symbol: sym,
           type: StepVariableType.StateOutput,
@@ -962,25 +982,24 @@ function processParallelTerminator(
         });
       }
     }
-  } else if (term.resultBindings.length === 1) {
-    // Single binding: const result = await Promise.all([...])
-    const name = term.resultBindings[0];
+  } else if (term.resultBindings.length === 1 && term.resultBindings[0] !== '_') {
+    // Single binding — register variable
     const sym = term.resultSymbols[0];
     if (sym) {
       ctx.variables.addVariable(sym, {
         symbol: sym,
         type: StepVariableType.StateOutput,
-        jsonPath: `$.${name}`,
+        jsonPath: `$.${term.resultBindings[0]}`,
         definitelyAssigned: true,
         constant: false,
       });
     }
   }
 
-  // Process exit block and wire parallel state to it
+  // Wire to exit block
   const exitFirst = processBlock(ctx, term.exitBlock);
   if (exitFirst) {
-    patchNext(ctx.states, parallelStateName, exitFirst);
+    patchNext(ctx.states, lastChainedState, exitFirst);
   }
 
   return parallelStateName;
@@ -1125,6 +1144,19 @@ function processReturnTerminator(
   );
 
   if (resolved.kind === 'jsonpath') {
+    // Optimization: if returning the full result of the preceding Task state,
+    // merge by removing ResultPath and setting End: true on the Task directly.
+    // This avoids emitting a redundant Pass state.
+    if (lastStateName) {
+      const lastState = ctx.states.get(lastStateName);
+      if (lastState && lastState.Type === 'Task' &&
+          (lastState as TaskState).ResultPath === resolved.path) {
+        const { ResultPath, ...rest } = lastState as TaskState;
+        ctx.states.set(lastStateName, { ...rest, End: true } as unknown as TaskState);
+        return lastStateName;
+      }
+    }
+
     const stateName = generateStateName('Return_Result', ctx.usedNames);
     const passState: PassState = {
       Type: 'Pass',
@@ -1441,11 +1473,23 @@ function extractSingleRetryRule(
     switch (name) {
       case 'errorEquals':
         if (ts.isArrayLiteralExpression(prop.initializer)) {
-          errorEquals = [];
+          errorEquals = errorEquals ?? [];
           for (const el of prop.initializer.elements) {
             const elResolved = resolveExpression(ctx.compilerContext, el, ctx.variables.toResolution());
             if (elResolved.kind === 'literal' && typeof elResolved.value === 'string') {
               errorEquals.push(elResolved.value);
+            }
+          }
+        }
+        break;
+      case 'errors':
+        if (ts.isArrayLiteralExpression(prop.initializer)) {
+          errorEquals = errorEquals ?? [];
+          for (const el of prop.initializer.elements) {
+            if (ts.isIdentifier(el)) {
+              const className = el.text;
+              const aslName = STEP_ERROR_NAMES[className] ?? className;
+              errorEquals.push(aslName);
             }
           }
         }

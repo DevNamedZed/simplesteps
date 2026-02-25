@@ -10,8 +10,9 @@ Every TypeScript construct supported by SimpleSteps and its ASL mapping.
 | `const x = { ... }` | Pass |
 | `if/else`, `switch/case` | Choice |
 | `while`, `do...while` | Choice + back-edge loop |
-| `for (const item of array)` | Map (parallel) |
+| `for (const item of array)` | Map (parallel, with closures) |
 | `await Steps.map(items, callback, opts?)` | Map (with result capture, closures, MaxConcurrency) |
+| `for (const item of Steps.items(array, opts?))` | Map (for...of with MaxConcurrency + closures) |
 | `for (const item of Steps.sequential(array))` | Map (sequential, `MaxConcurrency: 1`) |
 | `await Promise.all([...])` | Parallel |
 | Deferred-await (`const p = call(); await p`) | Parallel (auto-batched) |
@@ -110,9 +111,20 @@ for (const item of input.items) {
   await processor.call(item);
 }
 
+// Closures work in all iteration styles
+const config = await getConfig.call({ env: input.env });
+for (const item of input.items) {
+  await processor.call({ item, prefix: config.prefix }); // config captured via ItemSelector
+}
+
 // Sequential iteration
 for (const step of Steps.sequential(input.steps)) {
   await executor.call(step);
+}
+
+// For-of with concurrency control
+for (const item of Steps.items(input.items, { maxConcurrency: 5 })) {
+  await processor.call({ item });
 }
 ```
 
@@ -145,7 +157,21 @@ await Steps.map(input.items, async (item) => {
 });
 ```
 
-Unlike `for...of`, `Steps.map()` supports closures over prior `await` results and can capture iteration results into a variable.
+All iteration styles (`for...of`, `Steps.map()`, `Steps.items()`, `Steps.sequential()`) support closures over prior `await` results. `Steps.map()` additionally captures iteration results into a variable.
+
+### Steps.items()
+
+`Steps.items()` wraps an array for use with `for...of`, adding MaxConcurrency control:
+
+```typescript
+// for...of with concurrency limit + closures
+const config = await getConfig.call({ env: input.env });
+for (const item of Steps.items(input.items, { maxConcurrency: 5 })) {
+  await processItem.call({ item, prefix: config.prefix });
+}
+```
+
+Use `Steps.items()` when you prefer imperative `for...of` syntax but need concurrency control. Use `Steps.map()` when you need to collect iteration results.
 
 ### Parallel Execution
 
@@ -241,7 +267,7 @@ One of SimpleSteps' key design goals: **you never write JSONPath or data flow fi
 | `ResultPath` | Variable assignment — `const x = await svc.call(...)` stores the result at `$.x` |
 | `InputPath` | Variable references in service call arguments — the compiler determines what data the state needs |
 | `ResultSelector` | Automatic `.Payload` extraction for Lambda results (so you access `result.field`, not `result.Payload.field`) |
-| `OutputPath` | Variable liveness analysis — the compiler prunes fields that are no longer needed downstream |
+| `OutputPath` | *Not yet implemented* — planned optimization for payload size reduction via variable liveness analysis |
 
 In CDK, you'd write `sfn.JsonPath.stringAt('$.order.total')` and manually set `outputPath: '$.Payload'`. In SimpleSteps, you write `order.total` and the compiler handles the rest.
 

@@ -115,33 +115,28 @@ Workaround for rest parameters: pass an explicit array parameter instead.
 
 ## Closures and Variable Capture
 
-Map state iterations have isolated state — each iteration receives only its array element as input.
+Map state iterations have isolated state — each iteration receives only its array element as input. The compiler automatically detects outer-scope variables referenced inside a loop body and projects them into each iteration via ASL's `ItemSelector`.
 
-**`Steps.map()` supports closures** — prior `await` results are automatically projected into each iteration via ASL's `ItemSelector`:
+**All iteration styles support closures** — `for...of`, `Steps.map()`, `Steps.items()`, and `Steps.sequential()` all capture outer `await` results automatically:
 
 ```typescript
 const config = await getConfig.call({ env: input.env });
 
-// OK — Steps.map() captures `config` via ItemSelector
+// All of these capture `config` via ItemSelector:
+for (const item of input.items) {
+  await processor.call({ key: config.prefix, item });
+}
+
 await Steps.map(input.items, async (item) => {
   await processor.call({ key: config.prefix, item });
 });
-```
 
-**`for...of` loops do NOT support closures** — each iteration cannot reference runtime variables from the outer scope:
-
-```typescript
-const config = await getConfig.call({ env: input.env });
-
-// NOT OK — for...of Map state can't access `config`
-for (const item of input.items) {
-  await processor.call({ key: config.prefix, item }); // SS502
+for (const item of Steps.items(input.items, { maxConcurrency: 5 })) {
+  await processor.call({ key: config.prefix, item });
 }
 ```
 
-Compile-time constants and service bindings are accessible in all Map iterations. Only runtime variables (service call results) are restricted in `for...of`.
-
-Workaround for `for...of`: Use `Steps.map()` instead (which supports closures), use `Steps.sequential()` for sequential iteration, or restructure the data so each item carries what it needs.
+Compile-time constants and service bindings are also accessible in all Map iterations.
 
 ## Array Methods
 

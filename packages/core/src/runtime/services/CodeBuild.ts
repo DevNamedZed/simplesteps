@@ -1,14 +1,11 @@
 // @generated — DO NOT EDIT. Run `npx tsx tools/codegen/generate.ts` to regenerate.
-import type { RetryPolicy } from './types';
+import type { RetryPolicy, TaskOptions } from './types';
 
 const BINDING_ERROR =
   'SimpleSteps service bindings cannot be called directly. They exist only for the compiler.';
 
 /** Options for CodeBuild operations. */
-export interface CodeBuildOptions {
-  retry?: RetryPolicy;
-  timeoutSeconds?: number;
-  heartbeatSeconds?: number;
+export interface CodeBuildOptions extends TaskOptions {
 }
 
 export interface ProjectSource {

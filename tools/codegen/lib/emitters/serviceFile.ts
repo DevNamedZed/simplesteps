@@ -21,7 +21,7 @@ export function emitServiceFile(
   smithyParser: SmithyParser | null,
 ): string {
   const lines: string[] = [HEADER];
-  lines.push(`import type { RetryPolicy } from './types';`);
+  lines.push(`import type { RetryPolicy, TaskOptions } from './types';`);
   lines.push('');
   lines.push(`const BINDING_ERROR =`);
   lines.push(`  'SimpleSteps service bindings cannot be called directly. They exist only for the compiler.';`);
@@ -81,17 +81,15 @@ export function emitServiceFile(
     }
   }
 
-  // Emit options interface
+  // Emit options interface extending shared TaskOptions
   const opts = config.options;
+  const hasServiceFields = Object.keys(opts.fields).length > 0;
   lines.push(`/** Options for ${config.className} operations. */`);
-  lines.push(`export interface ${opts.interfaceName} {`);
+  lines.push(`export interface ${opts.interfaceName} extends TaskOptions {`);
   for (const [fieldName, fieldDef] of Object.entries(opts.fields)) {
     const opt = fieldDef.optional !== false ? '?' : '';
     lines.push(`  ${fieldName}${opt}: ${fieldDef.type};`);
   }
-  lines.push(`  retry?: RetryPolicy;`);
-  lines.push(`  timeoutSeconds?: number;`);
-  lines.push(`  heartbeatSeconds?: number;`);
   lines.push(`}`);
   lines.push('');
 
@@ -131,7 +129,7 @@ export function emitAutoServiceFile(
 ): string {
   const className = normalizeClassName(serviceInfo.sdkId);
   const lines: string[] = [HEADER];
-  lines.push(`import type { RetryPolicy } from './types';`);
+  lines.push(`import type { RetryPolicy, TaskOptions } from './types';`);
   lines.push('');
   lines.push(`const BINDING_ERROR =`);
   lines.push(`  'SimpleSteps service bindings cannot be called directly. They exist only for the compiler.';`);

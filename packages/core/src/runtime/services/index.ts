@@ -1,5 +1,5 @@
 // @generated — DO NOT EDIT. Run `npx tsx tools/codegen/generate.ts` to regenerate.
-export type { RetryPolicy } from './types';
+export type { RetryPolicy, TaskOptions } from './types';
 export {
   SERVICE_SDK_IDS,
   OPTIMIZED_INTEGRATIONS,

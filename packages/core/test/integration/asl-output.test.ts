@@ -367,11 +367,26 @@ describe('ASL output: parallel', () => {
     expect(resources).toContain('arn:aws:lambda:us-east-1:123:function:ProcessPayment');
   });
 
-  it('ResultSelector maps array positions to variable names', () => {
+  it('Parallel has ResultPath $.__parallel (preserves state)', () => {
     const [, p] = getStatesByType(asl, 'Parallel')[0];
-    expect(p.ResultSelector).toBeDefined();
-    expect(p.ResultSelector['orderResult.$']).toBe('$[0]');
-    expect(p.ResultSelector['paymentResult.$']).toBe('$[1]');
+    expect(p.ResultPath).toBe('$.__parallel');
+    expect(p.ResultSelector).toBeUndefined();
+  });
+
+  it('Assign Pass states redistribute destructured bindings', () => {
+    const passes = getStatesByType(asl, 'Pass');
+    const assignPasses = passes.filter(([name]) => name.startsWith('Assign_'));
+    expect(assignPasses).toHaveLength(2);
+
+    const orderAssign = assignPasses.find(([name]) => name.includes('orderResult'));
+    expect(orderAssign).toBeDefined();
+    expect(orderAssign![1].InputPath).toBe('$.__parallel[0]');
+    expect(orderAssign![1].ResultPath).toBe('$.orderResult');
+
+    const paymentAssign = assignPasses.find(([name]) => name.includes('paymentResult'));
+    expect(paymentAssign).toBeDefined();
+    expect(paymentAssign![1].InputPath).toBe('$.__parallel[1]');
+    expect(paymentAssign![1].ResultPath).toBe('$.paymentResult');
   });
 
   it('branch Task states have End: true', () => {
@@ -480,6 +495,7 @@ describe('ASL output: all fixtures compile cleanly', () => {
     'intrinsics.ts',
     'js-operators.ts',
     'parallel.ts',
+    'parallel-with-prior-state.ts',
     'constants.ts',
     'template-literals.ts',
     'subtraction.ts',
@@ -505,6 +521,7 @@ describe('ASL output: all fixtures compile cleanly', () => {
     'ternary-literal.ts',
     'ternary-jsonpath.ts',
     'cdk-order-indirect-arn.ts',
+    'steps-map-retry.ts',
   ];
 
   for (const fixture of fixtures) {
@@ -2941,6 +2958,67 @@ describe('ASL output: map-closure', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Steps.map with retry option
+// ---------------------------------------------------------------------------
+
+describe('ASL output: steps-map-retry', () => {
+  let asl: any;
+  beforeAll(() => { asl = compileToJson('steps-map-retry.ts'); });
+
+  it('produces a Map state with Retry', () => {
+    const maps = getStatesByType(asl, 'Map');
+    expect(maps).toHaveLength(1);
+    const [, map] = maps[0];
+    expect(map.Retry).toBeDefined();
+    expect(map.Retry).toHaveLength(1);
+  });
+
+  it('Retry has correct error and policy fields', () => {
+    const [, map] = getStatesByType(asl, 'Map')[0];
+    const retry = map.Retry[0];
+    expect(retry.ErrorEquals).toEqual(['States.ALL']);
+    expect(retry.MaxAttempts).toBe(3);
+    expect(retry.IntervalSeconds).toBe(2);
+  });
+
+  it('Map state has MaxConcurrency', () => {
+    const [, map] = getStatesByType(asl, 'Map')[0];
+    expect(map.MaxConcurrency).toBe(10);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Steps.items with retry option (array of retry policies)
+// ---------------------------------------------------------------------------
+
+describe('ASL output: steps-items-retry', () => {
+  let asl: any;
+  beforeAll(() => { asl = compileToJson('steps-items-retry.ts'); });
+
+  it('produces a Map state with Retry', () => {
+    const maps = getStatesByType(asl, 'Map');
+    expect(maps).toHaveLength(1);
+    const [, map] = maps[0];
+    expect(map.Retry).toBeDefined();
+    expect(map.Retry).toHaveLength(2);
+  });
+
+  it('first Retry targets States.TaskFailed', () => {
+    const [, map] = getStatesByType(asl, 'Map')[0];
+    expect(map.Retry[0].ErrorEquals).toEqual(['States.TaskFailed']);
+    expect(map.Retry[0].MaxAttempts).toBe(2);
+  });
+
+  it('second Retry targets States.ALL with backoff', () => {
+    const [, map] = getStatesByType(asl, 'Map')[0];
+    expect(map.Retry[1].ErrorEquals).toEqual(['States.ALL']);
+    expect(map.Retry[1].MaxAttempts).toBe(5);
+    expect(map.Retry[1].IntervalSeconds).toBe(1);
+    expect(map.Retry[1].BackoffRate).toBe(2);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Parallel with multi-step substep branches
 // ---------------------------------------------------------------------------
 
@@ -2966,11 +3044,14 @@ describe('ASL output: parallel-substeps', () => {
     }
   });
 
-  it('ResultSelector maps array positions to variable names', () => {
+  it('Parallel has ResultPath $.__parallel and Assign Pass states', () => {
     const [, p] = getStatesByType(asl, 'Parallel')[0];
-    expect(p.ResultSelector).toBeDefined();
-    expect(p.ResultSelector['orderResult.$']).toBe('$[0]');
-    expect(p.ResultSelector['paymentResult.$']).toBe('$[1]');
+    expect(p.ResultPath).toBe('$.__parallel');
+    expect(p.ResultSelector).toBeUndefined();
+
+    const passes = getStatesByType(asl, 'Pass');
+    const assignPasses = passes.filter(([name]) => name.startsWith('Assign_'));
+    expect(assignPasses).toHaveLength(2);
   });
 });
 
@@ -3000,11 +3081,14 @@ describe('ASL output: deferred-parallel', () => {
     }
   });
 
-  it('ResultSelector maps result variables from await declarations', () => {
+  it('Parallel has ResultPath $.__parallel and Assign Pass states', () => {
     const [, p] = getStatesByType(asl, 'Parallel')[0];
-    expect(p.ResultSelector).toBeDefined();
-    expect(p.ResultSelector['order.$']).toBe('$[0]');
-    expect(p.ResultSelector['payment.$']).toBe('$[1]');
+    expect(p.ResultPath).toBe('$.__parallel');
+    expect(p.ResultSelector).toBeUndefined();
+
+    const passes = getStatesByType(asl, 'Pass');
+    const assignPasses = passes.filter(([name]) => name.startsWith('Assign_'));
+    expect(assignPasses).toHaveLength(2);
   });
 });
 
@@ -3026,11 +3110,59 @@ describe('ASL output: deferred-promise-all', () => {
     expect(p.Branches).toHaveLength(2);
   });
 
-  it('ResultSelector uses destructured names from Promise.all', () => {
+  it('Parallel has ResultPath $.__parallel and Assign Pass states', () => {
     const [, p] = getStatesByType(asl, 'Parallel')[0];
-    expect(p.ResultSelector).toBeDefined();
-    expect(p.ResultSelector['order.$']).toBe('$[0]');
-    expect(p.ResultSelector['payment.$']).toBe('$[1]');
+    expect(p.ResultPath).toBe('$.__parallel');
+    expect(p.ResultSelector).toBeUndefined();
+
+    const passes = getStatesByType(asl, 'Pass');
+    const assignPasses = passes.filter(([name]) => name.startsWith('Assign_'));
+    expect(assignPasses).toHaveLength(2);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Parallel with prior state: ensures ResultPath preserves existing variables
+// ---------------------------------------------------------------------------
+
+describe('ASL output: parallel-with-prior-state', () => {
+  let asl: any;
+  beforeAll(() => { asl = compileToJson('parallel-with-prior-state.ts'); });
+
+  it('produces a Parallel state', () => {
+    const parallels = getStatesByType(asl, 'Parallel');
+    expect(parallels).toHaveLength(1);
+  });
+
+  it('Parallel has ResultPath $.__parallel (preserves prior state)', () => {
+    const [, p] = getStatesByType(asl, 'Parallel')[0];
+    expect(p.ResultPath).toBe('$.__parallel');
+    expect(p.ResultSelector).toBeUndefined();
+  });
+
+  it('Assign Pass states redistribute destructured bindings', () => {
+    const passes = getStatesByType(asl, 'Pass');
+    const assignPasses = passes.filter(([name]) => name.startsWith('Assign_'));
+    expect(assignPasses).toHaveLength(2);
+
+    const orderAssign = assignPasses.find(([name]) => name.includes('order'));
+    expect(orderAssign).toBeDefined();
+    expect(orderAssign![1].InputPath).toBe('$.__parallel[0]');
+    expect(orderAssign![1].ResultPath).toBe('$.order');
+
+    const paymentAssign = assignPasses.find(([name]) => name.includes('payment'));
+    expect(paymentAssign).toBeDefined();
+    expect(paymentAssign![1].InputPath).toBe('$.__parallel[1]');
+    expect(paymentAssign![1].ResultPath).toBe('$.payment');
+  });
+
+  it('return state references both $.config and $.order (config survived parallel)', () => {
+    const passes = getStatesByType(asl, 'Pass');
+    const returnPass = passes.find(([, s]) => s.Parameters && s.End);
+    expect(returnPass).toBeDefined();
+    // order.status → $.order.status  and  config.value → $.config.value
+    expect(returnPass![1].Parameters['order.$']).toBe('$.order.status');
+    expect(returnPass![1].Parameters['config.$']).toBe('$.config.value');
   });
 });
 
@@ -3053,5 +3185,251 @@ describe('ASL output: deferred-single', () => {
     const tasks = getStatesByType(asl, 'Task');
     const [, task] = tasks[0];
     expect(task.Resource).toContain('ValidateOrder');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Steps.sequential() — MaxConcurrency: 1
+// ---------------------------------------------------------------------------
+
+describe('ASL output: steps-sequential', () => {
+  let asl: any;
+  beforeAll(() => { asl = compileToJson('steps-sequential.ts'); });
+
+  it('produces a Map state', () => {
+    const maps = getStatesByType(asl, 'Map');
+    expect(maps).toHaveLength(1);
+  });
+
+  it('Map state has MaxConcurrency: 1', () => {
+    const [, map] = getStatesByType(asl, 'Map')[0];
+    expect(map.MaxConcurrency).toBe(1);
+  });
+
+  it('Map state has correct ItemsPath', () => {
+    const [, map] = getStatesByType(asl, 'Map')[0];
+    expect(map.ItemsPath).toBe('$.items');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Steps.items() — MaxConcurrency + closures via for...of
+// ---------------------------------------------------------------------------
+
+describe('ASL output: steps-items', () => {
+  let asl: any;
+  beforeAll(() => { asl = compileToJson('steps-items.ts'); });
+
+  it('produces a Map state', () => {
+    const maps = getStatesByType(asl, 'Map');
+    expect(maps).toHaveLength(1);
+  });
+
+  it('Map state has MaxConcurrency: 5', () => {
+    const [, map] = getStatesByType(asl, 'Map')[0];
+    expect(map.MaxConcurrency).toBe(5);
+  });
+
+  it('Map state has ItemSelector with captured config variable', () => {
+    const [, map] = getStatesByType(asl, 'Map')[0];
+    expect(map.ItemSelector).toBeDefined();
+    expect(map.ItemSelector['item.$']).toBe('$$.Map.Item.Value');
+    expect(map.ItemSelector['config.$']).toBe('$.config');
+  });
+
+  it('inner Task Parameters reference projected paths', () => {
+    const [, map] = getStatesByType(asl, 'Map')[0];
+    const innerTasks = Object.values(map.ItemProcessor.States)
+      .filter((s: any) => s.Type === 'Task') as any[];
+    expect(innerTasks.length).toBeGreaterThan(0);
+    const processTask = innerTasks[0];
+    expect(processTask.Parameters['item.$']).toBe('$.item');
+    expect(processTask.Parameters['prefix.$']).toBe('$.config.prefix');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Plain for...of with closure capture
+// ---------------------------------------------------------------------------
+
+describe('ASL output: forof-closure', () => {
+  let asl: any;
+  beforeAll(() => { asl = compileToJson('forof-closure.ts'); });
+
+  it('produces a Map state', () => {
+    const maps = getStatesByType(asl, 'Map');
+    expect(maps).toHaveLength(1);
+  });
+
+  it('Map state has ItemSelector with captured variable', () => {
+    const [, map] = getStatesByType(asl, 'Map')[0];
+    expect(map.ItemSelector).toBeDefined();
+    expect(map.ItemSelector['item.$']).toBe('$$.Map.Item.Value');
+    expect(map.ItemSelector['prefix.$']).toBe('$.prefix');
+  });
+
+  it('inner Task Parameters reference projected paths', () => {
+    const [, map] = getStatesByType(asl, 'Map')[0];
+    const innerTasks = Object.values(map.ItemProcessor.States)
+      .filter((s: any) => s.Type === 'Task') as any[];
+    expect(innerTasks.length).toBeGreaterThan(0);
+    const processTask = innerTasks[0];
+    expect(processTask.Parameters['item.$']).toBe('$.item');
+    expect(processTask.Parameters['prefix.$']).toBe('$.prefix.value');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Typed error class references in retry
+// ---------------------------------------------------------------------------
+
+describe('ASL output: retry-errors', () => {
+  let asl: any;
+  beforeAll(() => { asl = compileToJson('retry-errors.ts'); });
+
+  it('produces a Task state with Retry', () => {
+    const tasks = getStatesByType(asl, 'Task');
+    expect(tasks.length).toBeGreaterThanOrEqual(1);
+    const [, task] = tasks[0];
+    expect(task.Retry).toBeDefined();
+  });
+
+  it('Retry ErrorEquals contains resolved ASL error names', () => {
+    const tasks = getStatesByType(asl, 'Task');
+    const [, task] = tasks[0];
+    const retry = task.Retry[0];
+    expect(retry.ErrorEquals).toContain('States.Timeout');
+    expect(retry.ErrorEquals).toContain('States.TaskFailed');
+  });
+
+  it('Retry has correct policy fields', () => {
+    const tasks = getStatesByType(asl, 'Task');
+    const [, task] = tasks[0];
+    const retry = task.Retry[0];
+    expect(retry.MaxAttempts).toBe(3);
+    expect(retry.IntervalSeconds).toBe(2);
+    expect(retry.BackoffRate).toBe(2);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Steps.items() without options (bare wrapper)
+// ---------------------------------------------------------------------------
+
+describe('ASL output: steps-items-bare', () => {
+  let asl: any;
+  beforeAll(() => { asl = compileToJson('steps-items-bare.ts'); });
+
+  it('produces a Map state', () => {
+    const maps = getStatesByType(asl, 'Map');
+    expect(maps).toHaveLength(1);
+  });
+
+  it('Map state has no MaxConcurrency (unbounded)', () => {
+    const [, map] = getStatesByType(asl, 'Map')[0];
+    expect(map.MaxConcurrency).toBeUndefined();
+  });
+
+  it('Map state has no ItemSelector (no captures)', () => {
+    const [, map] = getStatesByType(asl, 'Map')[0];
+    expect(map.ItemSelector).toBeUndefined();
+  });
+
+  it('Map state has correct ItemsPath', () => {
+    const [, map] = getStatesByType(asl, 'Map')[0];
+    expect(map.ItemsPath).toBe('$.items');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Steps.sequential() with closures
+// ---------------------------------------------------------------------------
+
+describe('ASL output: steps-sequential-closure', () => {
+  let asl: any;
+  beforeAll(() => { asl = compileToJson('steps-sequential-closure.ts'); });
+
+  it('produces a Map state', () => {
+    const maps = getStatesByType(asl, 'Map');
+    expect(maps).toHaveLength(1);
+  });
+
+  it('Map state has MaxConcurrency: 1', () => {
+    const [, map] = getStatesByType(asl, 'Map')[0];
+    expect(map.MaxConcurrency).toBe(1);
+  });
+
+  it('Map state has ItemSelector with captured config', () => {
+    const [, map] = getStatesByType(asl, 'Map')[0];
+    expect(map.ItemSelector).toBeDefined();
+    expect(map.ItemSelector['item.$']).toBe('$$.Map.Item.Value');
+    expect(map.ItemSelector['config.$']).toBe('$.config');
+  });
+
+  it('inner Task Parameters reference projected paths', () => {
+    const [, map] = getStatesByType(asl, 'Map')[0];
+    const innerTasks = Object.values(map.ItemProcessor.States)
+      .filter((s: any) => s.Type === 'Task') as any[];
+    expect(innerTasks.length).toBeGreaterThan(0);
+    const processTask = innerTasks[0];
+    expect(processTask.Parameters['item.$']).toBe('$.item');
+    expect(processTask.Parameters['prefix.$']).toBe('$.config.prefix');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Retry with both errors (typed) and errorEquals (strings) combined
+// ---------------------------------------------------------------------------
+
+describe('ASL output: retry-mixed-errors', () => {
+  let asl: any;
+  beforeAll(() => { asl = compileToJson('retry-mixed-errors.ts'); });
+
+  it('produces a Task state with Retry', () => {
+    const tasks = getStatesByType(asl, 'Task');
+    expect(tasks.length).toBeGreaterThanOrEqual(1);
+    const [, task] = tasks[0];
+    expect(task.Retry).toBeDefined();
+  });
+
+  it('Retry ErrorEquals contains both typed and string errors', () => {
+    const tasks = getStatesByType(asl, 'Task');
+    const [, task] = tasks[0];
+    const retry = task.Retry[0];
+    expect(retry.ErrorEquals).toContain('States.Timeout');
+    expect(retry.ErrorEquals).toContain('CustomError');
+  });
+
+  it('Retry has correct policy fields', () => {
+    const tasks = getStatesByType(asl, 'Task');
+    const [, task] = tasks[0];
+    const retry = task.Retry[0];
+    expect(retry.MaxAttempts).toBe(3);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// OutputPath optimization: return result merges into Task
+// ---------------------------------------------------------------------------
+
+describe('ASL output: return-result-optimization', () => {
+  let asl: any;
+  beforeAll(() => { asl = compileToJson('return-result-optimization.ts'); });
+
+  it('produces exactly 1 state (Task merged with return)', () => {
+    const stateNames = Object.keys(asl.States);
+    expect(stateNames).toHaveLength(1);
+  });
+
+  it('the single Task has End: true and no ResultPath', () => {
+    const [, task] = getStatesByType(asl, 'Task')[0];
+    expect(task.End).toBe(true);
+    expect(task.ResultPath).toBeUndefined();
+    expect(task.Next).toBeUndefined();
+  });
+
+  it('no Pass state exists (no Return_Result)', () => {
+    const passes = getStatesByType(asl, 'Pass');
+    expect(passes).toHaveLength(0);
   });
 });

@@ -731,12 +731,15 @@ describe('State builder', () => {
       }
     });
 
-    it('should have ResultSelector mapping destructured names', () => {
+    it('should have ResultPath $.__parallel and Assign Pass states', () => {
       const [, state] = getStatesByType(definition, 'Parallel')[0];
       const parallel = state as ParallelState;
-      expect(parallel.ResultSelector).toBeDefined();
-      expect(parallel.ResultSelector!['orderResult.$']).toBe('$[0]');
-      expect(parallel.ResultSelector!['paymentResult.$']).toBe('$[1]');
+      expect(parallel.ResultPath).toBe('$.__parallel');
+      expect(parallel.ResultSelector).toBeUndefined();
+
+      const passStates = getStatesByType(definition, 'Pass');
+      const assignPasses = passStates.filter(([name]) => name.startsWith('Assign_'));
+      expect(assignPasses).toHaveLength(2);
     });
 
     it('should have a return Pass state after the Parallel', () => {
