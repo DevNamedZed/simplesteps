@@ -77,7 +77,7 @@ const EXAMPLE_CATEGORIES: ExampleCategory[] = [
   {
     label: 'JS Features',
     keys: [
-      'intrinsics', 'js-operators', 'string-interpolation', 'constants',
+      'query-language', 'intrinsics', 'js-operators', 'string-interpolation', 'constants',
       'js-patterns', 'spread-merge', 'context-object', 'multi-step-function',
     ],
   },
@@ -413,7 +413,7 @@ export const waitAndContinue = Steps.createFunction(
 );
 ` }] },
 
-  parallel: { description: 'Run tasks in parallel with Promise.all, compiles to Parallel state.', services: ['Lambda'], files: [{ name: 'workflow.ts', content: `import { Steps, SimpleStepContext } from './runtime/index';
+  parallel: { description: 'Promise.all → Parallel state. For variable-length arrays, use Steps.map() or for...of.', services: ['Lambda'], files: [{ name: 'workflow.ts', content: `import { Steps, SimpleStepContext } from './runtime/index';
 import { Lambda } from './runtime/services/Lambda';
 
 const getOrder = Lambda<{ orderId: string }, { status: string; total: number }>(
@@ -435,7 +435,7 @@ export const parallel = Steps.createFunction(
 );
 ` }] },
 
-  'steps-map-closure': { description: 'Steps.map() with result capture, closures, and maxConcurrency. Steps.items() for for...of with options.', services: ['Lambda'], files: [{ name: 'workflow.ts', content: `import { Steps, SimpleStepContext } from './runtime/index';
+  'steps-map-closure': { description: 'Steps.map() captures results with closures and concurrency control. Steps.items() wraps arrays for for...of options.', services: ['Lambda'], files: [{ name: 'workflow.ts', content: `import { Steps, SimpleStepContext } from './runtime/index';
 import { Lambda } from './runtime/services/Lambda';
 
 // Steps.map() — Functional Map API
@@ -854,74 +854,192 @@ export const awsSdkEscapeHatch = Steps.createFunction(
 
   // ── JS Features ───────────────────────────────────────────────────────
 
-  intrinsics: { description: 'Steps.format(), Steps.uuid(), Steps.add() intrinsic functions.', services: [], files: [{ name: 'workflow.ts', content: `import { Steps, SimpleStepContext } from './runtime/index';
+  'query-language': { description: 'JSONata (default) vs JSONPath backend — how to choose and what changes.', services: ['Lambda'], files: [{ name: 'workflow.ts', content: `import { Steps, SimpleStepContext } from './runtime/index';
+import { Lambda } from './runtime/services/Lambda';
+
+// Query Language Backend
+//
+// The compiler supports two backends:
+//   JSONata (default) — richer expression support, native operators
+//   JSONPath          — classic mode, States.* intrinsics only
+//
+// Pick the backend via:
+//   CLI:  simplesteps compile --query-language jsonpath
+//   API:  compile({ queryLanguage: 'JSONPath' })
+//   CDK:  new SimpleStepsStateMachine(this, 'SM', { queryLanguage: 'JSONPath' })
+//
+// This playground compiles in JSONata mode (the default).
+// To try JSONPath mode, use the CLI or API with --query-language jsonpath.
+//
+// The SAME TypeScript compiles to different ASL per backend:
+//
+//   input.price + input.tax
+//     JSONata  →  {% $states.input.price + $states.input.tax %}
+//     JSONPath →  States.MathAdd($.price, $.tax)
+//
+//   \`Hello \${input.name}\`
+//     JSONata  →  {% 'Hello ' & $states.input.name %}
+//     JSONPath →  States.Format('Hello {}', $.name)
+//
+//   JSON.parse(str)
+//     JSONata  →  {% $eval(...) %}
+//     JSONPath →  States.StringToJson(...)
+//
+// JSONata unlocks patterns impossible in JSONPath:
+//   str.toUpperCase()    →  $uppercase(str)
+//   Math.floor(x)        →  $floor(x)
+//   arr.map(x => x.id)   →  $map(arr, function($x) { $x.id })
+//   a * b, a / b, a % b  →  native operators
+
+const processFn = Lambda<{ item: string; total: number }, { result: string }>(
+  'arn:aws:lambda:us-east-1:123:function:Process',
+);
+
+export const queryLanguageExample = Steps.createFunction(
+  async (context: SimpleStepContext, input: { name: string; items: string[]; price: number; tax: number }) => {
+    // Works in both modes (+ compiles differently per backend)
+    const total = input.price + input.tax;
+    const greeting = \`Hello \${input.name}, total: \${total}\`;
+    const count = input.items.length;
+
+    // JSONata-only patterns (SS540 error in JSONPath mode):
+    const upperName = input.name.toUpperCase();
+    const product = input.price * input.tax;
+    const ids = input.items.map(item => item);
+
+    // Service calls work identically in both modes
+    for (const item of input.items) {
+      await processFn.call({ item, total });
+    }
+
+    return { greeting, count, upperName, product, ids };
+  },
+);
+` }] },
+
+  intrinsics: { description: 'Steps.* explicit intrinsics (States.* mappings) — work in both backends. Prefer natural JS when available.', services: [], files: [{ name: 'workflow.ts', content: `import { Steps, SimpleStepContext } from './runtime/index';
+
+// Steps.* Intrinsics — Explicit ASL Functions
+//
+// These compile to States.* intrinsic functions in BOTH backends.
+// In JSONata mode, prefer natural JS when available:
+//   Steps.add(a, b) → just use a + b
+//   Steps.jsonParse(s) → just use JSON.parse(s)
+// Use Steps.* when no JS equivalent exists (uuid, hash, arrayPartition, etc.).
+//
+//   Steps.format(tmpl, ...args) → States.Format
+//   Steps.add(a, b)             → States.MathAdd
+//   Steps.random(lo, hi)        → States.MathRandom
+//   Steps.uuid()                → States.UUID
+//   Steps.hash(data, algo)      → States.Hash
+//   Steps.base64Encode(data)    → States.Base64Encode
+//   Steps.base64Decode(data)    → States.Base64Decode
+//   Steps.jsonParse(str)        → States.StringToJson
+//   Steps.jsonStringify(obj)    → States.JsonToString
+//   Steps.array(...items)       → States.Array
+//   Steps.arrayPartition(a, n)  → States.ArrayPartition
+//   Steps.arrayContains(a, v)   → States.ArrayContains
+//   Steps.arrayRange(s, e, st)  → States.ArrayRange
+//   Steps.arrayGetItem(a, i)    → States.ArrayGetItem
+//   Steps.arrayLength(a)        → States.ArrayLength
+//   Steps.arrayUnique(a)        → States.ArrayUnique
+//   Steps.arraySlice(a, s, e)   → States.ArraySlice
 
 export const intrinsics = Steps.createFunction(
-  async (context: SimpleStepContext, input: { orderId: string; price: number; tax: number; metadata: string }) => {
-    // Arithmetic using Steps.add()
+  async (context: SimpleStepContext, input: {
+    orderId: string; price: number; tax: number;
+    metadata: string; items: string[]; data: string;
+  }) => {
+    // ── String & formatting ──
     const total = Steps.add(input.price, input.tax);
-
-    // String formatting using Steps.format()
-    const message = Steps.format('Order {} confirmed, total: {}', input.orderId, total);
-
-    // Generate a unique ID using Steps.uuid()
+    const message = Steps.format('Order {} total: {}', input.orderId, total);
     const trackingId = Steps.uuid();
+    const rand = Steps.random(1, 100);
 
-    // Parse a JSON string using Steps.jsonParse()
-    const meta = Steps.jsonParse(input.metadata);
+    // ── Encoding ──
+    const encoded = Steps.base64Encode(input.data);
+    const decoded = Steps.base64Decode(encoded);
+    const hashed = Steps.hash(input.data, 'SHA-256');
+
+    // ── JSON ──
+    const parsed = Steps.jsonParse(input.metadata);
+    const serialized = Steps.jsonStringify(parsed);
+
+    // ── Arrays ──
+    const arr = Steps.array(input.orderId, total, trackingId);
+    const chunks = Steps.arrayPartition(input.items, 3);
+    const hasItem = Steps.arrayContains(input.items, 'special');
+    const range = Steps.arrayRange(0, 10, 2);
+    const first = Steps.arrayGetItem(input.items, 0);
+    const len = Steps.arrayLength(input.items);
+    const unique = Steps.arrayUnique(input.items);
+    const slice = Steps.arraySlice(input.items, 0, 3);
 
     return {
-      message: message,
-      trackingId: trackingId,
-      total: total,
-      meta: meta,
+      message, trackingId, total, rand,
+      encoded, decoded, hashed,
+      parsed, serialized,
+      arr, chunks, hasItem, range, first, len, unique, slice,
     };
   },
 );
 ` }] },
 
-  'js-operators': { description: 'Natural JS operators (+, template literals, JSON.parse) mapped to ASL.', services: [], files: [{ name: 'workflow.ts', content: `import { Steps, SimpleStepContext } from './runtime/index';
+  'js-operators': { description: 'Natural JS operators compile to JSONata expressions (or States.* in JSONPath mode).', services: [], files: [{ name: 'workflow.ts', content: `import { Steps, SimpleStepContext } from './runtime/index';
 
-// Same logic as the "Intrinsics" example, but using natural JS operators.
-// The compiler maps these to the SAME ASL intrinsic functions!
-//   a + b            → States.MathAdd(a, b)
-//   \`\${a} text\`   → States.Format('{} text', a)
-//   JSON.parse()     → States.StringToJson()
+// Natural JS Operators → JSONata Expressions
+//
+// Write natural JavaScript — the compiler maps to JSONata (default)
+// or States.* intrinsics (JSONPath mode). See "Query Language" example
+// for how to switch backends.
+//
+//   Pattern            JSONata (default)       JSONPath
+//   ─────────────────  ─────────────────────── ───────────────────
+//   a + b              a + b (native)          States.MathAdd
+//   a * b              a * b (native)          ❌ SS530
+//   a / b              a / b (native)          ❌ SS531
+//   \`\${a} text\`     'text' & a (& concat)   States.Format
+//   JSON.parse(s)      $eval(s)                States.StringToJson
+//   JSON.stringify(o)  $string(o)              States.JsonToString
+//   str.split(',')     $split(str, ',')        States.StringSplit
 
 export const jsOperators = Steps.createFunction(
   async (context: SimpleStepContext, input: { orderId: string; price: number; tax: number; metadata: string }) => {
-    // Arithmetic using the + operator (compiles to States.MathAdd)
+    // Arithmetic — JSONata native operators
     const total = input.price + input.tax;
+    const doubled = input.price * 2;
+    const half = input.price / 2;
 
-    // String formatting using template literals (compiles to States.Format)
+    // Template literals — JSONata & concatenation
     const message = \`Order \${input.orderId} confirmed, total: \${total}\`;
 
-    // Generate a unique ID (Steps.uuid is the only way)
+    // UUID — States.UUID in both modes
     const trackingId = Steps.uuid();
 
-    // Parse a JSON string using JSON.parse (compiles to States.StringToJson)
+    // JSON — JSONata $eval() / $string()
     const meta = JSON.parse(input.metadata);
+    const serialized = JSON.stringify(meta);
 
-    return {
-      message: message,
-      trackingId: trackingId,
-      total: total,
-      meta: meta,
-    };
+    return { total, doubled, half, message, trackingId, meta, serialized };
   },
 );
 ` }] },
 
-  'string-interpolation': { description: 'Template literals compile to States.Format intrinsic.', services: [], files: [{ name: 'workflow.ts', content: `import { Steps, SimpleStepContext } from './runtime/index';
+  'string-interpolation': { description: 'Template literals → JSONata & concatenation (or States.Format in JSONPath).', services: [], files: [{ name: 'workflow.ts', content: `import { Steps, SimpleStepContext } from './runtime/index';
 
 // String Interpolation with Template Literals
-// Write natural template strings — compiler maps them to States.Format.
+//
+// JSONata (default): compiles to & concatenation
+//   \`Hello \${name}\` → 'Hello ' & $name
+//
+// JSONPath: compiles to States.Format intrinsic
+//   \`Hello \${name}\` → States.Format('Hello {}', $.name)
 
 export const stringInterpolation = Steps.createFunction(
   async (context: SimpleStepContext, input: { name: string; orderId: string; price: number; tax: number }) => {
     const total = input.price + input.tax;
 
-    // Simple interpolation
+    // Simple interpolation → 'Hello, ' & $name & '!'
     const greeting = \`Hello, \${input.name}!\`;
 
     // Multiple substitutions
@@ -966,53 +1084,100 @@ export const constants = Steps.createFunction(
 );
 ` }] },
 
-  'js-patterns': { description: 'Complete reference of every JS pattern mapped to ASL.', services: [], files: [{ name: 'workflow.ts', content: `import { Steps, SimpleStepContext } from './runtime/index';
+  'js-patterns': { description: 'Complete reference of every JS pattern — JSONata mappings (default backend).', services: [], files: [{ name: 'workflow.ts', content: `import { Steps, SimpleStepContext } from './runtime/index';
 
-// Complete JavaScript Pattern Reference
-// Every JS pattern the compiler maps to ASL, in one place.
+// Complete JS Pattern Reference — JSONata Mode (Default)
+//
+// Every JS pattern the compiler maps to ASL. Patterns marked
+// "both" work in JSONata and JSONPath; others are JSONata-only.
 
 export const jsPatterns = Steps.createFunction(
   async (context: SimpleStepContext, input: {
-    items: string[]; csv: string; data: string;
-    price: number; tax: number; name: string
+    items: { id: string; value: number }[];
+    tags: string[]; csv: string; data: string;
+    price: number; tax: number; name: string; text: string;
   }) => {
-    // Arithmetic: + → States.MathAdd
-    const total = input.price + input.tax;
+    // ── Arithmetic ──────────────────────────────────────────
+    const sum = input.price + input.tax;          // both  (JSONata: native +, JSONPath: States.MathAdd)
+    const product = input.price * input.tax;      // JSONata only → native *
+    const quotient = input.price / 2;             // JSONata only → native /
+    const remainder = input.price % 10;           // JSONata only → native %
 
-    // Template literals → States.Format
-    const message = \`Hello \${input.name}, your total is \${total}\`;
+    // ── String methods ──────────────────────────────────────
+    const greeting = \`Hello \${input.name}\`;       // both  (JSONata: & concat, JSONPath: States.Format)
+    const parts = input.csv.split(',');           // both  (JSONata: $split, JSONPath: States.StringSplit)
+    const upper = input.name.toUpperCase();       // JSONata only → $uppercase
+    const lower = input.name.toLowerCase();       // JSONata only → $lowercase
+    const trimmed = input.text.trim();            // JSONata only → $trim
+    const sub = input.name.substring(0, 3);       // JSONata only → $substring
+    const initial = input.name.charAt(0);         // JSONata only → $substring(s, i, 1)
+    const replaced = input.text.replace(' ', '-');// JSONata only → $replace
+    const nameLen = input.name.length;            // JSONata only → $length (string)
 
-    // String split → States.StringSplit
-    const parts = input.csv.split(',');
+    // ── Math ────────────────────────────────────────────────
+    const floored = Math.floor(input.price);      // JSONata only → $floor
+    const ceiled = Math.ceil(input.price);        // JSONata only → $ceil
+    const rounded = Math.round(input.price);      // JSONata only → $round
+    const absolute = Math.abs(input.tax);         // JSONata only → $abs
+    const root = Math.sqrt(input.price);          // JSONata only → $sqrt
 
-    // JSON.parse → States.StringToJson
-    const parsed = JSON.parse(input.data);
+    // ── Type conversion ─────────────────────────────────────
+    const num = Number(input.name);               // JSONata only → $number
+    const str = String(input.price);              // JSONata only → $string
+    const bool = Boolean(input.price);            // JSONata only → $boolean
+    const priceType = typeof input.price;         // JSONata only → $type
 
-    // JSON.stringify → States.JsonToString
-    const serialized = JSON.stringify(parsed);
+    // ── JSON ────────────────────────────────────────────────
+    const parsed = JSON.parse(input.data);        // both  (JSONata: $eval, JSONPath: States.StringToJson)
+    const serialized = JSON.stringify(parsed);    // both  (JSONata: $string, JSONPath: States.JsonToString)
 
-    // Array includes → States.ArrayContains
-    const hasItem = input.items.includes('special');
+    // ── Arrays ──────────────────────────────────────────────
+    const hasSpecial = input.tags.includes('x');  // both  (JSONata: in, JSONPath: States.ArrayContains)
+    const count = input.items.length;             // both  (JSONata: $count, JSONPath: States.ArrayLength)
+    const joined = input.tags.join(', ');         // JSONata only → $join
+    const reversed = input.tags.reverse();        // JSONata only → $reverse
+    const sorted = input.tags.sort();             // JSONata only → $sort
+    const merged = input.tags.concat(input.tags); // JSONata only → $append
 
-    // Array length → States.ArrayLength
-    const count = input.items.length;
+    // ── Higher-order functions (JSONata only, pure callbacks) ─
+    const ids = input.items.map(i => i.id);                       // → $map
+    const big = input.items.filter(i => i.value > 100);           // → $filter
+    const total = input.items.reduce((s, i) => s + i.value, 0);  // → $reduce
+    const found = input.items.find(i => i.id === 'x');            // → $filter(...)[0]
+    const hasAny = input.items.some(i => i.value > 0);            // → $count($filter) > 0
+    const allPos = input.items.every(i => i.value > 0);           // → $count($filter) = $count
 
-    // Steps.uuid → States.UUID
+    // ── UUID — both modes ───────────────────────────────────
     const id = Steps.uuid();
 
-    return { total, message, parts, parsed, serialized, hasItem, count, id };
+    return {
+      sum, product, quotient, remainder,
+      greeting, parts, upper, lower, trimmed, sub, initial, replaced, nameLen,
+      floored, ceiled, rounded, absolute, root,
+      num, str, bool, priceType,
+      parsed, serialized,
+      hasSpecial, count, joined, reversed, sorted, merged,
+      ids, big, total, found, hasAny, allPos, id,
+    };
   },
 );
 ` }] },
 
-  'spread-merge': { description: 'Object spread compiles to States.JsonMerge; Steps.merge() for deep merge.', services: ['Lambda'], files: [{ name: 'workflow.ts', content: `import { Steps, SimpleStepContext } from './runtime/index';
+  'spread-merge': { description: 'Object spread → $merge (JSONata) / States.JsonMerge (JSONPath). Steps.merge() for deep merge.', services: ['Lambda'], files: [{ name: 'workflow.ts', content: `import { Steps, SimpleStepContext } from './runtime/index';
 import { Lambda } from './runtime/services/Lambda';
 
-// Object Spread / JsonMerge
+// Object Spread / Merge
 //
-// Object spread syntax { ...a, ...b } compiles to States.JsonMerge
-// (or $merge in JSONata mode). Steps.merge() provides explicit
-// merge with optional deep merge flag.
+// { ...a, ...b } compiles to:
+//   JSONata (default) → $merge([a, b])
+//   JSONPath          → States.JsonMerge(a, b, false)
+//
+// Steps.merge(a, b, deep?) provides explicit merge control:
+//   deep=false (default): shallow merge, later keys win
+//   deep=true: recursively merge nested objects
+//
+// Note: spread in service call parameters is NOT supported (SS500).
+// Use { ...a, ...b } in variable assignments only.
 
 const getDefaults = Lambda<{ type: string }, { color: string; size: string; priority: number }>(
   'arn:aws:lambda:us-east-1:123:function:GetDefaults',
@@ -1026,10 +1191,10 @@ export const spreadMerge = Steps.createFunction(
     const defaults = await getDefaults.call({ type: input.type });
     const overrides = await getOverrides.call({ userId: input.userId });
 
-    // Spread → States.JsonMerge: overrides win on conflict
+    // Spread → $merge: overrides win on conflict (shallow)
     const combined = { ...defaults, ...overrides };
 
-    // Steps.merge() — explicit merge (deep: true for nested objects)
+    // Steps.merge(a, b, true) — deep merge: recursively merges nested objects
     const deepMerged = Steps.merge(defaults, overrides, true);
 
     return { combined, deepMerged };
@@ -1169,8 +1334,9 @@ export const config = {
 import { Lambda } from './runtime/services/Lambda';
 
 // Pure Functions — Expression Inlining
-// Simple functions with a single return statement are evaluated
-// at compile time. The result is substituted directly into the ASL.
+// Functions with a single return statement, no service calls, and no
+// side effects are evaluated at compile time. The result is substituted
+// directly into the ASL as a literal value.
 
 function makeArn(name: string) {
   return \`arn:aws:lambda:us-east-1:123456789:function:\${name}\`;
@@ -2148,10 +2314,11 @@ export const batchFanOut = Steps.createFunction(
   'jsonata-string-methods': { description: 'String methods compile to JSONata built-ins ($uppercase, $lowercase, $trim, etc.).', services: ['Lambda'], files: [{ name: 'workflow.ts', content: `import { Steps, SimpleStepContext } from './runtime/index';
 import { Lambda } from './runtime/services/Lambda';
 
-// String Methods — JSONata only
+// String Methods (JSONata mode)
 //
 // Standard JS string methods compile directly to JSONata built-in
-// functions. These require JSONata mode (the default).
+// functions. These work in JSONata mode (the default).
+// In JSONPath mode, use Lambda functions for string manipulation.
 //
 //   str.toUpperCase()    → $uppercase(str)
 //   str.toLowerCase()    → $lowercase(str)
@@ -2278,14 +2445,14 @@ export const mathMethods = Steps.createFunction(
   'jsonata-array-methods': { description: 'Array methods & Object utilities compile to JSONata ($join, $reverse, $sort, $keys, etc.).', services: ['Lambda'], files: [{ name: 'workflow.ts', content: `import { Steps, SimpleStepContext } from './runtime/index';
 import { Lambda } from './runtime/services/Lambda';
 
-// Array Methods & Object Utilities — JSONata only
+// Array Methods & Object Utilities (JSONata mode)
 //
-//   arr.join(delim)     → $join(arr, delim)
-//   arr.reverse()       → $reverse(arr)
-//   arr.sort()          → $sort(arr)
-//   arr.concat(b)       → $append(arr, b)
-//   arr.length          → $count(arr)
-//   arr.includes(val)   → val in arr  (JSONata) / States.ArrayContains (JSONPath)
+//   arr.join(delim)     → $join(arr, delim)        JSONata only
+//   arr.reverse()       → $reverse(arr)             JSONata only
+//   arr.sort()          → $sort(arr)                JSONata only
+//   arr.concat(b)       → $append(arr, b)           JSONata only
+//   arr.length          → $count(arr)               JSONata only
+//   arr.includes(val)   → val in arr  (JSONata) / States.ArrayContains (JSONPath) — BOTH modes
 //   Object.keys(o)      → $keys(o)
 //   Object.values(o)    → $lookup(o, $keys(o))
 
@@ -2333,11 +2500,11 @@ export const arrayMethods = Steps.createFunction(
   'jsonata-lambda-expressions': { description: 'Higher-order functions: map, filter, reduce, find, some, every with pure callbacks.', services: ['Lambda'], files: [{ name: 'workflow.ts', content: `import { Steps, SimpleStepContext } from './runtime/index';
 import { Lambda } from './runtime/services/Lambda';
 
-// Lambda Expressions — Higher-Order Array Functions
+// Lambda Expressions — Higher-Order Array Functions (JSONata mode)
 //
-// When a callback is a pure expression (no awaits), the compiler
-// converts it to a JSONata higher-order function. For callbacks
-// with service calls, use Steps.map() instead.
+// Callbacks MUST be pure expressions — no awaits, no service calls.
+// The compiler converts pure callbacks to JSONata higher-order functions.
+// For callbacks that need service calls, use Steps.map() or for...of instead.
 //
 //   arr.map(v => expr)          → $map(arr, function($v) { expr })
 //   arr.filter(v => pred)       → $filter(arr, function($v) { pred })
@@ -2423,7 +2590,7 @@ export const fullDataTransform = Steps.createFunction(
     // 7. Build a comma-separated product list → $join(...)
     const productList = products.join(', ');
 
-    // 8. Format the summary → States.Format
+    // 8. Format the summary → & concatenation (JSONata)
     const summary = \`Shipped \${shippedCount} orders (\${productList}) for $\${roundedRevenue}\`;
 
     // 9. Send the report to another Lambda
@@ -2440,7 +2607,7 @@ export const fullDataTransform = Steps.createFunction(
 
   // ── Limitations ────────────────────────────────────────────────────────
 
-  'limit-arithmetic': { description: 'Arithmetic: all operators work in JSONata; only + and - in JSONPath.', services: ['Lambda'], files: [{ name: 'workflow.ts', content: `import { Steps, SimpleStepContext } from './runtime/index';
+  'limit-arithmetic': { description: 'Arithmetic: all operators (+ - * / %) work natively in JSONata. JSONPath: only + and -.', services: ['Lambda'], files: [{ name: 'workflow.ts', content: `import { Steps, SimpleStepContext } from './runtime/index';
 import { Lambda } from './runtime/services/Lambda';
 
 // Arithmetic Operators
@@ -2690,10 +2857,9 @@ let baseUrl = 'https://api.example.com';
 // ⚠️ var with literal — works but emits SS709: prefer const
 var defaultRegion = 'us-east-1';
 
-// ❌ const with impure function call — Date.now() is not foldable at module scope
-// (Note: Date.now() DOES work as a runtime expression inside workflows
-//  in JSONata mode — it compiles to $millis(). The limitation is only
-//  for module-scope constant folding.)
+// ❌ const with impure function call — Date.now() is not foldable at module scope.
+//    At module scope, values must be compile-time constants.
+//    Inside a workflow body, Date.now() works fine in JSONata mode → $millis().
 const timestamp = Date.now();
 
 const processFn = Lambda<
@@ -2882,7 +3048,7 @@ import { Lambda } from './runtime/services/Lambda';
 // the compiler needs to know all keys at compile time.
 //
 // Pure spread ({ ...a, ...b }) in general expressions IS supported
-// — it compiles to States.JsonMerge.
+// — it compiles to $merge (JSONata) / States.JsonMerge (JSONPath).
 
 const processFn = Lambda<
   { id: string; region: string; mode: string },
@@ -3211,10 +3377,10 @@ export const runtimeExpressions = Steps.createFunction(
 
     // ── String operations ─────────────────────────────────
 
-    // ✅ Template literals — both modes (States.Format)
+    // ✅ Template literals — both modes (JSONata: & concat, JSONPath: States.Format)
     const greeting = \`Hello \${result.name}\`;
 
-    // ✅ String + concatenation — both modes (States.Format)
+    // ✅ String + concatenation — both modes (JSONata: &, JSONPath: States.Format)
     const label = 'item-' + result.name;
 
     // ✅ String() on runtime value — JSONata only ($string)
@@ -3223,7 +3389,7 @@ export const runtimeExpressions = Steps.createFunction(
 
     // ── JSON operations ───────────────────────────────────
 
-    // ✅ JSON.stringify() — both modes (States.JsonToString)
+    // ✅ JSON.stringify() — both modes (JSONata: $string, JSONPath: States.JsonToString)
     const json = JSON.stringify(result.data);
 
     // ── Array operations ──────────────────────────────────
@@ -3233,7 +3399,7 @@ export const runtimeExpressions = Steps.createFunction(
 
     // ── Arithmetic ────────────────────────────────────────
 
-    // ✅ Addition — both modes (States.MathAdd / native +)
+    // ✅ Addition — both modes (JSONata: native +, JSONPath: States.MathAdd)
     const incremented = result.count + 1;
 
     // ✅ Subtraction by literal — both modes
@@ -3259,7 +3425,7 @@ export const runtimeExpressions = Steps.createFunction(
 );
 ` }] },
 
-  'limit-workarounds': { description: 'Common patterns and their workarounds (many now native in JSONata mode).', services: ['Lambda', 'DynamoDB'], files: [{ name: 'workflow.ts', content: `import { Steps, SimpleStepContext } from './runtime/index';
+  'limit-workarounds': { description: 'Patterns that needed workarounds in JSONPath — now native in JSONata mode.', services: ['Lambda', 'DynamoDB'], files: [{ name: 'workflow.ts', content: `import { Steps, SimpleStepContext } from './runtime/index';
 import { Lambda } from './runtime/services/Lambda';
 import { DynamoDB } from './runtime/services/DynamoDB';
 
@@ -3289,7 +3455,7 @@ export const workarounds = Steps.createFunction(
     // ✅ Ternary — both modes (Choice + Pass states)
     const status = product > 100 ? 'high' : 'low';
 
-    // ✅ Template literals — both modes (States.Format)
+    // ✅ Template literals — both modes (JSONata: & concat, JSONPath: States.Format)
     const label = \`result-\${status}\`;
 
     // ✅ JSONata: Date.now() → $millis(), Math.random() → $random()
