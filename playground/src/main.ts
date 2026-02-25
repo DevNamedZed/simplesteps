@@ -59,15 +59,16 @@ const EXAMPLE_CATEGORIES: ExampleCategory[] = [
   {
     label: 'Control Flow',
     keys: [
-      'sequential', 'if-else', 'early-return', 'while-loop', 'for-each',
-      'try-catch', 'switch-case', 'nested-conditions', 'and-or-conditions',
-      'dynamic-wait', 'wait-and-continue', 'parallel',
+      'sequential', 'if-else', 'early-return', 'while-loop', 'do-while-loop', 'for-each',
+      'try-catch', 'typed-error-handling', 'switch-case', 'nested-conditions', 'and-or-conditions',
+      'dynamic-wait', 'wait-and-continue', 'parallel', 'steps-map-closure', 'steps-sequential',
+      'deferred-await', 'retry-timeout',
     ],
   },
   {
     label: 'Services',
     keys: [
-      'multi-service', 'sqs-queue', 'eventbridge', 'dynamodb-crud',
+      'multi-service', 'sqs-queue', 'eventbridge', 'dynamodb-crud', 'dynamodb-query-scan',
       's3-operations', 'secrets-manager', 'ssm-params', 'nested-step-function',
       'lambda-patterns', 'aws-sdk-escape-hatch', 'ecs-task', 'bedrock-model',
       'batch-job', 'glue-etl', 'codebuild-project', 'athena-query',
@@ -77,7 +78,7 @@ const EXAMPLE_CATEGORIES: ExampleCategory[] = [
     label: 'JS Features',
     keys: [
       'intrinsics', 'js-operators', 'string-interpolation', 'constants',
-      'js-patterns', 'context-object', 'multi-step-function',
+      'js-patterns', 'spread-merge', 'context-object', 'multi-step-function',
     ],
   },
   {
@@ -209,6 +210,34 @@ export const whileLoop = Steps.createFunction(
 );
 ` }] },
 
+  'do-while-loop': { description: 'Do-while loop — body executes at least once before condition check.', services: ['Lambda'], files: [{ name: 'workflow.ts', content: `import { Steps, SimpleStepContext } from './runtime/index';
+import { Lambda } from './runtime/services/Lambda';
+
+// Do-While Loop
+// Unlike while, the body executes at least once before checking
+// the condition. Useful for polling patterns where you need to
+// act first, then decide whether to continue.
+
+const pollFn = Lambda<{ jobId: string }, { status: string; retryable: boolean }>(
+  'arn:aws:lambda:us-east-1:123:function:Poll',
+);
+const processFn = Lambda<{ jobId: string }, { result: string }>(
+  'arn:aws:lambda:us-east-1:123:function:Process',
+);
+
+export const doWhileLoop = Steps.createFunction(
+  async (context: SimpleStepContext, input: { jobId: string }) => {
+    let poll;
+    do {
+      poll = await pollFn.call({ jobId: input.jobId });
+    } while (poll.status !== 'ready');
+
+    const result = await processFn.call({ jobId: input.jobId });
+    return { result: result.result };
+  },
+);
+` }] },
+
   'for-each': { description: 'Iterate over items with for-of, compiles to Map state.', services: ['Lambda'], files: [{ name: 'workflow.ts', content: `import { Steps, SimpleStepContext } from './runtime/index';
 import { Lambda } from './runtime/services/Lambda';
 
@@ -240,6 +269,47 @@ export const tryCatch = Steps.createFunction(
       return { success: true, data: data.data };
     } catch (e) {
       return { success: false, error: 'Fetch failed' };
+    }
+  },
+);
+` }] },
+
+  'typed-error-handling': { description: 'Custom StepException subclasses with instanceof chains for typed error handling.', services: ['Lambda'], files: [{ name: 'workflow.ts', content: `import { Steps, SimpleStepContext, StepException } from './runtime/index';
+import { Lambda } from './runtime/services/Lambda';
+
+// Typed Error Handling
+// Define custom error classes extending StepException.
+// The compiler maps instanceof checks to Catch rules with
+// ErrorEquals matching the class name.
+
+class OrderNotFound extends StepException {}
+class PaymentFailed extends StepException {}
+
+const processFn = Lambda<{ orderId: string }, { total: number }>(
+  'arn:aws:lambda:us-east-1:123:function:ProcessOrder',
+);
+const refundFn = Lambda<{ orderId: string }, void>(
+  'arn:aws:lambda:us-east-1:123:function:Refund',
+);
+const notifyFn = Lambda<{ message: string }, void>(
+  'arn:aws:lambda:us-east-1:123:function:Notify',
+);
+
+export const typedErrors = Steps.createFunction(
+  async (context: SimpleStepContext, input: { orderId: string }) => {
+    try {
+      const result = await processFn.call({ orderId: input.orderId });
+      return { status: 'success', total: result.total };
+    } catch (e) {
+      if (e instanceof OrderNotFound) {
+        await notifyFn.call({ message: 'Order not found' });
+        return { status: 'not_found' };
+      }
+      if (e instanceof PaymentFailed) {
+        await refundFn.call({ orderId: input.orderId });
+        return { status: 'payment_failed' };
+      }
+      return { status: 'unknown_error' };
     }
   },
 );
@@ -365,6 +435,144 @@ export const parallel = Steps.createFunction(
 );
 ` }] },
 
+  'steps-map-closure': { description: 'Steps.map() with result capture, closures, and maxConcurrency. Steps.items() for for...of with options.', services: ['Lambda'], files: [{ name: 'workflow.ts', content: `import { Steps, SimpleStepContext } from './runtime/index';
+import { Lambda } from './runtime/services/Lambda';
+
+// Steps.map() — Functional Map API
+//
+// Three advantages over plain for...of:
+//   1. Result capture — collect iteration results into a variable
+//   2. Closures — access outer await results inside the callback
+//   3. MaxConcurrency — limit parallel execution
+//
+// Steps.items() — For...of with options
+//   Wrap arrays for for...of with maxConcurrency support.
+
+const getConfig = Lambda<{ env: string }, { prefix: string }>(
+  'arn:aws:lambda:us-east-1:123:function:GetConfig',
+);
+const processItem = Lambda<{ item: string; prefix: string }, { processed: boolean }>(
+  'arn:aws:lambda:us-east-1:123:function:ProcessItem',
+);
+
+export const stepsMapClosure = Steps.createFunction(
+  async (context: SimpleStepContext, input: { items: string[]; env: string }) => {
+    // Fetch config (outer scope)
+    const config = await getConfig.call({ env: input.env });
+
+    // Steps.map: closure over config.prefix, capture results, limit concurrency
+    const results = await Steps.map(input.items, async (item) => {
+      return await processItem.call({ item, prefix: config.prefix });
+    }, { maxConcurrency: 5 });
+
+    // Steps.items: for...of with maxConcurrency
+    for (const item of Steps.items(input.items, { maxConcurrency: 3 })) {
+      await processItem.call({ item, prefix: config.prefix });
+    }
+
+    return { results };
+  },
+);
+` }] },
+
+  'steps-sequential': { description: 'Steps.sequential() — iterate items one at a time (MaxConcurrency: 1).', services: ['Lambda'], files: [{ name: 'workflow.ts', content: `import { Steps, SimpleStepContext } from './runtime/index';
+import { Lambda } from './runtime/services/Lambda';
+
+// Sequential Iteration
+//
+// Steps.sequential(arr) wraps an array for use with for...of,
+// compiling to a Map state with MaxConcurrency: 1.
+// Items are processed strictly one at a time.
+
+const processFn = Lambda<{ item: string }, { ok: boolean }>(
+  'arn:aws:lambda:us-east-1:123:function:ProcessItem',
+);
+
+export const stepsSequential = Steps.createFunction(
+  async (context: SimpleStepContext, input: { items: string[] }) => {
+    // MaxConcurrency: 1 — items processed one at a time
+    for (const item of Steps.sequential(input.items)) {
+      await processFn.call({ item });
+    }
+
+    return { done: true };
+  },
+);
+` }] },
+
+  'deferred-await': { description: 'Fire-then-await pattern — compiler batches deferred awaits into a single Parallel state.', services: ['Lambda'], files: [{ name: 'workflow.ts', content: `import { Steps, SimpleStepContext } from './runtime/index';
+import { Lambda } from './runtime/services/Lambda';
+
+// Deferred Await — Natural Parallelism
+//
+// Start multiple service calls without awaiting, then collect
+// results later. The compiler detects this pattern and batches
+// the awaits into a single Parallel state.
+
+const getOrder = Lambda<{ orderId: string }, { status: string; total: number }>(
+  'arn:aws:lambda:us-east-1:123:function:GetOrder',
+);
+const getPayment = Lambda<{ orderId: string }, { paid: boolean; method: string }>(
+  'arn:aws:lambda:us-east-1:123:function:GetPayment',
+);
+
+export const deferredAwait = Steps.createFunction(
+  async (context: SimpleStepContext, input: { orderId: string }) => {
+    // Start both calls — not awaited yet (no state emitted)
+    const orderPromise = getOrder.call({ orderId: input.orderId });
+    const paymentPromise = getPayment.call({ orderId: input.orderId });
+
+    // Await both — compiler batches into a single Parallel state
+    const order = await orderPromise;
+    const payment = await paymentPromise;
+
+    return { order, payment };
+  },
+);
+` }] },
+
+  'retry-timeout': { description: 'Retry policies, timeouts, heartbeat, and typed error matching on service calls.', services: ['Lambda'], files: [{ name: 'workflow.ts', content: `import { Steps, SimpleStepContext, TimeoutError } from './runtime/index';
+import { Lambda } from './runtime/services/Lambda';
+
+// Retry, Timeout, and Heartbeat
+//
+// Service calls accept options for retry policies, execution timeouts,
+// and heartbeat intervals. These compile directly to ASL Task fields.
+// Catch blocks with instanceof check compile to typed Catch rules.
+
+const longTask = Lambda<{ jobId: string }, { status: string }>(
+  'arn:aws:lambda:us-east-1:123:function:LongRunningTask',
+);
+const alertService = Lambda<{ message: string }, void>(
+  'arn:aws:lambda:us-east-1:123:function:AlertService',
+);
+
+export const retryTimeout = Steps.createFunction(
+  async (context: SimpleStepContext, input: { jobId: string }) => {
+    try {
+      const result = await longTask.call({ jobId: input.jobId }, {
+        timeoutSeconds: 300,
+        heartbeatSeconds: 60,
+        retry: {
+          errorEquals: ['States.TaskFailed', 'States.Timeout'],
+          intervalSeconds: 5,
+          maxAttempts: 3,
+          backoffRate: 2,
+        },
+      });
+      return { status: result.status };
+    } catch (e) {
+      if (e instanceof TimeoutError) {
+        await alertService.call({ message: 'Task timed out' });
+        return { status: 'timeout' };
+      }
+      await alertService.call({ message: 'Task failed' });
+      return { status: 'error' };
+    }
+  },
+);
+` }] },
+
   // ── Services ──────────────────────────────────────────────────────────
 
   'multi-service': { description: 'Combine Lambda, DynamoDB, and SNS in one workflow.', services: ['Lambda', 'DynamoDB', 'SNS'], files: [
@@ -447,6 +655,42 @@ export const dynamoDbCrud = Steps.createFunction(
     await usersDb.putItem({ userId: input.userId, lastLogin: 'now' });
     await sessionsDb.deleteItem({ sessionId: input.sessionId });
     return { updated: true };
+  },
+);
+` }] },
+
+  'dynamodb-query-scan': { description: 'DynamoDB query, scan, and updateItem operations.', services: ['DynamoDB'], files: [{ name: 'workflow.ts', content: `import { Steps, SimpleStepContext } from './runtime/index';
+import { DynamoDB } from './runtime/services/DynamoDB';
+
+// DynamoDB Query, Scan, and Update
+//
+// Beyond basic CRUD (get/put/delete), DynamoDB supports
+// query (by key condition), scan (full table), and updateItem.
+
+const ordersDb = new DynamoDB('OrdersTable');
+
+export const dynamoDbQueryScan = Steps.createFunction(
+  async (context: SimpleStepContext, input: { userId: string; minAmount: number }) => {
+    // Query — retrieve items by partition key
+    const orders = await ordersDb.query<{ Items: any[] }>({
+      KeyConditionExpression: 'userId = :uid',
+      ExpressionAttributeValues: { ':uid': input.userId },
+    });
+
+    // Scan — full table scan with filter
+    const highValue = await ordersDb.scan<{ Items: any[] }>({
+      FilterExpression: 'amount > :min',
+      ExpressionAttributeValues: { ':min': input.minAmount },
+    });
+
+    // UpdateItem — update specific attributes
+    await ordersDb.updateItem({
+      Key: { userId: input.userId },
+      UpdateExpression: 'SET lastQueried = :now',
+      ExpressionAttributeValues: { ':now': 'today' },
+    });
+
+    return { orders, highValue };
   },
 );
 ` }] },
@@ -757,6 +1001,38 @@ export const jsPatterns = Steps.createFunction(
     const id = Steps.uuid();
 
     return { total, message, parts, parsed, serialized, hasItem, count, id };
+  },
+);
+` }] },
+
+  'spread-merge': { description: 'Object spread compiles to States.JsonMerge; Steps.merge() for deep merge.', services: ['Lambda'], files: [{ name: 'workflow.ts', content: `import { Steps, SimpleStepContext } from './runtime/index';
+import { Lambda } from './runtime/services/Lambda';
+
+// Object Spread / JsonMerge
+//
+// Object spread syntax { ...a, ...b } compiles to States.JsonMerge
+// (or $merge in JSONata mode). Steps.merge() provides explicit
+// merge with optional deep merge flag.
+
+const getDefaults = Lambda<{ type: string }, { color: string; size: string; priority: number }>(
+  'arn:aws:lambda:us-east-1:123:function:GetDefaults',
+);
+const getOverrides = Lambda<{ userId: string }, { color: string; label: string }>(
+  'arn:aws:lambda:us-east-1:123:function:GetOverrides',
+);
+
+export const spreadMerge = Steps.createFunction(
+  async (context: SimpleStepContext, input: { type: string; userId: string }) => {
+    const defaults = await getDefaults.call({ type: input.type });
+    const overrides = await getOverrides.call({ userId: input.userId });
+
+    // Spread → States.JsonMerge: overrides win on conflict
+    const combined = { ...defaults, ...overrides };
+
+    // Steps.merge() — explicit merge (deep: true for nested objects)
+    const deepMerged = Steps.merge(defaults, overrides, true);
+
+    return { combined, deepMerged };
   },
 );
 ` }] },
