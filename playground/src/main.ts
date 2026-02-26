@@ -916,11 +916,9 @@ export const queryLanguageExample = Steps.createFunction(
     const ids = input.items.map(item => item);
 
     // Service calls work identically in both modes
-    for (const item of input.items) {
-      await processFn.call({ item, total });
-    }
+    const processed = await processFn.call({ item: input.name, total });
 
-    return { greeting, count, upperName, product, ids };
+    return { greeting, count, upperName, product, ids, result: processed.result };
   },
 );
 ` }] },

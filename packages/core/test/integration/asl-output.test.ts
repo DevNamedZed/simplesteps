@@ -537,6 +537,7 @@ describe('ASL output: all fixtures compile cleanly', () => {
     'secrets-manager.ts',
     'ssm.ts',
     'ecs.ts',
+    'ecs-nested-params.ts',
     'bedrock.ts',
     'batch.ts',
     'glue.ts',
@@ -555,6 +556,11 @@ describe('ASL output: all fixtures compile cleanly', () => {
     'ternary-jsonpath.ts',
     'cdk-order-indirect-arn.ts',
     'steps-map-retry.ts',
+    'steps-merge-deep.ts',
+    'enum-values.ts',
+    'destructured-config.ts',
+    'do-while-loop.ts',
+    'catch-instanceof-noelse.ts',
   ];
 
   for (const fixture of fixtures) {
@@ -1534,6 +1540,33 @@ describe('ASL output: ecs', () => {
   it('injects Cluster in Task Parameters', () => {
     const tasks = getStatesByType(asl, 'Task');
     expect(tasks[0][1].Parameters.Cluster).toBe('arn:aws:ecs:us-east-1:123456789:cluster/my-cluster');
+  });
+});
+
+describe('ASL output: ecs-nested-params', () => {
+  it('compiles without errors when parameters have nested arrays with dynamic values', () => {
+    const filePath = path.join(FIXTURES_DIR, 'ecs-nested-params.ts');
+    const result = compile({ sourceFiles: [filePath], queryLanguage: 'JSONPath' });
+    const errorMsgs = result.errors.map(e => `[${e.code}] ${e.message}`);
+    expect(errorMsgs).toEqual([]);
+    expect(result.stateMachines.length).toBe(1);
+  });
+
+  it('produces nested ContainerOverrides with dynamic Environment values', () => {
+    const asl = compileToJson('ecs-nested-params.ts');
+    const tasks = getStatesByType(asl, 'Task');
+    const ecsTask = tasks.find(([, s]) =>
+      typeof s.Resource === 'string' && s.Resource.includes('ecs:runTask'));
+    expect(ecsTask).toBeDefined();
+    const overrides = ecsTask![1].Parameters.Overrides;
+    expect(overrides).toBeDefined();
+    expect(overrides.ContainerOverrides).toBeInstanceOf(Array);
+    expect(overrides.ContainerOverrides[0].Name).toBe('processor');
+    expect(overrides.ContainerOverrides[0].Environment).toBeInstanceOf(Array);
+    // Dynamic values should have .$ suffix keys in JSONPath mode
+    const env0 = overrides.ContainerOverrides[0].Environment[0];
+    expect(env0.Name).toBe('INPUT_KEY');
+    expect(env0['Value.$']).toBe('$.inputKey');
   });
 });
 
@@ -4161,6 +4194,7 @@ describe('Dual-mode: all core fixtures compile in JSONata mode', () => {
     'glue.ts',
     'athena.ts',
     'ecs.ts',
+    'ecs-nested-params.ts',
     'batch.ts',
     'codebuild.ts',
     'helper-basic.ts',
@@ -4198,6 +4232,11 @@ describe('Dual-mode: all core fixtures compile in JSONata mode', () => {
     'let-var-capture.ts',
     'pure-fn-arn.ts',
     'lambda-expressions.ts',
+    'steps-merge-deep.ts',
+    'enum-values.ts',
+    'destructured-config.ts',
+    'do-while-loop.ts',
+    'catch-instanceof-noelse.ts',
   ];
 
   for (const fixture of DUAL_MODE_FIXTURES) {
@@ -5245,6 +5284,217 @@ describe('ASL output: multiple rest patterns in one function', () => {
     } finally {
       fs.unlinkSync(fixturePath);
     }
+  });
+});
+
+// ===========================================================================
+// Steps.merge() 3-arg form (deep merge) in JSONata mode
+// ===========================================================================
+
+describe('ASL output: Steps.merge deep (JSONata)', () => {
+  let asl: any;
+  let allStrings: string[];
+  beforeAll(() => {
+    asl = compileFixtureJsonata('steps-merge-deep.ts');
+    allStrings = collectAllStringValues(asl.States);
+  });
+
+  it('compiles without errors', () => {
+    expect(asl).toBeDefined();
+    expect(Object.keys(asl.States).length).toBeGreaterThan(0);
+  });
+
+  it('has QueryLanguage: JSONata', () => {
+    expect(asl.QueryLanguage).toBe('JSONata');
+  });
+
+  it('contains States.JsonMerge intrinsic', () => {
+    expect(allStrings.find(v => v.includes('States.JsonMerge'))).toBeDefined();
+  });
+
+  it('passes true as third argument for deep merge', () => {
+    const mergeExpr = allStrings.find(v => v.includes('States.JsonMerge'));
+    expect(mergeExpr).toBeDefined();
+    expect(mergeExpr).toContain('true');
+  });
+});
+
+// ===========================================================================
+// Enum value resolution in JSONata mode
+// ===========================================================================
+
+describe('ASL output: enum values (JSONata)', () => {
+  let asl: any;
+  let allStrings: string[];
+  beforeAll(() => {
+    asl = compileFixtureJsonata('enum-values.ts');
+    allStrings = collectAllStringValues(asl.States);
+  });
+
+  it('compiles without errors', () => {
+    expect(asl).toBeDefined();
+    expect(Object.keys(asl.States).length).toBeGreaterThan(0);
+  });
+
+  it('has a Choice state comparing to literal ACTIVE', () => {
+    const choices = getStatesByType(asl, 'Choice');
+    expect(choices.length).toBeGreaterThanOrEqual(1);
+    const choiceStrings = collectAllStringValues(choices.map(([, s]) => s));
+    expect(choiceStrings.find(v => v.includes('ACTIVE'))).toBeDefined();
+  });
+
+  it('return value contains literal SHIPPED', () => {
+    // The Return_Result state should have the literal string 'SHIPPED'
+    expect(allStrings).toContain('SHIPPED');
+  });
+
+  it('does not contain raw enum member expressions', () => {
+    // Should not have OrderStatus.Active or OrderStatus.Shipped in output
+    for (const v of allStrings) {
+      expect(v).not.toContain('OrderStatus');
+    }
+  });
+});
+
+// ===========================================================================
+// Destructured config from object in JSONata mode
+// ===========================================================================
+
+describe('ASL output: destructured config (JSONata)', () => {
+  let asl: any;
+  let allStrings: string[];
+  beforeAll(() => {
+    asl = compileFixtureJsonata('destructured-config.ts');
+    allStrings = collectAllStringValues(asl.States);
+  });
+
+  it('compiles without errors', () => {
+    expect(asl).toBeDefined();
+    expect(Object.keys(asl.States).length).toBeGreaterThan(0);
+  });
+
+  it('Task state has retries: 3 as literal', () => {
+    const tasks = getStatesByType(asl, 'Task');
+    expect(tasks.length).toBeGreaterThanOrEqual(1);
+    const processTask = tasks.find(([, s]: any) =>
+      (s as any).Resource?.includes('ProcessOrder')
+    );
+    expect(processTask).toBeDefined();
+    const args = (processTask![1] as any).Arguments;
+    expect(args.retries).toBe(3);
+  });
+
+  it('return value includes timeout: 30000 as literal', () => {
+    // The Return_Result Pass state should have timeout: 30000
+    const passStates = getStatesByType(asl, 'Pass');
+    const returnState = passStates.find(([name]) => name.startsWith('Return_Result'));
+    expect(returnState).toBeDefined();
+    const output = (returnState![1] as any).Output;
+    expect(output.timeout).toBe(30000);
+  });
+});
+
+// ===========================================================================
+// Do-while loop with reassignment in JSONata mode
+// ===========================================================================
+
+describe('ASL output: do-while loop (JSONata)', () => {
+  let asl: any;
+  let allStrings: string[];
+  beforeAll(() => {
+    asl = compileFixtureJsonata('do-while-loop.ts');
+    allStrings = collectAllStringValues(asl.States);
+  });
+
+  it('compiles without errors', () => {
+    expect(asl).toBeDefined();
+    expect(Object.keys(asl.States).length).toBeGreaterThan(0);
+  });
+
+  it('has a Choice state for the do-while condition', () => {
+    const choices = getStatesByType(asl, 'Choice');
+    expect(choices.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('Choice state references poll.status and ready', () => {
+    const choices = getStatesByType(asl, 'Choice');
+    const choiceStrings = collectAllStringValues(choices.map(([, s]) => s));
+    expect(choiceStrings.find(v => v.includes('poll') && v.includes('status'))).toBeDefined();
+    expect(choiceStrings.find(v => v.includes('ready'))).toBeDefined();
+  });
+
+  it('starts with the poll task (do block runs first)', () => {
+    expect(asl.StartAt).toMatch(/poll/i);
+  });
+});
+
+// ===========================================================================
+// instanceof chain without else-if in catch blocks (JSONata)
+// ===========================================================================
+
+describe('ASL output: catch instanceof without else-if (JSONata)', () => {
+  let asl: any;
+  beforeAll(() => {
+    asl = compileFixtureJsonata('catch-instanceof-noelse.ts');
+  });
+
+  it('compiles without errors', () => {
+    expect(asl).toBeDefined();
+    expect(Object.keys(asl.States).length).toBeGreaterThan(0);
+  });
+
+  it('processFn Task has Catch with OrderNotFound', () => {
+    const tasks = getStatesByType(asl, 'Task');
+    const processTask = tasks.find(([, s]: any) =>
+      (s as any).Resource?.includes('ProcessOrder')
+    );
+    expect(processTask).toBeDefined();
+    const catchRules = (processTask![1] as any).Catch;
+    expect(catchRules).toBeDefined();
+    const errorTypes = catchRules.map((c: any) => c.ErrorEquals).flat();
+    expect(errorTypes).toContain('OrderNotFound');
+  });
+
+  it('processFn Task has Catch with PaymentFailed', () => {
+    const tasks = getStatesByType(asl, 'Task');
+    const processTask = tasks.find(([, s]: any) =>
+      (s as any).Resource?.includes('ProcessOrder')
+    );
+    expect(processTask).toBeDefined();
+    const catchRules = (processTask![1] as any).Catch;
+    const errorTypes = catchRules.map((c: any) => c.ErrorEquals).flat();
+    expect(errorTypes).toContain('PaymentFailed');
+  });
+
+  it('OrderNotFound catch routes to notifyFn', () => {
+    const tasks = getStatesByType(asl, 'Task');
+    const processTask = tasks.find(([, s]: any) =>
+      (s as any).Resource?.includes('ProcessOrder')
+    );
+    const catchRules = (processTask![1] as any).Catch;
+    const orderNotFoundCatch = catchRules.find(
+      (c: any) => c.ErrorEquals.includes('OrderNotFound')
+    );
+    expect(orderNotFoundCatch).toBeDefined();
+    // The Next should point to a state that invokes the Notify function
+    const targetState = asl.States[orderNotFoundCatch.Next];
+    expect(targetState).toBeDefined();
+    expect(targetState.Resource).toContain('Notify');
+  });
+
+  it('PaymentFailed catch routes to refundFn', () => {
+    const tasks = getStatesByType(asl, 'Task');
+    const processTask = tasks.find(([, s]: any) =>
+      (s as any).Resource?.includes('ProcessOrder')
+    );
+    const catchRules = (processTask![1] as any).Catch;
+    const paymentFailedCatch = catchRules.find(
+      (c: any) => c.ErrorEquals.includes('PaymentFailed')
+    );
+    expect(paymentFailedCatch).toBeDefined();
+    const targetState = asl.States[paymentFailedCatch.Next];
+    expect(targetState).toBeDefined();
+    expect(targetState.Resource).toContain('Refund');
   });
 });
 

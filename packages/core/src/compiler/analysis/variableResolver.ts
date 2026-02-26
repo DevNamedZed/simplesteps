@@ -124,6 +124,54 @@ export function resolveVariables(
       if (!ts.isVariableStatement(stmt)) continue;
       for (const decl of stmt.declarationList.declarations) {
         if (!decl.initializer) continue;
+
+        // Destructuring: const { a, b } = obj → resolve each binding from the object
+        if (ts.isObjectBindingPattern(decl.name)) {
+          // Evaluate the initializer (the right side of the destructuring)
+          const initSym = ts.isIdentifier(decl.initializer)
+            ? context.checker.getSymbolAtLocation(decl.initializer)
+            : undefined;
+          let baseObj: Record<string, unknown> | undefined;
+          if (initSym) {
+            const existing = builder.getBySymbol(initSym);
+            if (existing?.literalValue && typeof existing.literalValue === 'object') {
+              baseObj = existing.literalValue as Record<string, unknown>;
+            } else {
+              const latticeVal = env.resolve(initSym);
+              if (isConstant(latticeVal) && typeof latticeVal.value === 'object' && latticeVal.value !== null) {
+                baseObj = latticeVal.value as Record<string, unknown>;
+              }
+            }
+          } else {
+            const latticeVal = analyzer.evaluateExpression(decl.initializer, sourceFile);
+            if (isConstant(latticeVal) && typeof latticeVal.value === 'object' && latticeVal.value !== null) {
+              baseObj = latticeVal.value as Record<string, unknown>;
+            }
+          }
+          if (baseObj) {
+            for (const elem of decl.name.elements) {
+              if (!ts.isIdentifier(elem.name)) continue;
+              const propName = elem.propertyName
+                ? (ts.isIdentifier(elem.propertyName) ? elem.propertyName.text : undefined)
+                : elem.name.text;
+              if (!propName) continue;
+              const bindSym = context.checker.getSymbolAtLocation(elem.name);
+              if (!bindSym || builder.getBySymbol(bindSym)) continue;
+              const val = baseObj[propName];
+              if (val !== undefined) {
+                builder.addVariable(bindSym, {
+                  symbol: bindSym,
+                  type: StepVariableType.Constant,
+                  definitelyAssigned: true,
+                  constant: true,
+                  literalValue: val,
+                });
+              }
+            }
+          }
+          continue;
+        }
+
         if (!ts.isIdentifier(decl.name)) continue;
 
         const sym = context.checker.getSymbolAtLocation(decl.name);
@@ -187,14 +235,46 @@ export function resolveVariables(
       }
     }
 
+    // Resolve enum declarations — register enum symbols as constant objects
+    for (const stmt of sourceFile.statements) {
+      if (!ts.isEnumDeclaration(stmt)) continue;
+      const enumSym = context.checker.getSymbolAtLocation(stmt.name);
+      if (!enumSym) continue;
+      if (builder.getBySymbol(enumSym)) continue;
+      const latticeVal = env.resolve(enumSym);
+      if (isConstant(latticeVal)) {
+        builder.addVariable(enumSym, {
+          symbol: enumSym,
+          type: StepVariableType.Constant,
+          definitelyAssigned: true,
+          constant: true,
+          literalValue: latticeVal.value,
+        });
+      }
+    }
+
     // Also resolve imported constants and service bindings via WPA
     for (const stmt of sourceFile.statements) {
       if (!ts.isImportDeclaration(stmt)) continue;
-      if (!stmt.importClause?.namedBindings) continue;
-      if (!ts.isNamedImports(stmt.importClause.namedBindings)) continue;
+      if (!stmt.importClause) continue;
 
-      for (const spec of stmt.importClause.namedBindings.elements) {
-        const sym = context.checker.getSymbolAtLocation(spec.name);
+      // Collect import specifiers: named imports + default import
+      const importSpecs: ts.Identifier[] = [];
+
+      // Default import: import validateFn from './services'
+      if (stmt.importClause.name) {
+        importSpecs.push(stmt.importClause.name);
+      }
+
+      // Named imports: import { validateFn, ordersDb } from './services'
+      if (stmt.importClause.namedBindings && ts.isNamedImports(stmt.importClause.namedBindings)) {
+        for (const spec of stmt.importClause.namedBindings.elements) {
+          importSpecs.push(spec.name);
+        }
+      }
+
+      for (const specName of importSpecs) {
+        const sym = context.checker.getSymbolAtLocation(specName);
         if (!sym) continue;
         if (builder.getBySymbol(sym)) continue; // already classified
 
@@ -208,7 +288,7 @@ export function resolveVariables(
           if (decl.initializer) {
             const serviceMatch = matchServiceBinding(context, decl.initializer, serviceRegistry);
             if (serviceMatch) {
-              const varName = spec.name.text;
+              const varName = specName.text;
               let resourceValue: unknown = substitutions?.[varName] ?? serviceMatch.resourceArn;
 
               // If simple ARN extraction failed, try WPA evaluation
@@ -286,14 +366,49 @@ export function resolveVariables(
       }
     }
 
+    // Resolve enum declarations (fallback: use checker to get enum member values)
+    for (const stmt of sourceFile.statements) {
+      if (!ts.isEnumDeclaration(stmt)) continue;
+      const enumSym = context.checker.getSymbolAtLocation(stmt.name);
+      if (!enumSym) continue;
+      if (builder.getBySymbol(enumSym)) continue;
+      const enumObj: Record<string, unknown> = {};
+      for (const member of stmt.members) {
+        const name = ts.isIdentifier(member.name) ? member.name.text
+          : ts.isStringLiteral(member.name) ? member.name.text
+          : undefined;
+        if (!name) continue;
+        const constVal = context.checker.getConstantValue(member);
+        if (constVal !== undefined) {
+          enumObj[name] = constVal;
+        }
+      }
+      builder.addVariable(enumSym, {
+        symbol: enumSym,
+        type: StepVariableType.Constant,
+        definitelyAssigned: true,
+        constant: true,
+        literalValue: enumObj,
+      });
+    }
+
     // Also resolve imported service bindings (without WPA)
     for (const stmt of sourceFile.statements) {
       if (!ts.isImportDeclaration(stmt)) continue;
-      if (!stmt.importClause?.namedBindings) continue;
-      if (!ts.isNamedImports(stmt.importClause.namedBindings)) continue;
+      if (!stmt.importClause) continue;
 
-      for (const spec of stmt.importClause.namedBindings.elements) {
-        const sym = context.checker.getSymbolAtLocation(spec.name);
+      const importSpecs: ts.Identifier[] = [];
+      if (stmt.importClause.name) {
+        importSpecs.push(stmt.importClause.name);
+      }
+      if (stmt.importClause.namedBindings && ts.isNamedImports(stmt.importClause.namedBindings)) {
+        for (const spec of stmt.importClause.namedBindings.elements) {
+          importSpecs.push(spec.name);
+        }
+      }
+
+      for (const specName of importSpecs) {
+        const sym = context.checker.getSymbolAtLocation(specName);
         if (!sym) continue;
         if (builder.getBySymbol(sym)) continue;
 
@@ -306,7 +421,7 @@ export function resolveVariables(
           if (decl.initializer) {
             const serviceMatch = matchServiceBinding(context, decl.initializer, serviceRegistry);
             if (serviceMatch) {
-              const varName = spec.name.text;
+              const varName = specName.text;
               const resourceValue = substitutions?.[varName] ?? serviceMatch.resourceArn;
               builder.addVariable(sym, {
                 symbol: sym,
@@ -431,6 +546,14 @@ export function resolveExpression(
       // Special case: input.field → $.field (not $.input.field)
       // because input maps to '$' directly
       return { kind: 'jsonpath', path: `${base.path}.${propName}` };
+    }
+
+    // Constant object property access: e.g. OrderStatus.Shipped → 'SHIPPED'
+    if (base.kind === 'literal' && typeof base.value === 'object' && base.value !== null) {
+      const val = (base.value as Record<string, unknown>)[propName];
+      if (val !== undefined) {
+        return { kind: 'literal', value: val };
+      }
     }
 
     return { kind: 'unknown' };
@@ -1422,6 +1545,11 @@ function resolveJsonataStepsCall(
       break;
     case 'merge':
       if (serialized.length === 2) return { kind: 'intrinsic', path: `$merge([${serialized[0]}, ${serialized[1]}])` };
+      if (serialized.length === 3) {
+        // 3-arg form: Steps.merge(a, b, deep) — fall through to States.JsonMerge intrinsic
+        const fallbackIntrinsic = STEPS_TO_INTRINSIC[methodName];
+        if (fallbackIntrinsic) return buildIntrinsicFromArgs(context, fallbackIntrinsic, args, variables, dialect);
+      }
       break;
     // Keep as States.* intrinsics (no clean JSONata equivalent)
     case 'hash':
@@ -1736,8 +1864,8 @@ function resolveJsonataBinaryExpression(
   }
 
   // Parenthesize compound sub-expressions for correct precedence
-  const wrapL = left.kind === 'intrinsic' && /[+\-*/%&=<>!]|and|or/.test(leftStr) ? `(${leftStr})` : leftStr;
-  const wrapR = right.kind === 'intrinsic' && /[+\-*/%&=<>!]|and|or/.test(rightStr) ? `(${rightStr})` : rightStr;
+  const wrapL = left.kind === 'intrinsic' && /[+\-*/%&=<>!]|\band\b|\bor\b/.test(leftStr) ? `(${leftStr})` : leftStr;
+  const wrapR = right.kind === 'intrinsic' && /[+\-*/%&=<>!]|\band\b|\bor\b/.test(rightStr) ? `(${rightStr})` : rightStr;
 
   // Detect string types for + → & (concatenation)
   if (op === ts.SyntaxKind.PlusToken) {

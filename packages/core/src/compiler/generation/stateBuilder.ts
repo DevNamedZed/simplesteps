@@ -493,6 +493,19 @@ function processAwaitReassignment(
         if (varName) {
           resultAssignment = ctx.dialect.emitResultAssignment(varName);
         }
+      } else if (!varInfo) {
+        // Variable not yet registered (e.g. `let x; ... x = await svc.call(...)`)
+        // Register it as a new StateOutput
+        const varName = expr.left.text;
+        const varPath = ctx.dialect.variablePath(varName);
+        resultAssignment = ctx.dialect.emitResultAssignment(varName);
+        ctx.variables.addVariable(sym, {
+          symbol: sym,
+          type: StepVariableType.StateOutput,
+          jsonPath: varPath,
+          definitelyAssigned: true,
+          constant: false,
+        });
       }
     }
   }

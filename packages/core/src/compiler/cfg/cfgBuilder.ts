@@ -1002,6 +1002,9 @@ function extractInstanceofChain(
   const handlers: InstanceofHandler[] = [];
   let fallbackStatements: ts.Statement[] = [];
 
+  // Track which top-level statement index we've consumed
+  let stmtIndex = 0;
+
   let current: ts.IfStatement | undefined = firstStmt;
   while (current) {
     const className = extractInstanceofClassName(current.expression, catchParamName);
@@ -1026,14 +1029,27 @@ function extractInstanceofChain(
         current = undefined;
       }
     } else {
-      // No else — done
+      // No else — check if the NEXT statement is also an instanceof check
+      // This handles: if (e instanceof A) { ... } if (e instanceof B) { ... }
       current = undefined;
+      stmtIndex++;
+      while (stmtIndex < statements.length) {
+        const nextStmt = statements[stmtIndex];
+        if (ts.isIfStatement(nextStmt) && isInstanceofCheck(nextStmt.expression, catchParamName)) {
+          current = nextStmt;
+          break;
+        } else {
+          // Non-instanceof statement — stop scanning
+          break;
+        }
+      }
     }
   }
 
-  // Include any remaining statements after the if chain as part of the fallback
-  if (statements.length > 1) {
-    fallbackStatements = [...fallbackStatements, ...statements.slice(1)];
+  // Include any remaining statements after the consumed if-chain as part of the fallback
+  const remainingStart = stmtIndex + 1;
+  if (remainingStart < statements.length) {
+    fallbackStatements = [...fallbackStatements, ...statements.slice(remainingStart)];
   }
 
   return handlers.length > 0 ? { handlers, fallbackStatements } : null;

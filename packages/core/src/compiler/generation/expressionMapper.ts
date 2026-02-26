@@ -93,6 +93,12 @@ export function buildParameters(
       continue;
     }
 
+    // Array literal: recurse into each element
+    if (ts.isArrayLiteralExpression(prop.initializer)) {
+      result[propName] = buildParameterArray(context, prop.initializer, variables, dialect);
+      continue;
+    }
+
     const resolved = resolveExpression(context, prop.initializer, variables, dialect);
 
     switch (resolved.kind) {
@@ -120,6 +126,50 @@ export function buildParameters(
   }
 
   return result;
+}
+
+/**
+ * Convert a TS array literal to an ASL-compatible array.
+ * Object elements are recursed via buildParameters; scalar elements
+ * are resolved normally. This allows nested structures like
+ * ContainerOverrides: [{ Name: 'x', Environment: [...] }].
+ */
+function buildParameterArray(
+  context: CompilerContext,
+  expr: ts.ArrayLiteralExpression,
+  variables: VariableResolution,
+  dialect: PathDialect,
+): unknown[] {
+  const arr: unknown[] = [];
+  for (const elem of expr.elements) {
+    if (ts.isObjectLiteralExpression(elem)) {
+      arr.push(buildParameters(context, elem, variables, dialect));
+    } else if (ts.isArrayLiteralExpression(elem)) {
+      arr.push(buildParameterArray(context, elem, variables, dialect));
+    } else {
+      const resolved = resolveExpression(context, elem, variables, dialect);
+      switch (resolved.kind) {
+        case 'literal':
+          arr.push(resolved.value);
+          break;
+        case 'jsonpath':
+        case 'intrinsic':
+          arr.push(dialect.wrapDynamicValue(resolved.path!));
+          break;
+        default: {
+          const exprText = elem.getText().substring(0, 80);
+          context.addError(
+            elem,
+            `Cannot resolve '${exprText}' to an ASL value. ` +
+            `Expressions must be input references (input.x), service call results, ` +
+            `compile-time constants, or ASL intrinsic functions (Steps.format, Steps.add, etc.).`,
+            ErrorCodes.Expr.UncompilableExpression.code,
+          );
+        }
+      }
+    }
+  }
+  return arr;
 }
 
 // ---------------------------------------------------------------------------
