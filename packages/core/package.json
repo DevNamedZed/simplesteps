@@ -1,6 +1,6 @@
 {
   "name": "@simplesteps/core",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "TypeScript-to-ASL compiler for AWS Step Functions",
   "keywords": ["aws", "step-functions", "asl", "compiler", "typescript", "serverless", "state-machine"],
   "license": "MIT",
