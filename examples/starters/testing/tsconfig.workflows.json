@@ -1,0 +1,26 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "Node16",
+    "moduleResolution": "Node16",
+    "strict": true,
+    "esModuleInterop": true,
+    "experimentalDecorators": true,
+    "skipLibCheck": true,
+    "paths": {
+      "@simplesteps/core/runtime": ["../../../packages/core/src/runtime/index.ts"],
+      "@simplesteps/core/runtime/services": ["../../../packages/core/src/runtime/services/index.ts"]
+    }
+  },
+  "include": ["workflows/**/*.ts"],
+  "files": [
+    "../../../packages/core/src/runtime/index.ts",
+    "../../../packages/core/src/runtime/services/index.ts",
+    "../../../packages/core/src/runtime/services/Lambda.ts",
+    "../../../packages/core/src/runtime/services/DynamoDB.ts",
+    "../../../packages/core/src/runtime/services/SimpleQueueService.ts",
+    "../../../packages/core/src/runtime/services/SNS.ts",
+    "../../../packages/core/src/runtime/services/StepFunction.ts",
+    "../../../packages/core/src/runtime/services/EventBridge.ts"
+  ]
+}

@@ -1,0 +1,42 @@
+{
+  "name": "@simplesteps/local",
+  "version": "0.1.1",
+  "description": "Local execution runtime for SimpleSteps — test AWS Step Functions workflows locally with mock services",
+  "keywords": ["aws", "step-functions", "asl", "local", "testing", "mock", "simplesteps"],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/DevNamedZed/simplesteps.git",
+    "directory": "packages/local"
+  },
+  "homepage": "https://github.com/DevNamedZed/simplesteps#readme",
+  "bugs": {
+    "url": "https://github.com/DevNamedZed/simplesteps/issues"
+  },
+  "files": [
+    "dist",
+    "LICENSE"
+  ],
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@simplesteps/core": "0.1.1",
+    "jsonata": "^2.0.5"
+  },
+  "peerDependencies": {
+    "typescript": ">=5.4.3"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3"
+  }
+}

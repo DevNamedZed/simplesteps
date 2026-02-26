@@ -8,6 +8,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "jsonata": "^2.0.5",
     "monaco-editor": "^0.52.2"
   },
   "devDependencies": {

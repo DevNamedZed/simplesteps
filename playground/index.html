@@ -15,6 +15,7 @@
         <input type="checkbox" id="auto-compile" checked />
         Auto
       </label>
+      <button id="run-btn" title="Execute the compiled ASL">&#9654; Run</button>
       <button id="examples-btn">
         <span id="currentExample">Sequential</span>
         <span class="examples-arrow">&#9662;</span>
@@ -37,7 +38,14 @@
     <button id="file-tree-toggle" class="panel-toggle panel-toggle-left" title="Toggle file tree">&#x25B6;</button>
     <main>
       <div id="editor-container"></div>
-      <div id="output-container"></div>
+      <div id="output-wrapper">
+        <div id="output-tabs">
+          <button class="output-tab active" data-tab="asl">ASL</button>
+          <button class="output-tab" data-tab="execution">Execution</button>
+        </div>
+        <div id="output-container"></div>
+        <div id="execution-container" style="display:none"></div>
+      </div>
     </main>
   </div>
   <footer id="console-panel">

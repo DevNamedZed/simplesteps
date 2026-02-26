@@ -427,6 +427,38 @@ describe('ASL output: multi-service', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Cross-file imported service bindings
+// ---------------------------------------------------------------------------
+
+describe('ASL output: cross-file imported services', () => {
+  let asl: any;
+  beforeAll(() => { asl = compileToJson('cross-file-import.ts'); });
+
+  it('compiles without errors when services are imported from another file', () => {
+    expect(asl).toBeDefined();
+    expect(asl.States).toBeDefined();
+  });
+
+  it('has Task states for all three imported services', () => {
+    const tasks = getStatesByType(asl, 'Task');
+    expect(tasks.length).toBeGreaterThanOrEqual(3);
+  });
+
+  it('resolves the Lambda ARN from the imported service binding', () => {
+    const tasks = getStatesByType(asl, 'Task');
+    const lambdaTask = tasks.find(([, s]) =>
+      typeof s.Resource === 'string' && s.Resource.includes('lambda'));
+    expect(lambdaTask).toBeDefined();
+    expect(lambdaTask![1].Resource).toBe('arn:aws:lambda:us-east-1:123:function:ValidateOrder');
+  });
+
+  it('builds a Choice state for the cross-file validation.valid condition', () => {
+    const choices = getStatesByType(asl, 'Choice');
+    expect(choices.length).toBeGreaterThanOrEqual(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Service bindings with ARN via identifier reference (not string literal)
 // ---------------------------------------------------------------------------
 
@@ -489,6 +521,7 @@ describe('ASL output: all fixtures compile cleanly', () => {
     'for-of.ts',
     'nested.ts',
     'multi-service.ts',
+    'cross-file-import.ts',
     'and-or-conditions.ts',
     'wait-state.ts',
     'switch-case.ts',
@@ -4122,6 +4155,7 @@ describe('Dual-mode: all core fixtures compile in JSONata mode', () => {
     'try-catch-specific.ts',
     'js-intrinsics.ts',
     'multi-service.ts',
+    'cross-file-import.ts',
     'template-substitutions.ts',
     'bedrock.ts',
     'glue.ts',

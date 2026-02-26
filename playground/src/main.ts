@@ -7,6 +7,7 @@
 import * as monaco from 'monaco-editor';
 import { compileFromFiles } from './compiler-bridge';
 import { getRuntimeSources } from './virtual-fs';
+import { initExecutionPanel, updateAsl } from './execution';
 
 // ── Configure Monaco workers (self-hosted via Vite) ─────────────────────
 
@@ -52,6 +53,7 @@ const CATEGORY_ICONS: Record<string, string> = {
   'CDK Patterns': '\u{1F4E6}',
   'Multi-Service Patterns': '\u{26A1}',
   'JSONata Features': '\u{2728}',
+  'Testing': '\u{1F9EA}',
   'Limitations': '\u{1F6A7}',
 };
 
@@ -112,6 +114,12 @@ const EXAMPLE_CATEGORIES: ExampleCategory[] = [
     keys: [
       'ecs-s3-pipeline', 'bedrock-dynamodb-ai', 'error-handling-retry',
       'batch-fan-out',
+    ],
+  },
+  {
+    label: 'Testing',
+    keys: [
+      'test-compile-validate', 'test-mock-services', 'test-trace-inspection',
     ],
   },
   {
@@ -3480,6 +3488,123 @@ export const workarounds = Steps.createFunction(
   },
 );
 ` }] },
+
+  // ── Testing ──────────────────────────────────────────────────────────
+
+  'test-compile-validate': { description: 'Compile a workflow and validate the ASL structure.', services: ['Lambda'], files: [{ name: 'workflow.ts', content: `import { Steps, SimpleStepContext } from './runtime/index';
+import { Lambda } from './runtime/services/Lambda';
+
+const processFn = Lambda<{ id: string }, { result: string }>(
+  'arn:aws:lambda:us-east-1:123:function:Process',
+);
+
+export const workflow = Steps.createFunction(
+  async (context: SimpleStepContext, input: { id: string }) => {
+    const result = await processFn.call({ id: input.id });
+    return { output: result.result };
+  },
+);
+
+// --- Test pattern: Compile & Validate -----------------
+// import { compile, AslSerializer } from '@simplesteps/core';
+// import { LocalRunner } from '@simplesteps/local';
+//
+// const result = compile({ sourceFiles: ['./workflow.ts'] });
+// expect(result.errors).toHaveLength(0);
+// expect(result.stateMachines[0].definition.StartAt).toBeDefined();
+//
+// const runner = new LocalRunner(aslJson, {
+//   services: {
+//     'arn:aws:lambda:*:*:function:Process': (input) => ({
+//       result: 'processed-' + input.id,
+//     }),
+//   },
+// });
+// const output = await runner.execute({ id: '123' });
+// expect(output.output).toBe('processed-123');
+` }] },
+
+  'test-mock-services': { description: 'Mock service implementations to test different paths.', services: ['Lambda'], files: [{ name: 'workflow.ts', content: `import { Steps, SimpleStepContext } from './runtime/index';
+import { Lambda } from './runtime/services/Lambda';
+
+const validateFn = Lambda<{ data: string }, { valid: boolean }>(
+  'arn:aws:lambda:us-east-1:123:function:Validate',
+);
+const processFn = Lambda<{ data: string }, { result: string }>(
+  'arn:aws:lambda:us-east-1:123:function:Process',
+);
+
+export const workflow = Steps.createFunction(
+  async (context: SimpleStepContext, input: { data: string }) => {
+    const check = await validateFn.call({ data: input.data });
+    if (check.valid) {
+      const result = await processFn.call({ data: input.data });
+      return { status: 'processed', result: result.result };
+    } else {
+      return { status: 'rejected' };
+    }
+  },
+);
+
+// --- Test pattern: Mock Services ----------------------
+// Test the valid path:
+//   services['Validate'] = () => ({ valid: true })
+//   services['Process'] = () => ({ result: 'done' })
+//   expect(output.status).toBe('processed')
+//
+// Test the invalid path:
+//   services['Validate'] = () => ({ valid: false })
+//   expect(output.status).toBe('rejected')
+//
+// Verify Process is NOT called for invalid input:
+//   let processCalled = false;
+//   services['Process'] = () => { processCalled = true; };
+//   expect(processCalled).toBe(false);
+` }] },
+
+  'test-trace-inspection': { description: 'Use executeWithTrace() to inspect execution order and timing.', services: ['Lambda'], files: [{ name: 'workflow.ts', content: `import { Steps, SimpleStepContext } from './runtime/index';
+import { Lambda } from './runtime/services/Lambda';
+
+const stepA = Lambda<{ id: string }, { a: string }>(
+  'arn:aws:lambda:us-east-1:123:function:StepA',
+);
+const stepB = Lambda<{ a: string }, { b: string }>(
+  'arn:aws:lambda:us-east-1:123:function:StepB',
+);
+const stepC = Lambda<{ b: string }, { c: string }>(
+  'arn:aws:lambda:us-east-1:123:function:StepC',
+);
+
+export const workflow = Steps.createFunction(
+  async (context: SimpleStepContext, input: { id: string }) => {
+    const a = await stepA.call({ id: input.id });
+    const b = await stepB.call({ a: a.a });
+    const c = await stepC.call({ b: b.b });
+    return { result: c.c };
+  },
+);
+
+// --- Test pattern: Trace Inspection -------------------
+// const { output, trace } = await runner.executeWithTrace(input);
+//
+// Verify execution succeeded:
+//   expect(trace.error).toBeUndefined();
+//
+// Check state ordering:
+//   const names = trace.states.map(s => s.name);
+//   expect(names).toContain('Invoke_stepA');
+//
+// Check step count:
+//   expect(trace.totalSteps).toBe(trace.states.length);
+//
+// Inspect individual states:
+//   const tasks = trace.states.filter(s => s.type === 'Task');
+//   for (const task of tasks) {
+//     expect(task.input).toBeDefined();
+//     expect(task.output).toBeDefined();
+//     expect(task.duration).toBeGreaterThanOrEqual(0);
+//   }
+` }] },
 };
 
 const DEFAULT_EXAMPLE = 'sequential';
@@ -3634,6 +3759,9 @@ function runCompile() {
     // Update output panel
     outputEditor.setValue(result.json);
 
+    // Update execution panel with current ASL
+    updateAsl(result.json);
+
     // Map diagnostics to Monaco markers on the input editor
     const model = inputEditor.getModel();
     if (model) {
@@ -3744,6 +3872,11 @@ const consoleStatusText = document.getElementById('console-status-text')!;
 const consoleToggle = document.getElementById('console-toggle')!;
 const consoleOutput = document.getElementById('console-output')!;
 
+// Execution panel elements
+const executionContainer = document.getElementById('execution-container')!;
+const outputTabs = document.querySelectorAll<HTMLButtonElement>('.output-tab');
+const runBtnHeader = document.getElementById('run-btn')!;
+
 let isConsoleExpanded = false;
 
 if (__REPO_URL__) {
@@ -3753,6 +3886,41 @@ if (__REPO_URL__) {
 }
 
 compileBtn.addEventListener('click', runCompile);
+
+// ── Execution panel ──────────────────────────────────────────────────────
+
+initExecutionPanel(executionContainer);
+
+// Tab switching between ASL and Execution views
+outputTabs.forEach(tab => {
+  tab.addEventListener('click', () => {
+    const target = tab.dataset.tab;
+    outputTabs.forEach(t => t.classList.remove('active'));
+    tab.classList.add('active');
+    if (target === 'asl') {
+      outputContainer.style.display = '';
+      executionContainer.style.display = 'none';
+    } else {
+      outputContainer.style.display = 'none';
+      executionContainer.style.display = '';
+    }
+  });
+});
+
+// Run button in header — switch to execution tab and run
+runBtnHeader.addEventListener('click', () => {
+  // Ensure we have fresh compilation
+  runCompile();
+  // Switch to execution tab
+  outputTabs.forEach(t => t.classList.remove('active'));
+  const execTab = document.querySelector('.output-tab[data-tab="execution"]') as HTMLButtonElement;
+  if (execTab) execTab.classList.add('active');
+  outputContainer.style.display = 'none';
+  executionContainer.style.display = '';
+  // Trigger the execution run button inside the panel
+  const execRunBtn = document.getElementById('exec-run-btn') as HTMLButtonElement;
+  if (execRunBtn) execRunBtn.click();
+});
 
 // File tree toggle
 fileTreeToggle.addEventListener('click', () => {

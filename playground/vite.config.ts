@@ -15,6 +15,7 @@ export default defineConfig({
   resolve: {
     alias: {
       '@simplesteps/core': path.resolve(__dirname, '../packages/core/src'),
+      '@simplesteps/local': path.resolve(__dirname, '../packages/local/src'),
     },
   },
   // Allow importing from outside the root (packages/core)

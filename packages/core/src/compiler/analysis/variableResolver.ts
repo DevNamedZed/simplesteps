@@ -187,7 +187,7 @@ export function resolveVariables(
       }
     }
 
-    // Also resolve imported constants via WPA
+    // Also resolve imported constants and service bindings via WPA
     for (const stmt of sourceFile.statements) {
       if (!ts.isImportDeclaration(stmt)) continue;
       if (!stmt.importClause?.namedBindings) continue;
@@ -197,6 +197,44 @@ export function resolveVariables(
         const sym = context.checker.getSymbolAtLocation(spec.name);
         if (!sym) continue;
         if (builder.getBySymbol(sym)) continue; // already classified
+
+        // Follow import alias to the original declaration and check for service bindings
+        const originalSym = sym.flags & ts.SymbolFlags.Alias
+          ? context.checker.getAliasedSymbol(sym)
+          : sym;
+
+        if (originalSym?.valueDeclaration && ts.isVariableDeclaration(originalSym.valueDeclaration)) {
+          const decl = originalSym.valueDeclaration;
+          if (decl.initializer) {
+            const serviceMatch = matchServiceBinding(context, decl.initializer, serviceRegistry);
+            if (serviceMatch) {
+              const varName = spec.name.text;
+              let resourceValue: unknown = substitutions?.[varName] ?? serviceMatch.resourceArn;
+
+              // If simple ARN extraction failed, try WPA evaluation
+              if (resourceValue === undefined) {
+                const arnArg = getServiceArnArgument(decl.initializer);
+                if (arnArg) {
+                  const origFile = decl.getSourceFile();
+                  const latticeVal = analyzer.evaluateExpression(arnArg, origFile);
+                  if (isConstant(latticeVal) && typeof latticeVal.value === 'string') {
+                    resourceValue = latticeVal.value;
+                  }
+                }
+              }
+
+              builder.addVariable(sym, {
+                symbol: sym,
+                type: StepVariableType.External,
+                definitelyAssigned: true,
+                constant: true,
+                serviceBinding: serviceMatch.serviceName,
+                literalValue: resourceValue,
+              });
+              continue;
+            }
+          }
+        }
 
         const latticeVal = env.resolve(sym);
         if (isConstant(latticeVal)) {
@@ -243,6 +281,42 @@ export function resolveVariables(
               constant: true,
               literalValue: constValue,
             });
+          }
+        }
+      }
+    }
+
+    // Also resolve imported service bindings (without WPA)
+    for (const stmt of sourceFile.statements) {
+      if (!ts.isImportDeclaration(stmt)) continue;
+      if (!stmt.importClause?.namedBindings) continue;
+      if (!ts.isNamedImports(stmt.importClause.namedBindings)) continue;
+
+      for (const spec of stmt.importClause.namedBindings.elements) {
+        const sym = context.checker.getSymbolAtLocation(spec.name);
+        if (!sym) continue;
+        if (builder.getBySymbol(sym)) continue;
+
+        const originalSym = sym.flags & ts.SymbolFlags.Alias
+          ? context.checker.getAliasedSymbol(sym)
+          : sym;
+
+        if (originalSym?.valueDeclaration && ts.isVariableDeclaration(originalSym.valueDeclaration)) {
+          const decl = originalSym.valueDeclaration;
+          if (decl.initializer) {
+            const serviceMatch = matchServiceBinding(context, decl.initializer, serviceRegistry);
+            if (serviceMatch) {
+              const varName = spec.name.text;
+              const resourceValue = substitutions?.[varName] ?? serviceMatch.resourceArn;
+              builder.addVariable(sym, {
+                symbol: sym,
+                type: StepVariableType.External,
+                definitelyAssigned: true,
+                constant: true,
+                serviceBinding: serviceMatch.serviceName,
+                literalValue: resourceValue,
+              });
+            }
           }
         }
       }

@@ -7,12 +7,15 @@ module.exports = {
   collectCoverageFrom: [
     'packages/core/src/**/*.ts',
     'packages/cdk/src/**/*.ts',
+    'packages/local/src/**/*.ts',
     '!**/*.d.ts',
   ],
   roots: [
     '<rootDir>/packages/core/test',
     '<rootDir>/packages/cdk/test',
+    '<rootDir>/packages/local/test',
     '<rootDir>/examples/starters/cdk/test',
+    '<rootDir>/examples/starters/testing/test',
   ],
   moduleNameMapper: {
     // Strip .js extensions from TypeScript ESM-style imports
@@ -27,6 +30,9 @@ module.exports = {
     // Map @simplesteps/cdk barrel imports
     '^@simplesteps/cdk$': '<rootDir>/packages/cdk/src/index',
     '^@simplesteps/cdk/(.+)$': '<rootDir>/packages/cdk/src/$1',
+    // Map @simplesteps/local barrel imports
+    '^@simplesteps/local$': '<rootDir>/packages/local/src/index',
+    '^@simplesteps/local/(.+)$': '<rootDir>/packages/local/src/$1',
   },
   transform: {
     '^.+\\.tsx?$': ['ts-jest', {
@@ -46,6 +52,8 @@ module.exports = {
           '@simplesteps/core/*': ['packages/core/src/*'],
           '@simplesteps/cdk': ['packages/cdk/src/index'],
           '@simplesteps/cdk/*': ['packages/cdk/src/*'],
+          '@simplesteps/local': ['packages/local/src/index'],
+          '@simplesteps/local/*': ['packages/local/src/*'],
         },
       },
     }],
