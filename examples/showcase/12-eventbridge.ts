@@ -22,7 +22,11 @@ const eventBus = new EventBridge('MyAppBus');
 export const eventBridgeExample = Steps.createFunction(
   async (context: SimpleStepContext, input: { orderId: string }) => {
     const order = await processFn.call({ orderId: input.orderId });
-    await eventBus.putEvent({ orderId: input.orderId, status: 'processed' });
+    await eventBus.putEvent({
+      source: 'myapp.orders',
+      detailType: 'OrderProcessed',
+      detail: { orderId: input.orderId, status: 'processed' },
+    });
     return { published: true };
   },
 );

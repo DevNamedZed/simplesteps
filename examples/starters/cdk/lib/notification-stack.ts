@@ -64,9 +64,11 @@ export class NotificationStack extends cdk.Stack {
           }
 
           await orders.putItem({
-            orderId: input.orderId,
-            amount: input.amount,
-            status: 'CONFIRMED',
+            Item: {
+              orderId: { S: input.orderId },
+              amount: { N: String(input.amount) },
+              status: { S: 'CONFIRMED' },
+            },
           });
 
           await notifications.publish({

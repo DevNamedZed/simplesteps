@@ -120,9 +120,9 @@ const obj = AslSerializer.serializeToObject(definition);
 
 | Import Path | Exports |
 |---|---|
-| `@simplesteps/core` | `compile()`, `SimpleSteps`, `SimpleStepsBuilder`, `SimpleStepsCompileError` |
+| `@simplesteps/core` | `compile()`, `compileFromProgram()`, `SimpleSteps`, `SimpleStepsBuilder`, `SimpleStepsCompileError` |
 | `@simplesteps/core/runtime` | `Steps`, `SimpleStepContext`, `StepException`, error classes |
-| `@simplesteps/core/runtime/services` | `Lambda`, `DynamoDB`, `S3`, `SQS`, `SNS`, `StepFunction`, `EventBridge`, `SecretsManager`, `SSM` |
-| `@simplesteps/core/asl` | `AslSerializer`, `AslParser`, `AslValidator`, ASL type definitions |
+| `@simplesteps/core/runtime/services` | 64 typed bindings — `Lambda`, `DynamoDB`, `S3`, `SQS`, `SNS`, `StepFunction`, `EventBridge`, `SecretsManager`, `SSM`, `ECS`, `Bedrock`, `Glue`, `CodeBuild`, `Athena`, `Batch`, `HttpEndpoint`, `Activity`, + 48 SDK-generated (`APIGateway`, `EC2`, `RDS`, `SageMaker`, etc.) |
+| `@simplesteps/core/asl` | `AslSerializer`, `AslParser`, `AslValidator`, `AslParseResult`, `AslValidationError`, ASL type definitions |
 
 Full type signatures are available in the published TypeScript declarations (`@simplesteps/core`).

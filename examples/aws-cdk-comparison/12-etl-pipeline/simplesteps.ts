@@ -58,7 +58,7 @@ export class EtlPipelineStack extends cdk.Stack {
       workflow: Steps.createFunction(
         async (context: SimpleStepContext, input: { sourceKey: string; batchId: string }) => {
           // EXTRACT
-          const sourceData = await source.getObject({ Key: input.sourceKey });
+          const sourceData = await source.getObject<{ Body: string }>({ Key: input.sourceKey });
           const extracted = await extractRecords.call({ rawData: sourceData.Body });
 
           // TRANSFORM — process each record (compiles to Map state)
@@ -76,7 +76,7 @@ export class EtlPipelineStack extends cdk.Stack {
 
           await output.putObject({
             Key: Steps.format('output/{}/results.json', input.batchId),
-            Body: input.sourceKey,
+            Body: JSON.stringify({ batchId: input.batchId, sourceKey: input.sourceKey }),
             ContentType: 'application/json',
           });
 

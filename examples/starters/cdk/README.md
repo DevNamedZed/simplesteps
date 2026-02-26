@@ -62,6 +62,20 @@ fraud-check state machine, and emits audit events to EventBridge.
 
 **Services:** Lambda, EventBridge, StepFunction (nested)
 
+### AdvancedWorkflowStack — Lambda + DynamoDB + SQS + SNS + StepFunction
+
+Advanced workflow combining parallel processing, nested execution, wait-for-callback,
+retry policies, and error handling patterns.
+
+**Services:** Lambda, DynamoDB, SQS, SNS, StepFunction (nested)
+
+### BatchProcessingStack — Lambda + S3 + DynamoDB + SQS
+
+Batch data processing pipeline using distributed map for parallel item processing
+with error tolerance and result aggregation.
+
+**Services:** Lambda, S3, DynamoDB, SQS
+
 ## How It Works
 
 Each stack defines infrastructure and workflow in a single file:
@@ -91,15 +105,19 @@ No separate workflow files needed.
 
 ```
 lib/
-  stack.ts                — Order workflow (Lambda + DynamoDB)
-  notification-stack.ts   — Notification pipeline (Lambda + DynamoDB + SNS + SQS)
-  data-pipeline-stack.ts  — ETL pipeline (S3 + Lambda)
-  event-driven-stack.ts   — Payment processing (Lambda + EventBridge + StepFunction)
+  stack.ts                     — Order workflow (Lambda + DynamoDB)
+  notification-stack.ts        — Notification pipeline (Lambda + DynamoDB + SNS + SQS)
+  data-pipeline-stack.ts       — ETL pipeline (S3 + Lambda)
+  event-driven-stack.ts        — Payment processing (Lambda + EventBridge + StepFunction)
+  advanced-workflow-stack.ts   — Advanced patterns (parallel, nested, callback, retry)
+  batch-processing-stack.ts    — Batch processing (distributed map, error tolerance)
 bin/
-  app.ts                  — CDK app entry point
+  app.ts                       — CDK app entry point
 test/
-  order-stack.test.ts             — OrderStack unit tests
-  notification-stack.test.ts      — NotificationStack unit tests
-  data-pipeline-stack.test.ts     — DataPipelineStack unit tests
-  event-driven-stack.test.ts      — EventDrivenStack unit tests
+  order-stack.test.ts              — OrderStack unit tests
+  notification-stack.test.ts       — NotificationStack unit tests
+  data-pipeline-stack.test.ts      — DataPipelineStack unit tests
+  event-driven-stack.test.ts       — EventDrivenStack unit tests
+  advanced-workflow-stack.test.ts  — AdvancedWorkflowStack unit tests
+  batch-processing-stack.test.ts   — BatchProcessingStack unit tests
 ```

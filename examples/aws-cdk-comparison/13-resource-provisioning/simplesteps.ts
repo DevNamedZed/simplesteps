@@ -304,23 +304,20 @@ export class ResourceProvisioningStack extends cdk.Stack {
                   status: 'COMPLETED',
                 };
               } catch (e) {
-                // Configuration failed — rollback everything
+                // Configuration failed — rollback compute + storage, let outer catches handle the rest
                 await computeRollback.call({ instanceId: compute.instanceId });
                 await storageRollback.call({ volumeId: storage.volumeId });
-                await securityRollback.call({ roleArn: security.roleArn });
-                await networkingRollback.call({ networkId: network.networkId });
-                throw new StepException('Configuration failed, all resources rolled back');
+                throw new StepException('Configuration failed, resources rolled back');
               }
             } catch (e) {
-              // Parallel provisioning failed — rollback networking + security
+              // Compute/storage or configuration failed — rollback security, let outer catch handle networking
               await securityRollback.call({ roleArn: security.roleArn });
-              await networkingRollback.call({ networkId: network.networkId });
-              throw new StepException('Provisioning failed, networking & security rolled back');
+              throw new StepException('Provisioning failed, security rolled back');
             }
           } catch (e) {
-            // Security failed — rollback networking
+            // Security or downstream failed — rollback networking
             await networkingRollback.call({ networkId: network.networkId });
-            throw new StepException('Security failed, networking rolled back');
+            throw new StepException('Provisioning failed, networking rolled back');
           }
         },
       ),

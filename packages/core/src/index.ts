@@ -440,7 +440,7 @@ export function compileFromProgram(options: CompileFromProgramOptions): CompileR
   const dialect2: PathDialect = options.queryLanguage === 'JSONPath' ? JSON_PATH_DIALECT : JSONATA_DIALECT;
   const stateMachines: CompiledStateMachine[] = [];
   for (const { callSite, cfg, inlineBindings } of compilationUnits) {
-    const definition = generateStateMachine(context, callSite, cfg, serviceRegistry, options.substitutions, analyzer2, inlineBindings, dialect2, options.timeoutSeconds);
+    const definition = generateStateMachine(context, callSite, cfg, serviceRegistry, options.substitutions, analyzer2, inlineBindings, dialect2, options.timeoutSeconds, options.version, options.sourceMap);
     const name = deriveStateMachineName(callSite);
 
     const services: string[] = [];

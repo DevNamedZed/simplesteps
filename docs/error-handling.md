@@ -135,6 +135,11 @@ The class name is used as the ASL error name directly. No registration needed.
 | `BranchFailedError` | `States.BranchFailed` |
 | `NoChoiceMatchedError` | `States.NoChoiceMatched` |
 | `IntrinsicFailureError` | `States.IntrinsicFailure` |
+| `ResultPathMatchFailureError` | `States.ResultPathMatchFailure` |
+| `ParameterPathFailureError` | `States.ParameterPathFailure` |
+| `ItemReaderFailedError` | `States.ItemReaderFailed` |
+| `ResultWriterFailedError` | `States.ResultWriterFailed` |
+| `ExceedToleratedFailureError` | `States.ExceedToleratedFailureThreshold` |
 
 All are importable from `@simplesteps/core/runtime`.
 

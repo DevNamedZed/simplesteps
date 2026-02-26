@@ -27,7 +27,9 @@ export const multiServiceWorkflow = Steps.createFunction(
     if (!validation.valid) {
       return { error: 'Invalid order' };
     }
-    await ordersDb.putItem({ orderId: input.orderId, amount: input.amount });
+    await ordersDb.putItem({
+      Item: { orderId: { S: input.orderId }, amount: { N: String(input.amount) } },
+    });
     await notifications.publish({ orderId: input.orderId, status: 'confirmed' });
     return { success: true, orderId: input.orderId };
   },

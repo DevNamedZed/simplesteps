@@ -65,7 +65,7 @@ export class AdvancedWorkflowStack extends cdk.Stack {
           // Result fields ARE accessible via JSONPath (e.g., apiKeySecret.SecretString
           // compiles to $.apiKeySecret.SecretString). Not used here because this
           // workflow only needs the secret retrieval as a side effect.
-          const apiKeySecret = await secrets.getSecretValue({
+          const apiKeySecret = await secrets.getSecretValue<{ SecretString: string }>({
             SecretId: 'prod/api-key',
           });
 
@@ -76,12 +76,14 @@ export class AdvancedWorkflowStack extends cdk.Stack {
 
           try {
             await orders.putItem({
-              orderId: input.orderId,
-              customerId: input.customerId,
-              total: validation.total,
-              status: 'CONFIRMED',
-              correlationId: correlationId,
-              maxRetries: MAX_RETRIES,
+              Item: {
+                id: { S: input.orderId },
+                customerId: { S: input.customerId },
+                total: { N: String(validation.total) },
+                status: { S: 'CONFIRMED' },
+                correlationId: { S: correlationId },
+                maxRetries: { N: String(MAX_RETRIES) },
+              },
             });
           } catch (e) {
             await notifications.publish({
@@ -92,7 +94,7 @@ export class AdvancedWorkflowStack extends cdk.Stack {
             return { status: 'FAILED', orderId: input.orderId };
           }
 
-          Steps.delay({ seconds: 10 });
+          await Steps.delay({ seconds: 10 });
 
           const message = `Order ${input.orderId} processed for customer ${input.customerId}`;
           await notifications.publish({

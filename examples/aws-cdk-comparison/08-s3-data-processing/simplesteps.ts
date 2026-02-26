@@ -31,7 +31,7 @@ export class S3DataProcessingStack extends cdk.Stack {
     const machine = new SimpleStepsStateMachine(this, 'S3ProcessingStateMachine', {
       workflow: Steps.createFunction(
         async (context: SimpleStepContext, input: { inputKey: string; outputKey: string }) => {
-          const source = await bucket.getObject({ Key: input.inputKey });
+          const source = await bucket.getObject<{ Body: string }>({ Key: input.inputKey });
 
           const transformed = await transformData.call({ data: source.Body });
 
@@ -41,7 +41,7 @@ export class S3DataProcessingStack extends cdk.Stack {
             ContentType: 'application/json',
           });
 
-          const metadata = await bucket.headObject({ Key: input.outputKey });
+          const metadata = await bucket.headObject<{ ContentLength: number }>({ Key: input.outputKey });
 
           return {
             inputKey: input.inputKey,

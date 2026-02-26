@@ -77,15 +77,15 @@ Parameters map directly to the DynamoDB API. `TableName` is auto-injected from t
 ```typescript
 const bucket = new S3('my-data-bucket');
 
-const obj = await bucket.getObject<MyData>('data/file.json');
+const obj = await bucket.getObject<MyData>({ Key: 'data/file.json' });
 await bucket.putObject({ Key: 'output/result.json', Body: JSON.stringify(data) });
-await bucket.deleteObject('temp/old-file.json');
-await bucket.copyObject({ SourceKey: 'a.json', DestinationKey: 'b.json' });
+await bucket.deleteObject({ Key: 'temp/old-file.json' });
+await bucket.copyObject({ CopySource: 'my-data-bucket/a.json', Key: 'b.json' });
 const meta = await bucket.headObject<HeadResult>({ Key: 'data/file.json' });
 const listing = await bucket.listObjects<S3ListResult>({ Prefix: 'data/' });
 ```
 
-`getObject` and `deleteObject` accept a string key directly as a shorthand. All other S3 methods take a parameter object. The shorthand is equivalent to `{ Key: 'data/file.json' }`.
+All S3 methods take a parameter object. `Bucket` is auto-injected from the constructor.
 
 ---
 
@@ -112,7 +112,7 @@ const result = await queue.publishWithCallback<CallbackResult>(message);
 ```typescript
 const topic = new SNS('arn:aws:sns:us-east-1:123456789:OrderNotifications');
 
-await topic.publish({ message: 'Order placed', subject: 'New Order' });
+await topic.publish({ message: 'Order placed' }, { subject: 'New Order' });
 ```
 
 ---
@@ -190,14 +190,14 @@ const cluster = new ECS('arn:aws:ecs:us-east-1:123:cluster/my-cluster');
 
 // Run task (sync — waits for completion)
 const result = await cluster.runTask<TaskResult>({
-  TaskDefinition: 'arn:aws:ecs:us-east-1:123:task-definition/my-task:1',
-  LaunchType: 'FARGATE',
+  taskDefinition: 'arn:aws:ecs:us-east-1:123:task-definition/my-task:1',
+  launchType: 'FARGATE',
 });
 
 // Run task (async — returns immediately)
 await cluster.runTaskAsync({
-  TaskDefinition: 'arn:aws:ecs:us-east-1:123:task-definition/my-task:1',
-  LaunchType: 'FARGATE',
+  taskDefinition: 'arn:aws:ecs:us-east-1:123:task-definition/my-task:1',
+  launchType: 'FARGATE',
 });
 ```
 
@@ -211,9 +211,9 @@ Constructor takes a **Cluster ARN**.
 const model = new Bedrock('anthropic.claude-3-sonnet-20240229-v1:0');
 
 const result = await model.invokeModel<BedrockResponse>({
-  Body: { prompt: input.prompt, max_tokens: 1000 },
-  ContentType: 'application/json',
-  Accept: 'application/json',
+  body: { prompt: input.prompt, max_tokens: 1000 },
+  contentType: 'application/json',
+  accept: 'application/json',
 });
 ```
 
@@ -248,8 +248,8 @@ const project = new CodeBuild('my-build-project');
 
 // Start build (sync — waits for completion)
 const result = await project.startBuild<BuildResult>({
-  EnvironmentVariablesOverride: [
-    { Name: 'BRANCH', Value: input.branch, Type: 'PLAINTEXT' },
+  environmentVariablesOverride: [
+    { name: 'BRANCH', value: input.branch, type: 'PLAINTEXT' },
   ],
 });
 
@@ -292,14 +292,14 @@ const queue = new Batch('arn:aws:batch:us-east-1:123:job-queue/my-queue');
 
 // Submit job (sync — waits for completion)
 const result = await queue.submitJob<JobResult>({
-  JobDefinition: 'arn:aws:batch:us-east-1:123:job-definition/my-job:1',
-  JobName: 'process-data',
+  jobDefinition: 'arn:aws:batch:us-east-1:123:job-definition/my-job:1',
+  jobName: 'process-data',
 });
 
 // Submit job (async — returns immediately)
 await queue.submitJobAsync({
-  JobDefinition: 'arn:aws:batch:us-east-1:123:job-definition/my-job:1',
-  JobName: 'process-data',
+  jobDefinition: 'arn:aws:batch:us-east-1:123:job-definition/my-job:1',
+  jobName: 'process-data',
 });
 ```
 

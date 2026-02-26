@@ -41,10 +41,10 @@ export class DataPipelineStack extends cdk.Stack {
           context: SimpleStepContext,
           input: { inputKey: string; outputKey: string; format: string },
         ) => {
-          const rawData = await bucket.getObject({ Key: input.inputKey });
+          const rawData = await bucket.getObject<{ Body: string }>({ Key: input.inputKey });
 
           const result = await transform.call({
-            records: rawData,
+            records: rawData.Body,
             format: input.format,
           });
 

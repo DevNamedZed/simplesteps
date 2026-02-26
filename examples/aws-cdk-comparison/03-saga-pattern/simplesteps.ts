@@ -95,13 +95,14 @@ export class SagaPatternStack extends cdk.Stack {
                 status: 'CONFIRMED',
               };
             } catch (e) {
+              // Payment failed — cancel hotel, let outer catch handle flight
               await cancelHotel.call({ hotelId: hotel.hotelId });
-              await cancelFlight.call({ flightId: flight.flightId });
               throw new StepException('Payment failed, bookings cancelled');
             }
           } catch (e) {
+            // Hotel or payment failed — cancel flight
             await cancelFlight.call({ flightId: flight.flightId });
-            throw new StepException('Hotel booking failed, flight cancelled');
+            throw new StepException('Booking failed, flight cancelled');
           }
         },
       ),

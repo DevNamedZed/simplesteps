@@ -34,7 +34,9 @@ export const createOrder = Steps.createFunction(
     if (!check.valid) {
       return { success: false, error: 'Validation failed' };
     }
-    await ordersDb.putItem({ orderId: input.orderId, amount: input.amount, status: 'created' });
+    await ordersDb.putItem({
+      Item: { orderId: { S: input.orderId }, amount: { N: String(input.amount) }, status: { S: 'created' } },
+    });
     await notifications.publish({ orderId: input.orderId, event: 'created' });
     return { success: true, orderId: input.orderId };
   },
@@ -48,7 +50,7 @@ export const cancelOrder = Steps.createFunction(
     if (!order.exists) {
       return { success: false, error: 'Order not found' };
     }
-    await ordersDb.deleteItem({ orderId: input.orderId });
+    await ordersDb.deleteItem({ Key: { orderId: { S: input.orderId } } });
     await notifications.publish({ orderId: input.orderId, event: 'cancelled' });
     return { success: true, orderId: input.orderId };
   },

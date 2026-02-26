@@ -337,12 +337,14 @@ In JSONata mode, many JavaScript built-ins compile to native JSONata functions:
 
 | Category | Supported Methods |
 |---|---|
-| **String** | `toUpperCase`, `toLowerCase`, `trim`, `substring`, `startsWith`, `endsWith`, `padStart`, `padEnd`, `replace`, `charAt`, `repeat`, `split` |
+| **String** | `toUpperCase`, `toLowerCase`, `trim`, `trimStart`\*, `trimEnd`\*, `substring`, `startsWith`, `endsWith`, `padStart`, `padEnd`, `replace`, `charAt`, `repeat`, `split`, `includes` |
 | **Array** | `join`, `reverse`, `sort`, `concat`, `map`, `filter`, `reduce`, `find`, `some`, `every` |
 | **Math** | `Math.floor`, `Math.ceil`, `Math.round`, `Math.abs`, `Math.pow`, `Math.sqrt`, `Math.min`, `Math.max`, `Math.random` |
 | **Type** | `Number()`, `String()`, `Boolean()`, `parseInt()`, `parseFloat()`, `typeof`, `Date.now()`, `Array.isArray()` |
 | **Object** | `Object.keys()`, `Object.values()` |
 | **Other** | `JSON.parse`, `JSON.stringify`, `btoa`, `atob`, `crypto.randomUUID()` |
+
+\* `trimStart()` and `trimEnd()` both compile to `$trim()`, which trims both ends. The directional semantics are lost in JSONata mode.
 
 ### Not supported (any mode)
 

@@ -19,9 +19,9 @@ const sessionsDb = new DynamoDB('SessionsTable');
 
 export const dynamoDbCrud = Steps.createFunction(
   async (context: SimpleStepContext, input: { userId: string; sessionId: string }) => {
-    const user = await usersDb.getItem({ userId: input.userId });
-    await usersDb.putItem({ userId: input.userId, lastLogin: 'now' });
-    await sessionsDb.deleteItem({ sessionId: input.sessionId });
+    const user = await usersDb.getItem({ Key: { userId: { S: input.userId } } });
+    await usersDb.putItem({ Item: { userId: { S: input.userId }, lastLogin: { S: 'now' } } });
+    await sessionsDb.deleteItem({ Key: { sessionId: { S: input.sessionId } } });
     return { updated: true };
   },
 );

@@ -39,13 +39,13 @@ export class DynamoDbCrudStack extends cdk.Stack {
           });
 
           // READ — getItem with consistent read
-          const order = await orders.getItem({
+          const order = await orders.getItem<{ id: string; customerId: string; status: string }>({
             Key: { id: { S: input.orderId } },
             ConsistentRead: true,
           });
 
           // UPDATE — updateItem with expression
-          const updated = await orders.updateItem({
+          const updated = await orders.updateItem<{ id: string; status: string }>({
             Key: { id: { S: input.orderId } },
             UpdateExpression: 'SET #s = :status',
             ExpressionAttributeNames: { '#s': 'status' },
@@ -54,7 +54,7 @@ export class DynamoDbCrudStack extends cdk.Stack {
           });
 
           // QUERY — find all orders for a customer
-          const customerOrders = await orders.query({
+          const customerOrders = await orders.query<{ Items: Array<{ id: string; customerId: string }> }>({
             KeyConditionExpression: 'customerId = :cid',
             ExpressionAttributeValues: { ':cid': { S: input.customerId } },
           });

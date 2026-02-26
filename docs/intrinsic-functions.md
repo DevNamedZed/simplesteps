@@ -13,7 +13,7 @@ SimpleSteps maps all 18 ASL intrinsic functions to TypeScript. **Write natural J
 | `arr.includes(val)` | `States.ArrayContains` | `Steps.arrayContains(arr, val)` |
 | `arr[index]` | `States.ArrayGetItem` | `Steps.arrayGetItem(arr, idx)` |
 | `arr.length` | `States.ArrayLength` | `Steps.arrayLength(arr)` |
-| `str.split(delimiter)` | `States.StringSplit` | -- |
+| `str.split(delimiter)` | `States.StringSplit` (JSONPath) / `$split()` (JSONata) | -- |
 | `a + b`, `a++`, `a -= n` | `States.MathAdd` | `Steps.add(a, b)` |
 | `btoa(data)` | `States.Base64Encode` | `Steps.base64Encode(data)` |
 | `atob(data)` | `States.Base64Decode` | `Steps.base64Decode(data)` |

@@ -328,10 +328,7 @@ function synthesizeWorkflowSource(
         const exprText = fv.runtimeExpr
           ? printNode(ts.createPrinter(), fv.runtimeExpr)
           : varName;
-        console.warn(
-          `[SimpleSteps] SS705: CDK synth-time expression '${exprText}' auto-detected ` +
-          `for variable '${varName}'. It will be resolved at CDK synth time.`,
-        );
+        // SS705 diagnostic is emitted by the compiler — no need to also console.warn
 
         bindingIndex++;
         break;

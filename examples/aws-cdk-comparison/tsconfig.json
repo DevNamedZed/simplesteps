@@ -1,0 +1,16 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "declaration": false,
+    "declarationMap": false,
+    "sourceMap": false,
+    "paths": {
+      "@simplesteps/core/runtime": ["../../packages/core/src/runtime/index.ts"],
+      "@simplesteps/core/runtime/services": ["../../packages/core/src/runtime/services/index.ts"],
+      "@simplesteps/cdk": ["../../packages/cdk/src/index.ts"]
+    }
+  },
+  "include": ["**/*.ts"],
+  "exclude": ["**/cdk.ts", "run-examples.ts", "output"]
+}

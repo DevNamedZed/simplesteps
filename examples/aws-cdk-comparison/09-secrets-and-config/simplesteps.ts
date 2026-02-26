@@ -32,11 +32,11 @@ export class SecretsAndConfigStack extends cdk.Stack {
     const machine = new SimpleStepsStateMachine(this, 'SecretsConfigStateMachine', {
       workflow: Steps.createFunction(
         async (context: SimpleStepContext, input: { endpoint: string }) => {
-          const secret = await secrets.getSecretValue({
+          const secret = await secrets.getSecretValue<{ SecretString: string }>({
             SecretId: 'prod/external-api-key',
           });
 
-          const flags = await config.getParameter({
+          const flags = await config.getParameter<{ Parameter: { Value: string } }>({
             Name: '/myapp/config/feature-flags',
             WithDecryption: true,
           });
@@ -49,6 +49,7 @@ export class SecretsAndConfigStack extends cdk.Stack {
           return {
             statusCode: response.statusCode,
             body: response.body,
+            featureFlags: flags.Parameter.Value,
           };
         },
       ),

@@ -190,7 +190,8 @@ npx simplesteps compile workflow.ts -o output/ --query-language jsonpath
 | TypeScript | JSONata |
 |---|---|
 | `str.toUpperCase()`, `.toLowerCase()`, `.trim()` | `$uppercase`, `$lowercase`, `$trim` |
-| `str.substring()`, `.replace()`, `.charAt()`, `.repeat()` | `$substring`, `$replace`, `$pad` |
+| `str.substring()`, `.replace()` | `$substring`, `$replace` |
+| `str.charAt()`, `.repeat()`, `.includes()` | `$substring(s,n,1)`, composed, `$contains` |
 | `str.startsWith()`, `.endsWith()`, `.padStart()`, `.padEnd()` | Composed expressions |
 | `Math.floor/ceil/round/abs/pow/sqrt/min/max/random` | `$floor`, `$ceil`, `$round`, `$abs`, `$power`, `$sqrt`, `$min`, `$max`, `$random` |
 | `Number()`, `String()`, `Boolean()`, `typeof` | `$number`, `$string`, `$boolean`, `$type` |
@@ -223,7 +224,7 @@ npx simplesteps compile workflow.ts -o output/ --query-language jsonpath
 |---|---|
 | [Getting Started](docs/getting-started.md) | Install, first workflow, deploy |
 | [CDK Integration](docs/cdk-integration.md) | `SimpleStepsStateMachine` construct |
-| [CDK Comparison](docs/cdk-comparison.md) | Side-by-side CDK vs SimpleSteps (12 examples) |
+| [CDK Comparison](docs/cdk-comparison.md) | Side-by-side CDK vs SimpleSteps (13 examples) |
 | [Library API](docs/library-api.md) | `compile()`, `AslSerializer`, fluent API |
 | [CLI Reference](docs/cli.md) | `simplesteps compile` flags |
 | [Services](docs/services.md) | AWS service bindings + `Steps.awsSdk()` |
