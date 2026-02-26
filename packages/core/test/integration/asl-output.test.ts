@@ -4250,3 +4250,127 @@ describe('ASL output: JSONata lambda expressions', () => {
     expect(allStrings.some(v => v.includes('$item.id =') && v.includes('$states.input.targetId'))).toBe(true);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Bug fix: JSONata Pass states use Output (not Arguments)
+// ---------------------------------------------------------------------------
+
+describe('ASL correctness: JSONata Pass state uses Output not Arguments', () => {
+  let asl: any;
+  beforeAll(() => { asl = compileFixtureJsonata('sequential.ts'); });
+
+  it('has QueryLanguage: JSONata', () => {
+    expect(asl.QueryLanguage).toBe('JSONata');
+  });
+
+  it('Pass states never have Arguments field', () => {
+    const passes = getStatesByType(asl, 'Pass');
+    for (const [name, s] of passes) {
+      expect(s).not.toHaveProperty('Arguments');
+    }
+  });
+
+  it('Pass states with structured output use Output field', () => {
+    const passes = getStatesByType(asl, 'Pass');
+    // At least one Pass state should have Output (the return statement)
+    const hasOutput = passes.some(([, s]) => s.Output !== undefined || s.Result !== undefined);
+    expect(hasOutput).toBe(true);
+  });
+});
+
+describe('ASL correctness: JSONata intrinsic return uses Output', () => {
+  let asl: any;
+  beforeAll(() => { asl = compileFixtureJsonata('intrinsics.ts'); });
+
+  it('Pass states never have Arguments field', () => {
+    const passes = getStatesByType(asl, 'Pass');
+    for (const [name, s] of passes) {
+      expect(s).not.toHaveProperty('Arguments');
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Bug fix: JSONata no *Path fields on Wait, Task, Fail
+// ---------------------------------------------------------------------------
+
+describe('ASL correctness: JSONata no Path fields', () => {
+  it('JSONata Wait state uses Seconds not SecondsPath', () => {
+    const asl = compileFixtureJsonata('wait-state.ts');
+    const waits = getStatesByType(asl, 'Wait');
+    for (const [, w] of waits) {
+      expect(w).not.toHaveProperty('SecondsPath');
+      expect(w).not.toHaveProperty('TimestampPath');
+    }
+  });
+
+  it('JSONata Task states never have TimeoutSecondsPath or HeartbeatSecondsPath', () => {
+    const asl = compileFixtureJsonata('retry-timeout.ts');
+    const tasks = getStatesByType(asl, 'Task');
+    for (const [, t] of tasks) {
+      expect(t).not.toHaveProperty('TimeoutSecondsPath');
+      expect(t).not.toHaveProperty('HeartbeatSecondsPath');
+    }
+  });
+
+  it('JSONata Fail states never have CausePath', () => {
+    const asl = compileFixtureJsonata('try-catch.ts');
+    const fails = getStatesByType(asl, 'Fail');
+    for (const [, f] of fails) {
+      expect(f).not.toHaveProperty('CausePath');
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Bug fix: Steps.awsSdk() compilation
+// ---------------------------------------------------------------------------
+
+describe('ASL output: Steps.awsSdk()', () => {
+  let asl: any;
+  beforeAll(() => { asl = compileFixtureJsonata('steps-aws-sdk.ts'); });
+
+  it('compiles without errors', () => {
+    expect(asl).toBeDefined();
+    expect(asl.QueryLanguage).toBe('JSONata');
+  });
+
+  it('produces Task states for awsSdk calls', () => {
+    const tasks = getStatesByType(asl, 'Task');
+    expect(tasks.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('S3 getObject has correct resource ARN', () => {
+    const tasks = getStatesByType(asl, 'Task');
+    const s3Task = tasks.find(([, t]) => typeof t.Resource === 'string' && t.Resource.includes('s3:getObject'));
+    expect(s3Task).toBeDefined();
+    expect(s3Task![1].Resource).toBe('arn:aws:states:::aws-sdk:s3:getObject');
+  });
+
+  it('SNS publish has correct resource ARN', () => {
+    const tasks = getStatesByType(asl, 'Task');
+    const snsTask = tasks.find(([, t]) => typeof t.Resource === 'string' && t.Resource.includes('sns:publish'));
+    expect(snsTask).toBeDefined();
+    expect(snsTask![1].Resource).toBe('arn:aws:states:::aws-sdk:sns:publish');
+  });
+
+  it('S3 task has Arguments with Bucket and Key', () => {
+    const tasks = getStatesByType(asl, 'Task');
+    const s3Task = tasks.find(([, t]) => typeof t.Resource === 'string' && t.Resource.includes('s3:getObject'));
+    expect(s3Task).toBeDefined();
+    expect(s3Task![1].Arguments).toBeDefined();
+    const args = s3Task![1].Arguments;
+    expect(args.Bucket).toBeDefined();
+    expect(args.Key).toBeDefined();
+  });
+
+  it('SNS task has Arguments with TopicArn and Message', () => {
+    const tasks = getStatesByType(asl, 'Task');
+    const snsTask = tasks.find(([, t]) => typeof t.Resource === 'string' && t.Resource.includes('sns:publish'));
+    expect(snsTask).toBeDefined();
+    expect(snsTask![1].Arguments).toBeDefined();
+    const args = snsTask![1].Arguments;
+    expect(args.TopicArn).toBe('arn:aws:sns:us-east-1:123:MyTopic');
+    expect(args.Message).toBe('done');
+  });
+});

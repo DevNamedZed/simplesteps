@@ -64,6 +64,7 @@ export class ErrorCodes {
     static readonly EmptyStateMachine = error('SS600', 'generation');
     static readonly UnknownServiceMethod = error('SS610', 'generation');
     static readonly MissingResourceArn = error('SS611', 'generation');
+    static readonly AwsSdkRequiresLiteral = error('SS612', 'generation');
   };
 
   // ── Helper function inlining (SS8xx) ─────────────────────────────────

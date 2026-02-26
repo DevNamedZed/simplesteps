@@ -53,9 +53,9 @@ export interface TaskState extends StateBase, TerminalFields {
   readonly Assign?: Readonly<Record<string, unknown>>;
   readonly Output?: unknown;
   readonly ResultSelector?: Readonly<Record<string, unknown>>;
-  readonly TimeoutSeconds?: number;
+  readonly TimeoutSeconds?: number | string;
   readonly TimeoutSecondsPath?: string;
-  readonly HeartbeatSeconds?: number;
+  readonly HeartbeatSeconds?: number | string;
   readonly HeartbeatSecondsPath?: string;
   readonly Retry?: readonly RetryRule[];
   readonly Catch?: readonly CatchRule[];
@@ -79,7 +79,7 @@ export interface ChoiceState extends StateBase {
 
 export interface WaitState extends StateBase, TerminalFields {
   readonly Type: 'Wait';
-  readonly Seconds?: number;
+  readonly Seconds?: number | string;
   readonly Timestamp?: string;
   readonly SecondsPath?: string;
   readonly TimestampPath?: string;

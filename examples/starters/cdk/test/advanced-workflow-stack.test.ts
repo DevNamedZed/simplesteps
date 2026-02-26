@@ -189,7 +189,7 @@ describe('AdvancedWorkflowStack', () => {
     test('has a Pass state with intrinsic or JSONata expression for UUID/Format', () => {
       const passes = getStatesByType(definition, 'Pass');
       const hasIntrinsic = passes.some(([, s]) => {
-        const params = JSON.stringify(s.Parameters || s.Arguments || s.Result || {});
+        const params = JSON.stringify(s.Parameters || s.Arguments || s.Output || s.Result || {});
         return params.includes('States.UUID()') || params.includes('States.Format')
           || params.includes('$uuid()') || params.includes('&');
       });

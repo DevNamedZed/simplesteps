@@ -131,6 +131,34 @@ export interface PathDialect {
    */
   emitReturnPath(path: string): Record<string, unknown>;
 
+  /**
+   * Emit the output field for a Pass state (object literal or intrinsic result).
+   * JSONPath: `{ Parameters: params }`
+   * JSONata: `{ Output: params }` (Pass states use Output, not Arguments)
+   */
+  emitPassOutput(params: Record<string, unknown>): Record<string, unknown>;
+
+  /**
+   * Emit a dynamic (path-based) wait field.
+   * JSONPath: `{ SecondsPath: path }` or `{ TimestampPath: path }`
+   * JSONata: `{ Seconds: "{% path %}" }` or `{ Timestamp: "{% path %}" }`
+   */
+  emitDynamicWaitField(field: 'Seconds' | 'Timestamp', path: string): Record<string, unknown>;
+
+  /**
+   * Emit a dynamic task timeout or heartbeat field.
+   * JSONPath: `{ TimeoutSecondsPath: path }` or `{ HeartbeatSecondsPath: path }`
+   * JSONata: `{ TimeoutSeconds: "{% path %}" }` or `{ HeartbeatSeconds: "{% path %}" }`
+   */
+  emitDynamicTimeout(field: 'TimeoutSeconds' | 'HeartbeatSeconds', path: string): Record<string, unknown>;
+
+  /**
+   * Emit a dynamic fail cause field.
+   * JSONPath: `{ CausePath: path }`
+   * JSONata: `{ Cause: "{% path %}" }`
+   */
+  emitDynamicFailCause(path: string): Record<string, unknown>;
+
   // ── Choice rule support ───────────────────────────────────────────
 
   /** Whether this dialect uses JSONata Condition expressions for Choice rules. */
@@ -239,6 +267,22 @@ export class JsonPathDialect implements PathDialect {
 
   emitReturnPath(path: string): Record<string, unknown> {
     return { InputPath: path };
+  }
+
+  emitPassOutput(params: Record<string, unknown>): Record<string, unknown> {
+    return { Parameters: params };
+  }
+
+  emitDynamicWaitField(field: 'Seconds' | 'Timestamp', path: string): Record<string, unknown> {
+    return { [`${field}Path`]: path };
+  }
+
+  emitDynamicTimeout(field: 'TimeoutSeconds' | 'HeartbeatSeconds', path: string): Record<string, unknown> {
+    return { [`${field}Path`]: path };
+  }
+
+  emitDynamicFailCause(path: string): Record<string, unknown> {
+    return { CausePath: path };
   }
 
   isJsonata(): boolean {
@@ -350,6 +394,22 @@ export class JsonataDialect implements PathDialect {
 
   emitReturnPath(path: string): Record<string, unknown> {
     return { Output: `{% ${path} %}` };
+  }
+
+  emitPassOutput(params: Record<string, unknown>): Record<string, unknown> {
+    return { Output: params };
+  }
+
+  emitDynamicWaitField(field: 'Seconds' | 'Timestamp', path: string): Record<string, unknown> {
+    return { [field]: `{% ${path} %}` };
+  }
+
+  emitDynamicTimeout(field: 'TimeoutSeconds' | 'HeartbeatSeconds', path: string): Record<string, unknown> {
+    return { [field]: `{% ${path} %}` };
+  }
+
+  emitDynamicFailCause(path: string): Record<string, unknown> {
+    return { Cause: `{% ${path} %}` };
   }
 
   isJsonata(): boolean {

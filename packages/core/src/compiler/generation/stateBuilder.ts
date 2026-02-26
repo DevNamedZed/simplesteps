@@ -15,7 +15,7 @@ import { StepVariableType } from '../analysis/types.js';
 import { buildParameters, buildChoiceRule } from './expressionMapper.js';
 import { type PathDialect, JSON_PATH_DIALECT } from './pathDialect.js';
 import { STEP_ERROR_NAMES } from '../../runtime/index.js';
-import { SDK_PARAM_SHAPE, SDK_RESOURCE_INJECT } from '../../runtime/services/metadata.js';
+import { SDK_PARAM_SHAPE, SDK_RESOURCE_INJECT, SERVICE_SDK_IDS } from '../../runtime/services/metadata.js';
 import type {
   State,
   StateMachineDefinition,
@@ -313,7 +313,7 @@ function processAwaitAssignment(
 
   if (!ts.isCallExpression(callExpr)) return null;
 
-  const serviceCall = extractServiceCall(ctx, callExpr);
+  const serviceCall = extractServiceCall(ctx, callExpr) ?? extractStepsAwsSdk(ctx, callExpr);
   if (!serviceCall) return null;
 
   // Get the variable name for ResultPath
@@ -346,9 +346,9 @@ function processAwaitAssignment(
     ...(varName ? ctx.dialect.emitResultAssignment(varName) : ctx.dialect.emitResultDiscard()),
     ...(serviceCall.retry && { Retry: serviceCall.retry }),
     ...(serviceCall.timeoutSeconds != null && { TimeoutSeconds: serviceCall.timeoutSeconds }),
-    ...(serviceCall.timeoutSecondsPath && { TimeoutSecondsPath: serviceCall.timeoutSecondsPath }),
+    ...(serviceCall.timeoutSecondsPath && ctx.dialect.emitDynamicTimeout('TimeoutSeconds', serviceCall.timeoutSecondsPath)),
     ...(serviceCall.heartbeatSeconds != null && { HeartbeatSeconds: serviceCall.heartbeatSeconds }),
-    ...(serviceCall.heartbeatSecondsPath && { HeartbeatSecondsPath: serviceCall.heartbeatSecondsPath }),
+    ...(serviceCall.heartbeatSecondsPath && ctx.dialect.emitDynamicTimeout('HeartbeatSeconds', serviceCall.heartbeatSecondsPath)),
     ...buildCatchRules(ctx),
   };
 
@@ -372,7 +372,7 @@ function processAwaitFireAndForget(
 
   if (!ts.isCallExpression(callExpr)) return null;
 
-  const serviceCall = extractServiceCall(ctx, callExpr);
+  const serviceCall = extractServiceCall(ctx, callExpr) ?? extractStepsAwsSdk(ctx, callExpr);
   if (!serviceCall) return null;
 
   const stateName = generateStateName(
@@ -387,9 +387,9 @@ function processAwaitFireAndForget(
     ...ctx.dialect.emitResultDiscard(),
     ...(serviceCall.retry && { Retry: serviceCall.retry }),
     ...(serviceCall.timeoutSeconds != null && { TimeoutSeconds: serviceCall.timeoutSeconds }),
-    ...(serviceCall.timeoutSecondsPath && { TimeoutSecondsPath: serviceCall.timeoutSecondsPath }),
+    ...(serviceCall.timeoutSecondsPath && ctx.dialect.emitDynamicTimeout('TimeoutSeconds', serviceCall.timeoutSecondsPath)),
     ...(serviceCall.heartbeatSeconds != null && { HeartbeatSeconds: serviceCall.heartbeatSeconds }),
-    ...(serviceCall.heartbeatSecondsPath && { HeartbeatSecondsPath: serviceCall.heartbeatSecondsPath }),
+    ...(serviceCall.heartbeatSecondsPath && ctx.dialect.emitDynamicTimeout('HeartbeatSeconds', serviceCall.heartbeatSecondsPath)),
     ...buildCatchRules(ctx),
   };
 
@@ -405,7 +405,7 @@ function processAwaitReassignment(
   const callExpr = awaitExpr.expression;
   if (!ts.isCallExpression(callExpr)) return null;
 
-  const serviceCall = extractServiceCall(ctx, callExpr);
+  const serviceCall = extractServiceCall(ctx, callExpr) ?? extractStepsAwsSdk(ctx, callExpr);
   if (!serviceCall) return null;
 
   // Resolve the LHS identifier to get its variable name for result assignment
@@ -435,9 +435,9 @@ function processAwaitReassignment(
     ...resultAssignment,
     ...(serviceCall.retry && { Retry: serviceCall.retry }),
     ...(serviceCall.timeoutSeconds != null && { TimeoutSeconds: serviceCall.timeoutSeconds }),
-    ...(serviceCall.timeoutSecondsPath && { TimeoutSecondsPath: serviceCall.timeoutSecondsPath }),
+    ...(serviceCall.timeoutSecondsPath && ctx.dialect.emitDynamicTimeout('TimeoutSeconds', serviceCall.timeoutSecondsPath)),
     ...(serviceCall.heartbeatSeconds != null && { HeartbeatSeconds: serviceCall.heartbeatSeconds }),
-    ...(serviceCall.heartbeatSecondsPath && { HeartbeatSecondsPath: serviceCall.heartbeatSecondsPath }),
+    ...(serviceCall.heartbeatSecondsPath && ctx.dialect.emitDynamicTimeout('HeartbeatSeconds', serviceCall.heartbeatSecondsPath)),
     ...buildCatchRules(ctx),
   };
 
@@ -473,21 +473,21 @@ function processStepsDelay(
       if (resolved.kind === 'literal' && typeof resolved.value === 'number') {
         (waitState as any).Seconds = resolved.value;
       } else if (resolved.kind === 'jsonpath') {
-        (waitState as any).SecondsPath = resolved.path;
+        Object.assign(waitState, ctx.dialect.emitDynamicWaitField('Seconds', resolved.path!));
       }
     } else if (key === 'timestamp') {
       if (resolved.kind === 'literal' && typeof resolved.value === 'string') {
         (waitState as any).Timestamp = resolved.value;
       } else if (resolved.kind === 'jsonpath') {
-        (waitState as any).TimestampPath = resolved.path;
+        Object.assign(waitState, ctx.dialect.emitDynamicWaitField('Timestamp', resolved.path!));
       }
     } else if (key === 'secondsPath') {
       if (resolved.kind === 'literal' && typeof resolved.value === 'string') {
-        (waitState as any).SecondsPath = resolved.value;
+        Object.assign(waitState, ctx.dialect.emitDynamicWaitField('Seconds', resolved.value as string));
       }
     } else if (key === 'timestampPath') {
       if (resolved.kind === 'literal' && typeof resolved.value === 'string') {
-        (waitState as any).TimestampPath = resolved.value;
+        Object.assign(waitState, ctx.dialect.emitDynamicWaitField('Timestamp', resolved.value as string));
       }
     }
   }
@@ -1093,7 +1093,7 @@ function processBranchExpression(
 
   if (!ts.isCallExpression(callExpr)) return null;
 
-  const serviceCall = extractServiceCall(ctx, callExpr as ts.CallExpression);
+  const serviceCall = extractServiceCall(ctx, callExpr as ts.CallExpression) ?? extractStepsAwsSdk(ctx, callExpr as ts.CallExpression);
   if (!serviceCall) return null;
 
   const stateName = generateStateName(
@@ -1107,9 +1107,9 @@ function processBranchExpression(
     ...(serviceCall.parameters && ctx.dialect.emitParameters(serviceCall.parameters)),
     ...(serviceCall.retry && { Retry: serviceCall.retry }),
     ...(serviceCall.timeoutSeconds != null && { TimeoutSeconds: serviceCall.timeoutSeconds }),
-    ...(serviceCall.timeoutSecondsPath && { TimeoutSecondsPath: serviceCall.timeoutSecondsPath }),
+    ...(serviceCall.timeoutSecondsPath && ctx.dialect.emitDynamicTimeout('TimeoutSeconds', serviceCall.timeoutSecondsPath)),
     ...(serviceCall.heartbeatSeconds != null && { HeartbeatSeconds: serviceCall.heartbeatSeconds }),
-    ...(serviceCall.heartbeatSecondsPath && { HeartbeatSecondsPath: serviceCall.heartbeatSecondsPath }),
+    ...(serviceCall.heartbeatSecondsPath && ctx.dialect.emitDynamicTimeout('HeartbeatSeconds', serviceCall.heartbeatSecondsPath)),
     End: true,
   };
 
@@ -1132,7 +1132,7 @@ function processReturnTerminator(
 
   // return await svc.call(...) → Task state with End: true
   if (ts.isAwaitExpression(expression) && ts.isCallExpression(expression.expression)) {
-    const serviceCall = extractServiceCall(ctx, expression.expression);
+    const serviceCall = extractServiceCall(ctx, expression.expression) ?? extractStepsAwsSdk(ctx, expression.expression);
     if (serviceCall) {
       const stateName = generateStateName(
         `Invoke_${serviceCall.serviceVarName}`,
@@ -1144,9 +1144,9 @@ function processReturnTerminator(
         ...(serviceCall.parameters && ctx.dialect.emitParameters(serviceCall.parameters)),
         ...(serviceCall.retry && { Retry: serviceCall.retry }),
         ...(serviceCall.timeoutSeconds != null && { TimeoutSeconds: serviceCall.timeoutSeconds }),
-        ...(serviceCall.timeoutSecondsPath && { TimeoutSecondsPath: serviceCall.timeoutSecondsPath }),
+        ...(serviceCall.timeoutSecondsPath && ctx.dialect.emitDynamicTimeout('TimeoutSeconds', serviceCall.timeoutSecondsPath)),
         ...(serviceCall.heartbeatSeconds != null && { HeartbeatSeconds: serviceCall.heartbeatSeconds }),
-        ...(serviceCall.heartbeatSecondsPath && { HeartbeatSecondsPath: serviceCall.heartbeatSecondsPath }),
+        ...(serviceCall.heartbeatSecondsPath && ctx.dialect.emitDynamicTimeout('HeartbeatSeconds', serviceCall.heartbeatSecondsPath)),
         ...buildCatchRules(ctx),
         End: true,
       };
@@ -1170,7 +1170,7 @@ function processReturnTerminator(
     const stateName = generateStateName('Return_Result', ctx.usedNames);
     const passState: PassState = {
       Type: 'Pass',
-      ...ctx.dialect.emitParameters(params),
+      ...ctx.dialect.emitPassOutput(params),
       End: true,
     };
 
@@ -1228,7 +1228,7 @@ function processReturnTerminator(
     const stateName = generateStateName('Return_Result', ctx.usedNames);
     const passState: PassState = {
       Type: 'Pass',
-      ...ctx.dialect.emitParameters(ctx.dialect.wrapIntrinsicResult('result', resolved.path!)),
+      ...ctx.dialect.emitPassOutput(ctx.dialect.wrapIntrinsicResult('result', resolved.path!)),
       End: true,
     };
     ctx.states.set(stateName, passState);
@@ -1292,7 +1292,7 @@ function processThrowTerminator(
       if (resolved.kind === 'literal' && typeof resolved.value === 'string') {
         failState = { Type: 'Fail', Error: errorName, Cause: resolved.value };
       } else if (resolved.kind === 'jsonpath') {
-        failState = { Type: 'Fail', Error: errorName, CausePath: resolved.path };
+        failState = { Type: 'Fail', Error: errorName, ...ctx.dialect.emitDynamicFailCause(resolved.path!) };
       } else {
         failState = { Type: 'Fail', Error: errorName };
       }
@@ -1429,18 +1429,91 @@ function extractServiceCall(
 }
 
 // ---------------------------------------------------------------------------
+// Steps.awsSdk() → Task state (generic AWS SDK escape hatch)
+// ---------------------------------------------------------------------------
+
+/**
+ * Recognize `Steps.awsSdk(service, action, params, ?options)` call sites
+ * and extract them as a service call that compiles to:
+ *   Resource: "arn:aws:states:::aws-sdk:{sdkId}:{action}"
+ */
+function extractStepsAwsSdk(
+  ctx: BuildContext,
+  callExpr: ts.CallExpression,
+): ExtractedServiceCall | null {
+  // Check callee is Steps.awsSdk
+  if (!ts.isPropertyAccessExpression(callExpr.expression)) return null;
+  const propAccess = callExpr.expression;
+  if (!ts.isIdentifier(propAccess.expression) || propAccess.expression.text !== 'Steps') return null;
+  if (propAccess.name.text !== 'awsSdk') return null;
+
+  // First arg: service name (must be string literal)
+  const serviceArg = callExpr.arguments[0];
+  if (!serviceArg || !ts.isStringLiteral(serviceArg)) {
+    ctx.compilerContext.addError(
+      callExpr,
+      'Steps.awsSdk() requires a string literal service name as the first argument',
+      ErrorCodes.Gen.AwsSdkRequiresLiteral.code,
+    );
+    return null;
+  }
+  const serviceName = serviceArg.text;
+
+  // Second arg: action name (must be string literal)
+  const actionArg = callExpr.arguments[1];
+  if (!actionArg || !ts.isStringLiteral(actionArg)) {
+    ctx.compilerContext.addError(
+      callExpr,
+      'Steps.awsSdk() requires a string literal action name as the second argument',
+      ErrorCodes.Gen.AwsSdkRequiresLiteral.code,
+    );
+    return null;
+  }
+  const actionName = actionArg.text;
+
+  // Look up SDK ID for service name (PascalCase → lowercase SDK ID)
+  const sdkId = SERVICE_SDK_IDS[serviceName] ?? serviceName.toLowerCase();
+  const resource = `arn:aws:states:::aws-sdk:${sdkId}:${actionName}`;
+
+  // Third arg: parameters (optional object literal)
+  let parameters: Record<string, unknown> | undefined;
+  const paramsArg = callExpr.arguments[2];
+  if (paramsArg && ts.isObjectLiteralExpression(paramsArg)) {
+    parameters = buildParameters(
+      ctx.compilerContext,
+      paramsArg,
+      ctx.variables.toResolution(),
+      ctx.dialect,
+    );
+  }
+
+  // Fourth arg: task options (retry, timeout, heartbeat)
+  const taskOptions = extractTaskOptions(ctx, callExpr, 3);
+
+  return {
+    serviceVarName: `${serviceName}_${actionName}`,
+    resource,
+    parameters,
+    methodInfo: { integration: 'sdk', hasOutput: true, methodName: actionName } as ServiceMethodInfo,
+    ...taskOptions,
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Task options extraction (retry, timeout, heartbeat)
 // ---------------------------------------------------------------------------
 
 /**
- * Extract task-level options from the 2nd argument of a service call.
+ * Extract task-level options from the specified argument of a service call.
  * Supports: retry, timeoutSeconds, heartbeatSeconds.
+ * @param optionsArgIndex — index of the options argument (default 1 for service.call(input, opts))
  */
 function extractTaskOptions(
   ctx: BuildContext,
   callExpr: ts.CallExpression,
+  optionsArgIndex: number = 1,
 ): Pick<ExtractedServiceCall, 'retry' | 'timeoutSeconds' | 'timeoutSecondsPath' | 'heartbeatSeconds' | 'heartbeatSecondsPath'> {
-  const optionsArg = callExpr.arguments[1];
+  const optionsArg = callExpr.arguments[optionsArgIndex];
   if (!optionsArg || !ts.isObjectLiteralExpression(optionsArg)) return {};
 
   const result: {
@@ -1774,7 +1847,7 @@ function buildTernaryBranchPass(
   } else if (resolved.kind === 'jsonpath' && resolved.path) {
     Object.assign(passState, ctx.dialect.emitReturnPath(resolved.path));
   } else if (resolved.kind === 'intrinsic' && resolved.path) {
-    Object.assign(passState, ctx.dialect.emitParameters(ctx.dialect.wrapIntrinsicResult('value', resolved.path!)));
+    Object.assign(passState, ctx.dialect.emitPassOutput(ctx.dialect.wrapIntrinsicResult('value', resolved.path!)));
   }
 
   if (nextState) {
