@@ -168,11 +168,16 @@ npx simplesteps compile workflow.ts -o output/ --query-language jsonpath
 | `await Steps.map(items, cb, opts?)` | Map state (results, closures, MaxConcurrency, Retry) |
 | `for (const item of Steps.items(arr, opts?))` | Map state (for...of + MaxConcurrency, Retry) |
 | `await Promise.all([...])` | Parallel state |
+| `await Steps.parallel(branches, { retry })` | Parallel state with retry |
 | Deferred-await (`const p = call(); await p`) | Parallel state (auto-batched) |
 | `await Steps.delay({ seconds: 30 })` | Wait state |
+| `Steps.succeed()` | Succeed state (early termination) |
 | `throw new Error(msg)` | Fail state |
 | `return value` | Succeed / End state |
 | `try { ... } catch (e) { ... }` | Catch rules |
+| `await Steps.distributedMap(items, cb, opts)` | Map state (DISTRIBUTED) |
+| `await http.invoke({ ApiEndpoint, Method })` | Task (HTTPS Endpoint) |
+| `const { a, ...rest } = await svc.call(input)` | Object destructuring with rest |
 | `.call(input, { retry, timeoutSeconds, heartbeatSeconds })` | Retry / Timeout / Heartbeat |
 | `` `Hello ${name}` `` | `States.Format` / string concatenation |
 | `a + b`, `a * b`, `a - b`, `a / b`, `a % b` | Native arithmetic (JSONata) / `States.MathAdd` (JSONPath) |
@@ -200,13 +205,15 @@ npx simplesteps compile workflow.ts -o output/ --query-language jsonpath
 ## Compiler Features
 
 - **Dual query language support** — JSONata (default) and JSONPath, switchable via `--query-language`
-- **55+ JS method → JSONata mappings** — string, math, array, type conversion, and higher-order functions compile directly
+- **64+ JS method → JSONata mappings** — string, math, array, type conversion, higher-order functions, and operators compile directly
 - **Lambda expression analysis** — pure callbacks in `.map()`, `.filter()`, `.reduce()` auto-compile to JSONata higher-order functions
 - **Whole-program data flow analysis** with constant propagation lattice across modules
 - **Cross-file import resolution** with demand-driven analysis and cycle detection
 - **Pure function inlining** for compile-time constant derivation
-- **15 AWS service bindings**: Lambda, DynamoDB, SQS, SNS, EventBridge, S3, Secrets Manager, SSM, ECS, Bedrock, Glue, CodeBuild, Athena, Batch, StepFunction + `Steps.awsSdk()` for direct SDK integration
-- **CDK token propagation** through CloudFormation intrinsics (`Fn::GetAtt`, `Ref`)
+- **64 typed AWS service bindings** — 16 with optimized integrations (Lambda, DynamoDB, SQS, SNS, EventBridge, S3, Secrets Manager, SSM, ECS, Bedrock, Glue, CodeBuild, Athena, Batch, StepFunction, HttpEndpoint) + Activity tasks + 48 SDK-generated bindings with full type signatures + `Steps.awsSdk()` escape hatch
+- **CDK token propagation** through CloudFormation intrinsics (`Fn::GetAtt`, `Ref`) with synth-time expression auto-detection
+- **Source map comments** — optional `sourceMap` flag annotates ASL states with TypeScript source locations
+- **Object destructuring** with rest patterns for extracting service call results
 - **Substep inlining** for reusable workflow fragments
 - **40+ diagnostic codes** with root-cause attribution and poisoned-value chain tracking
 
@@ -229,7 +236,7 @@ npx simplesteps compile workflow.ts -o output/ --query-language jsonpath
 ## Examples
 
 - [Starter projects](examples/starters/) — CLI, library API, and CDK templates
-- [Showcase](examples/showcase/) — 38 examples covering every language feature, including JSONata methods
+- [Showcase](examples/showcase/) — 46 examples covering every language feature, including JSONata methods
 
 ## License
 

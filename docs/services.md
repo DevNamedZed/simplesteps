@@ -1,11 +1,14 @@
 # Services
 
-SimpleSteps provides typed bindings for 15 AWS services plus HTTPS Endpoints, Activity tasks, a callback pattern (`.waitForTaskToken`), and a generic escape hatch (`Steps.awsSdk()`) for any AWS service.
+SimpleSteps provides typed bindings for 64 AWS services — 16 with optimized integrations (including HTTPS Endpoints), 48 SDK-generated with full type signatures, plus Activity tasks, a callback pattern (`.waitForTaskToken`), and a generic escape hatch (`Steps.awsSdk()`) for any AWS service.
 
 All service bindings are compile-time markers. They provide TypeScript types for the compiler and throw if called at runtime.
 
 ```typescript
-import { Lambda, DynamoDB, S3, SQS, SNS, StepFunction, EventBridge, SecretsManager, SSM } from '@simplesteps/core/runtime/services';
+import {
+  Lambda, DynamoDB, S3, SQS, SNS, StepFunction, EventBridge, SecretsManager, SSM,
+  ECS, Bedrock, Glue, CodeBuild, Athena, Batch, HttpEndpoint, Activity,
+} from '@simplesteps/core/runtime/services';
 ```
 
 ---
