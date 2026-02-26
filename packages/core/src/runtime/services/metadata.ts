@@ -89,6 +89,9 @@ export type OptimizedEntry = OptimizedMethodEntry | OptimizedMethodAlias;
  * If a method is listed here, use its sdkResource. Otherwise fall back to generic.
  */
 export const OPTIMIZED_INTEGRATIONS: Record<string, Record<string, OptimizedEntry>> = {
+  Activity: {
+    call: { integration: 'direct', hasOutput: true },
+  },
   Lambda: {
     call: { integration: 'direct', hasOutput: true },
     callAsync: { integration: 'sdk', sdkResource: 'arn:aws:states:::lambda:invoke', hasOutput: false },
@@ -171,6 +174,9 @@ export const OPTIMIZED_INTEGRATIONS: Record<string, Record<string, OptimizedEntr
     startQueryExecution: { integration: 'sdk', sdkResource: 'arn:aws:states:::athena:startQueryExecution.sync', hasOutput: true },
     getQueryExecution: { integration: 'sdk', sdkResource: 'arn:aws:states:::athena:getQueryExecution', hasOutput: true },
     getQueryResults: { integration: 'sdk', sdkResource: 'arn:aws:states:::athena:getQueryResults', hasOutput: true },
+  },
+  HttpEndpoint: {
+    invoke: { integration: 'sdk', sdkResource: 'arn:aws:states:::http:invoke', hasOutput: true },
   },
 };
 

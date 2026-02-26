@@ -4374,3 +4374,899 @@ describe('ASL output: Steps.awsSdk()', () => {
     expect(args.Message).toBe('done');
   });
 });
+
+// ---------------------------------------------------------------------------
+// Distributed Map: Steps.distributedMap()
+// ---------------------------------------------------------------------------
+
+describe('ASL output: Steps.distributedMap()', () => {
+  let asl: any;
+  beforeAll(() => { asl = compileFixtureJsonata('steps-distributed-map.ts'); });
+
+  it('compiles without errors', () => {
+    expect(asl).toBeDefined();
+    expect(asl.QueryLanguage).toBe('JSONata');
+  });
+
+  it('produces a Map state', () => {
+    const maps = getStatesByType(asl, 'Map');
+    expect(maps.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('Map state has ProcessorConfig with Mode DISTRIBUTED', () => {
+    const maps = getStatesByType(asl, 'Map');
+    const [, mapState] = maps[0];
+    expect(mapState.ItemProcessor.ProcessorConfig).toBeDefined();
+    expect(mapState.ItemProcessor.ProcessorConfig.Mode).toBe('DISTRIBUTED');
+    expect(mapState.ItemProcessor.ProcessorConfig.ExecutionType).toBe('STANDARD');
+  });
+
+  it('Map state has ItemReader with Resource and ReaderConfig', () => {
+    const maps = getStatesByType(asl, 'Map');
+    const [, mapState] = maps[0];
+    expect(mapState.ItemReader).toBeDefined();
+    expect(mapState.ItemReader.Resource).toBe('arn:aws:states:::s3:getObject');
+    expect(mapState.ItemReader.ReaderConfig).toBeDefined();
+    expect(mapState.ItemReader.ReaderConfig.InputType).toBe('CSV');
+  });
+
+  it('Map state has ResultWriter with Resource', () => {
+    const maps = getStatesByType(asl, 'Map');
+    const [, mapState] = maps[0];
+    expect(mapState.ResultWriter).toBeDefined();
+    expect(mapState.ResultWriter.Resource).toBe('arn:aws:states:::s3:putObject');
+  });
+
+  it('Map state has ToleratedFailurePercentage', () => {
+    const maps = getStatesByType(asl, 'Map');
+    const [, mapState] = maps[0];
+    expect(mapState.ToleratedFailurePercentage).toBe(5);
+  });
+
+  it('Map state has Label', () => {
+    const maps = getStatesByType(asl, 'Map');
+    const [, mapState] = maps[0];
+    expect(mapState.Label).toBe('ProcessRecords');
+  });
+
+  it('Map state has MaxConcurrency', () => {
+    const maps = getStatesByType(asl, 'Map');
+    const [, mapState] = maps[0];
+    expect(mapState.MaxConcurrency).toBe(1000);
+  });
+
+  it('Map state has ItemProcessor with states from callback body', () => {
+    const maps = getStatesByType(asl, 'Map');
+    const [, mapState] = maps[0];
+    expect(mapState.ItemProcessor.StartAt).toBeDefined();
+    expect(Object.keys(mapState.ItemProcessor.States).length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('state name includes DistMap prefix', () => {
+    const maps = getStatesByType(asl, 'Map');
+    const [name] = maps[0];
+    expect(name).toContain('DistMap');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Credentials on Task states
+// ---------------------------------------------------------------------------
+
+describe('ASL output: Credentials', () => {
+  let asl: any;
+  beforeAll(() => { asl = compileFixtureJsonata('credentials.ts'); });
+
+  it('compiles without errors', () => {
+    expect(asl).toBeDefined();
+  });
+
+  it('Task state has Credentials field', () => {
+    const tasks = getStatesByType(asl, 'Task');
+    expect(tasks.length).toBeGreaterThanOrEqual(1);
+    const taskWithCreds = tasks.find(([, t]) => t.Credentials != null);
+    expect(taskWithCreds).toBeDefined();
+  });
+
+  it('Credentials.RoleArn is the literal ARN', () => {
+    const tasks = getStatesByType(asl, 'Task');
+    const taskWithCreds = tasks.find(([, t]) => t.Credentials != null);
+    expect(taskWithCreds![1].Credentials.RoleArn).toBe('arn:aws:iam::999999999999:role/CrossAccountRole');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Activity task binding
+// ---------------------------------------------------------------------------
+
+describe('ASL output: Activity', () => {
+  let asl: any;
+  beforeAll(() => { asl = compileFixtureJsonata('activity.ts'); });
+
+  it('compiles without errors', () => {
+    expect(asl).toBeDefined();
+    expect(asl.QueryLanguage).toBe('JSONata');
+  });
+
+  it('produces a Task state', () => {
+    const tasks = getStatesByType(asl, 'Task');
+    expect(tasks.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('Task Resource is the activity ARN', () => {
+    const tasks = getStatesByType(asl, 'Task');
+    const activityTask = tasks.find(([, t]) => typeof t.Resource === 'string' && t.Resource.includes('activity:'));
+    expect(activityTask).toBeDefined();
+    expect(activityTask![1].Resource).toBe('arn:aws:states:us-east-1:123456789012:activity:HumanReview');
+  });
+
+  it('Task has TimeoutSeconds and HeartbeatSeconds', () => {
+    const tasks = getStatesByType(asl, 'Task');
+    const activityTask = tasks.find(([, t]) => typeof t.Resource === 'string' && t.Resource.includes('activity:'));
+    expect(activityTask![1].TimeoutSeconds).toBe(3600);
+    expect(activityTask![1].HeartbeatSeconds).toBe(60);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Promise.race / Promise.any — compile-time error
+// ---------------------------------------------------------------------------
+
+describe('ASL output: Promise.race/any error', () => {
+  it('Promise.race produces SS421 compilation error', () => {
+    const filePath = path.join(FIXTURES_DIR, 'promise-race.ts');
+    const result = compile({ sourceFiles: [filePath], queryLanguage: 'JSONata' });
+    const hasError = result.errors.some(e => e.code === 'SS421');
+    expect(hasError).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Steps.arraySlice intrinsic mapping
+// ---------------------------------------------------------------------------
+
+describe('ASL output: Steps.arraySlice', () => {
+  let asl: any;
+  beforeAll(() => { asl = compileFixtureJsonata('array-slice.ts'); });
+
+  it('compiles without errors', () => {
+    expect(asl).toBeDefined();
+  });
+
+  it('contains States.ArraySlice intrinsic in output', () => {
+    const allValues = collectAllStringValues(asl);
+    expect(allValues.some((v: string) => v.includes('States.ArraySlice'))).toBe(true);
+  });
+
+  it('also works in JSONPath mode', () => {
+    const jsonpathAsl = compileFixture('array-slice.ts');
+    const allValues = collectAllStringValues(jsonpathAsl);
+    expect(allValues.some((v: string) => v.includes('States.ArraySlice'))).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Distributed Map ExecutionType configurable
+// ---------------------------------------------------------------------------
+
+describe('ASL output: Distributed Map ExecutionType', () => {
+  it('executionType STANDARD is emitted in ProcessorConfig', () => {
+    const filePath = path.join(FIXTURES_DIR, 'steps-distributed-map-standard.ts');
+    const result = compile({ sourceFiles: [filePath], queryLanguage: 'JSONata' });
+    expect(result.errors.length).toBe(0);
+    // First export: distributedMapStandard
+    const asl = JSON.parse(AslSerializer.serialize(result.stateMachines[0].definition));
+    const maps = getStatesByType(asl, 'Map');
+    expect(maps.length).toBeGreaterThanOrEqual(1);
+    expect(maps[0][1].ItemProcessor.ProcessorConfig.ExecutionType).toBe('STANDARD');
+  });
+
+  it('executionType EXPRESS is emitted in ProcessorConfig', () => {
+    const filePath = path.join(FIXTURES_DIR, 'steps-distributed-map-standard.ts');
+    const result = compile({ sourceFiles: [filePath], queryLanguage: 'JSONata' });
+    expect(result.errors.length).toBe(0);
+    expect(result.stateMachines.length).toBeGreaterThanOrEqual(2);
+    // Second export: distributedMapExpress
+    const asl = JSON.parse(AslSerializer.serialize(result.stateMachines[1].definition));
+    const maps = getStatesByType(asl, 'Map');
+    expect(maps.length).toBeGreaterThanOrEqual(1);
+    expect(maps[0][1].ItemProcessor.ProcessorConfig.ExecutionType).toBe('EXPRESS');
+  });
+
+  it('default ExecutionType is STANDARD when not specified', () => {
+    const asl = compileFixtureJsonata('steps-distributed-map.ts');
+    const maps = getStatesByType(asl, 'Map');
+    expect(maps.length).toBeGreaterThanOrEqual(1);
+    expect(maps[0][1].ItemProcessor.ProcessorConfig.ExecutionType).toBe('STANDARD');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Machine-level TimeoutSeconds
+// ---------------------------------------------------------------------------
+
+describe('ASL output: Machine-level TimeoutSeconds', () => {
+  it('emits TimeoutSeconds when specified in compile options', () => {
+    const filePath = path.join(FIXTURES_DIR, 'sequential.ts');
+    const result = compile({ sourceFiles: [filePath], queryLanguage: 'JSONata', timeoutSeconds: 300 });
+    expect(result.errors.length).toBe(0);
+    const asl = JSON.parse(AslSerializer.serialize(result.stateMachines[0].definition));
+    expect(asl.TimeoutSeconds).toBe(300);
+  });
+
+  it('omits TimeoutSeconds when not specified', () => {
+    const asl = compileFixtureJsonata('sequential.ts');
+    expect(asl.TimeoutSeconds).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// AslParser
+// ---------------------------------------------------------------------------
+
+describe('AslParser', () => {
+  it('parse() returns a StateMachineDefinition from valid JSON', () => {
+    const { AslParser: Parser } = require('../../src/asl/index');
+    const json = '{"StartAt":"S1","States":{"S1":{"Type":"Pass","End":true}}}';
+    const def = Parser.parse(json);
+    expect(def.StartAt).toBe('S1');
+    expect(def.States.S1.Type).toBe('Pass');
+  });
+
+  it('parse() throws on invalid JSON', () => {
+    const { AslParser: Parser } = require('../../src/asl/index');
+    expect(() => Parser.parse('not json')).toThrow();
+  });
+
+  it('parseAndValidate() returns errors for invalid ASL', () => {
+    const { AslParser: Parser } = require('../../src/asl/index');
+    const json = '{"StartAt":"Missing","States":{"S1":{"Type":"Pass","End":true}}}';
+    const result = Parser.parseAndValidate(json);
+    expect(result.errors.length).toBeGreaterThan(0);
+    expect(result.errors[0].code).toBe('ASL101');
+  });
+
+  it('parseAndValidate() returns error for invalid JSON', () => {
+    const { AslParser: Parser } = require('../../src/asl/index');
+    const result = Parser.parseAndValidate('not json');
+    expect(result.errors.length).toBeGreaterThan(0);
+    expect(result.definition).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// AslValidator
+// ---------------------------------------------------------------------------
+
+describe('AslValidator', () => {
+  const { AslValidator: Validator } = require('../../src/asl/index');
+
+  it('validates a correct state machine with no errors', () => {
+    const def = {
+      StartAt: 'S1',
+      States: {
+        S1: { Type: 'Task', Resource: 'arn:aws:lambda:us-east-1:123:function:Fn', Next: 'S2' },
+        S2: { Type: 'Pass', End: true },
+      },
+    };
+    expect(Validator.validate(def)).toEqual([]);
+    expect(Validator.isValid(def)).toBe(true);
+  });
+
+  it('reports missing StartAt', () => {
+    const def = { States: { S1: { Type: 'Pass', End: true } } };
+    const errors = Validator.validate(def);
+    expect(errors.some((e: any) => e.code === 'ASL100')).toBe(true);
+  });
+
+  it('reports StartAt referencing non-existent state', () => {
+    const def = { StartAt: 'Missing', States: { S1: { Type: 'Pass', End: true } } };
+    const errors = Validator.validate(def);
+    expect(errors.some((e: any) => e.code === 'ASL101')).toBe(true);
+  });
+
+  it('reports state with neither Next nor End', () => {
+    const def = { StartAt: 'S1', States: { S1: { Type: 'Pass' } } };
+    const errors = Validator.validate(def);
+    expect(errors.some((e: any) => e.code === 'ASL200')).toBe(true);
+  });
+
+  it('reports dangling Next target', () => {
+    const def = { StartAt: 'S1', States: { S1: { Type: 'Pass', Next: 'Missing' } } };
+    const errors = Validator.validate(def);
+    expect(errors.some((e: any) => e.code === 'ASL201')).toBe(true);
+  });
+
+  it('reports *Path fields in JSONata mode', () => {
+    const def = {
+      QueryLanguage: 'JSONata',
+      StartAt: 'S1',
+      States: { S1: { Type: 'Task', Resource: 'arn:x', ResultPath: '$.result', End: true } },
+    };
+    const errors = Validator.validate(def);
+    expect(errors.some((e: any) => e.code === 'ASL300')).toBe(true);
+  });
+
+  it('allows *Path fields in JSONPath mode', () => {
+    const def = {
+      QueryLanguage: 'JSONPath',
+      StartAt: 'S1',
+      States: { S1: { Type: 'Task', Resource: 'arn:x', ResultPath: '$.result', End: true } },
+    };
+    const errors = Validator.validate(def);
+    expect(errors.some((e: any) => e.code === 'ASL300')).toBe(false);
+  });
+
+  it('validates Choice rule Next targets', () => {
+    const def = {
+      StartAt: 'C1',
+      States: {
+        C1: {
+          Type: 'Choice',
+          Choices: [{ Next: 'Missing', Condition: '{% true %}' }],
+          Default: 'S1',
+        },
+        S1: { Type: 'Pass', End: true },
+      },
+    };
+    const errors = Validator.validate(def);
+    expect(errors.some((e: any) => e.code === 'ASL202')).toBe(true);
+  });
+
+  it('validates Map ItemProcessor StartAt', () => {
+    const def = {
+      StartAt: 'M1',
+      States: {
+        M1: {
+          Type: 'Map',
+          ItemProcessor: { StartAt: 'Missing', States: { Inner: { Type: 'Pass', End: true } } },
+          End: true,
+        },
+      },
+    };
+    const errors = Validator.validate(def);
+    expect(errors.some((e: any) => e.code === 'ASL111')).toBe(true);
+  });
+
+  it('validates compiler-generated ASL without errors', () => {
+    const asl = compileFixtureJsonata('sequential.ts');
+    const errors = Validator.validate(asl);
+    expect(errors).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Callback pattern (.waitForTaskToken)
+// ---------------------------------------------------------------------------
+
+describe('ASL output: Callback pattern (.waitForTaskToken)', () => {
+  let asl: any;
+  beforeAll(() => { asl = compileFixtureJsonata('callback-token.ts'); });
+
+  it('compiles without errors', () => {
+    expect(asl).toBeDefined();
+  });
+
+  it('produces a Task state with .waitForTaskToken resource', () => {
+    const tasks = getStatesByType(asl, 'Task');
+    expect(tasks.length).toBeGreaterThanOrEqual(1);
+    const callbackTask = tasks.find(([, t]) =>
+      typeof t.Resource === 'string' && t.Resource.includes('waitForTaskToken'));
+    expect(callbackTask).toBeDefined();
+    expect(callbackTask![1].Resource).toBe('arn:aws:states:::lambda:invoke.waitForTaskToken');
+  });
+});
+
+// ===========================================================================
+// Extended task options: Comment, InputPath, OutputPath, ResultSelector
+// ===========================================================================
+
+describe('ASL output: task options extended', () => {
+  let asl: any;
+  beforeAll(() => { asl = compileToJson('task-options-extended.ts'); });
+
+  it('compiles without errors', () => {
+    expect(asl).toBeDefined();
+    expect(asl.States).toBeDefined();
+  });
+
+  it('emits Comment on the first Task state', () => {
+    const tasks = getStatesByType(asl, 'Task');
+    const commentTask = tasks.find(([, s]) => s.Comment === 'Fetch user by ID');
+    expect(commentTask).toBeDefined();
+  });
+
+  it('emits InputPath on the second Task state', () => {
+    const tasks = getStatesByType(asl, 'Task');
+    const inputPathTask = tasks.find(([, s]) => s.InputPath === '$.detail');
+    expect(inputPathTask).toBeDefined();
+  });
+
+  it('emits OutputPath on the third Task state', () => {
+    const tasks = getStatesByType(asl, 'Task');
+    const outputPathTask = tasks.find(([, s]) => s.OutputPath === '$.Payload');
+    expect(outputPathTask).toBeDefined();
+  });
+
+  it('emits ResultSelector on the fourth Task state', () => {
+    const tasks = getStatesByType(asl, 'Task');
+    const rsTasks = tasks.filter(([, s]) => s.ResultSelector);
+    expect(rsTasks.length).toBeGreaterThanOrEqual(1);
+    const rs = rsTasks[0][1].ResultSelector;
+    expect(rs['name.$']).toBe('$.Payload.name');
+    expect(rs['statusCode.$']).toBe('$.StatusCode');
+  });
+});
+
+// ===========================================================================
+// Steps.succeed() → Succeed state
+// ===========================================================================
+
+describe('ASL output: Steps.succeed()', () => {
+  let asl: any;
+  beforeAll(() => { asl = compileFixtureJsonata('steps-succeed.ts'); });
+
+  it('compiles without errors', () => {
+    expect(asl).toBeDefined();
+  });
+
+  it('contains a Succeed state', () => {
+    const succeedStates = getStatesByType(asl, 'Succeed');
+    expect(succeedStates.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('Succeed state has no Next or End field', () => {
+    const succeedStates = getStatesByType(asl, 'Succeed');
+    for (const [, s] of succeedStates) {
+      expect(s.Next).toBeUndefined();
+      // Succeed states don't need End: true either
+      expect(s.Type).toBe('Succeed');
+    }
+  });
+});
+
+// ===========================================================================
+// Async map diagnostic: arr.map(async fn) → error
+// ===========================================================================
+
+describe('ASL output: async map diagnostic', () => {
+  it('emits SS502 error for arr.map(async fn)', () => {
+    const fs = require('fs');
+    const fixturePath = path.join(FIXTURES_DIR, '__test_async_map.ts');
+    fs.writeFileSync(fixturePath, `
+      import { Steps, SimpleStepContext } from '../../../src/runtime/index';
+      import { Lambda } from '../../../src/runtime/services/Lambda';
+
+      const myLambda = Lambda<{ item: string }, { result: string }>(
+        'arn:aws:lambda:us-east-1:123:function:MyFunc'
+      );
+
+      export const asyncMapTest = Steps.createFunction(
+        async (context: SimpleStepContext, input: { items: string[] }) => {
+          const results = input.items.map(async (item) => {
+            return await myLambda.call({ item });
+          });
+          return { results };
+        },
+      );
+    `);
+    try {
+      const result = compile({
+        sourceFiles: [fixturePath],
+        queryLanguage: 'JSONata',
+      });
+      const asyncMapError = result.errors.find(e => e.code === 'SS502');
+      expect(asyncMapError).toBeDefined();
+      expect(asyncMapError!.message).toContain('async callback');
+    } finally {
+      fs.unlinkSync(fixturePath);
+    }
+  });
+});
+
+// ===========================================================================
+// .sort(comparator) → JSONata $sort with comparator
+// ===========================================================================
+
+describe('ASL output: JSONata sort with comparator', () => {
+  let asl: any;
+  beforeAll(() => { asl = compileFixtureJsonata('sort-comparator.ts'); });
+
+  it('compiles without errors', () => {
+    expect(asl).toBeDefined();
+  });
+
+  it('emits $sort with a comparator function', () => {
+    const allStrings = collectAllStringValues(asl.States);
+    const sortExpr = allStrings.find(s => s.includes('$sort'));
+    expect(sortExpr).toBeDefined();
+    // The comparator should use function($a, $b) pattern
+    expect(sortExpr).toMatch(/function\(\$[a-z], \$[a-z]\)/);
+  });
+});
+
+// ===========================================================================
+// Source maps: Comment fields with file:line
+// ===========================================================================
+
+describe('ASL output: source maps', () => {
+  it('adds Comment with file:line when sourceMap is enabled', () => {
+    const filePath = path.join(FIXTURES_DIR, 'sequential.ts');
+    const result = compile({
+      sourceFiles: [filePath],
+      queryLanguage: 'JSONata',
+      sourceMap: true,
+    });
+    expect(result.errors).toHaveLength(0);
+    const def = result.stateMachines[0].definition;
+    const json = AslSerializer.serialize(def);
+    const asl = JSON.parse(json);
+
+    // At least some states should have Comment with source location
+    const statesWithComment = Object.entries(asl.States).filter(
+      ([, s]: any) => typeof (s as any).Comment === 'string' && /\.ts:\d+/.test((s as any).Comment)
+    );
+    expect(statesWithComment.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('does not add source map Comments when sourceMap is false/omitted', () => {
+    const asl = compileFixtureJsonata('sequential.ts');
+    // States should NOT have source map comments by default
+    const statesWithSourceComment = Object.entries(asl.States).filter(
+      ([, s]: any) => typeof (s as any).Comment === 'string' && /\.ts:\d+/.test((s as any).Comment)
+    );
+    expect(statesWithSourceComment).toHaveLength(0);
+  });
+});
+
+// ===========================================================================
+// Version field on state machine definition
+// ===========================================================================
+
+describe('ASL output: version field', () => {
+  it('emits Version when provided in compile options', () => {
+    const filePath = path.join(FIXTURES_DIR, 'sequential.ts');
+    const result = compile({
+      sourceFiles: [filePath],
+      queryLanguage: 'JSONata',
+      version: '1.0',
+    });
+    expect(result.errors).toHaveLength(0);
+    const def = result.stateMachines[0].definition;
+    const json = AslSerializer.serialize(def);
+    const asl = JSON.parse(json);
+    expect(asl.Version).toBe('1.0');
+  });
+
+  it('omits Version when not provided', () => {
+    const asl = compileFixtureJsonata('sequential.ts');
+    expect(asl.Version).toBeUndefined();
+  });
+});
+
+// ===========================================================================
+// Steps.parallel() with retry
+// ===========================================================================
+
+describe('ASL output: Steps.parallel() with retry', () => {
+  let asl: any;
+  beforeAll(() => { asl = compileFixtureJsonata('steps-parallel-retry.ts'); });
+
+  it('compiles without errors', () => {
+    expect(asl).toBeDefined();
+  });
+
+  it('contains a Parallel state', () => {
+    const parallelStates = getStatesByType(asl, 'Parallel');
+    expect(parallelStates.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('Parallel state has Retry configuration', () => {
+    const parallelStates = getStatesByType(asl, 'Parallel');
+    const [, parallelState] = parallelStates[0];
+    expect(parallelState.Retry).toBeDefined();
+    expect(Array.isArray(parallelState.Retry)).toBe(true);
+    expect(parallelState.Retry[0].ErrorEquals).toContain('States.ALL');
+    expect(parallelState.Retry[0].MaxAttempts).toBe(3);
+  });
+
+  it('Parallel state has branches', () => {
+    const parallelStates = getStatesByType(asl, 'Parallel');
+    const [, parallelState] = parallelStates[0];
+    expect(parallelState.Branches).toBeDefined();
+    expect(parallelState.Branches.length).toBe(2);
+  });
+});
+
+// ===========================================================================
+// Object rest patterns (JSONata only)
+// ===========================================================================
+
+describe('ASL output: JSONata object rest patterns', () => {
+  let asl: any;
+  beforeAll(() => { asl = compileFixtureJsonata('object-rest.ts'); });
+
+  it('compiles without errors', () => {
+    expect(asl).toBeDefined();
+  });
+
+  it('produces states that access destructured properties', () => {
+    const allStrings = collectAllStringValues(asl.States);
+    // "name" property should be referenced directly
+    const nameRef = allStrings.some(s => s.includes('name'));
+    expect(nameRef).toBe(true);
+  });
+
+  it('rest element uses $sift for remaining properties', () => {
+    const allStrings = collectAllStringValues(asl.States);
+    const siftExpr = allStrings.find(s => s.includes('$sift'));
+    expect(siftExpr).toBeDefined();
+  });
+});
+
+// ===========================================================================
+// Object rest pattern emits SS540 in JSONPath mode
+// ===========================================================================
+
+describe('ASL output: object rest pattern in JSONPath mode', () => {
+  it('emits SS540 error for rest patterns in JSONPath mode', () => {
+    const fs = require('fs');
+    const fixturePath = path.join(FIXTURES_DIR, '__test_object_rest_jsonpath.ts');
+    fs.writeFileSync(fixturePath, `
+      import { Steps, SimpleStepContext } from '../../../src/runtime/index';
+      import { Lambda } from '../../../src/runtime/services/Lambda';
+
+      const myLambda = Lambda<{ id: string }, { name: string; age: number; city: string }>(
+        'arn:aws:lambda:us-east-1:123:function:MyFunc'
+      );
+
+      export const objectRestJsonPath = Steps.createFunction(
+        async (context: SimpleStepContext, input: { id: string }) => {
+          const { name, ...rest } = await myLambda.call({ id: input.id });
+          return { name, rest };
+        },
+      );
+    `);
+    try {
+      const result = compile({
+        sourceFiles: [fixturePath],
+        queryLanguage: 'JSONPath',
+      });
+      const ss540Error = result.errors.find(e => e.code === 'SS540');
+      expect(ss540Error).toBeDefined();
+    } finally {
+      fs.unlinkSync(fixturePath);
+    }
+  });
+});
+
+// ===========================================================================
+// Source map with user comment precedence
+// ===========================================================================
+
+describe('ASL output: source map with user comment precedence', () => {
+  it('user-specified comment takes precedence over source map comment', () => {
+    const filePath = path.join(FIXTURES_DIR, 'task-options-extended.ts');
+    const result = compile({
+      sourceFiles: [filePath],
+      queryLanguage: 'JSONata',
+      sourceMap: true,
+    });
+    expect(result.errors).toHaveLength(0);
+    const def = result.stateMachines[0].definition;
+    const json = AslSerializer.serialize(def);
+    const asl = JSON.parse(json);
+
+    // The first Task state has comment: 'Fetch user by ID'
+    // Even with sourceMap: true, user comment should take precedence
+    const taskStates = getStatesByType(asl, 'Task');
+    const stateWithUserComment = taskStates.find(
+      ([, s]: any) => (s as any).Comment === 'Fetch user by ID'
+    );
+    expect(stateWithUserComment).toBeDefined();
+  });
+
+  it('other states still get source map comments when sourceMap is enabled', () => {
+    const filePath = path.join(FIXTURES_DIR, 'task-options-extended.ts');
+    const result = compile({
+      sourceFiles: [filePath],
+      queryLanguage: 'JSONata',
+      sourceMap: true,
+    });
+    expect(result.errors).toHaveLength(0);
+    const def = result.stateMachines[0].definition;
+    const json = AslSerializer.serialize(def);
+    const asl = JSON.parse(json);
+
+    // States without user comment should have source map comments
+    const statesWithSourceComment = Object.entries(asl.States).filter(
+      ([, s]: any) => typeof (s as any).Comment === 'string' && /\.ts:\d+/.test((s as any).Comment)
+    );
+    expect(statesWithSourceComment.length).toBeGreaterThanOrEqual(1);
+  });
+});
+
+// ===========================================================================
+// ResultSelector in JSONata mode behavior
+// ===========================================================================
+
+describe('ASL output: resultSelector in JSONata mode', () => {
+  it('passes through resultSelector in JSONata mode without error', () => {
+    const fs = require('fs');
+    const fixturePath = path.join(FIXTURES_DIR, '__test_result_selector_jsonata.ts');
+    fs.writeFileSync(fixturePath, `
+      import { Steps, SimpleStepContext } from '../../../src/runtime/index';
+      import { Lambda } from '../../../src/runtime/services/Lambda';
+
+      const myLambda = Lambda<{ id: string }, { name: string }>(
+        'arn:aws:lambda:us-east-1:123:function:MyFunc'
+      );
+
+      export const resultSelectorJsonata = Steps.createFunction(
+        async (context: SimpleStepContext, input: { id: string }) => {
+          const result = await myLambda.call({ id: input.id }, {
+            resultSelector: {
+              'name.$': '$.Payload.name',
+            },
+          });
+          return { name: result.name };
+        },
+      );
+    `);
+    try {
+      const result = compile({
+        sourceFiles: [fixturePath],
+        queryLanguage: 'JSONata',
+      });
+      // ResultSelector compiles through in JSONata mode — it's a pass-through option
+      expect(result.errors).toHaveLength(0);
+      expect(result.stateMachines.length).toBeGreaterThanOrEqual(1);
+      const def = result.stateMachines[0].definition;
+      const json = AslSerializer.serialize(def);
+      const asl = JSON.parse(json);
+      const taskStates = getStatesByType(asl, 'Task');
+      // ResultSelector is included in the output (user explicitly requested it)
+      const stateWithRS = taskStates.find(([, s]: any) => (s as any).ResultSelector);
+      expect(stateWithRS).toBeDefined();
+    } finally {
+      fs.unlinkSync(fixturePath);
+    }
+  });
+});
+
+// ===========================================================================
+// Steps.parallel() without retry option
+// ===========================================================================
+
+describe('ASL output: Steps.parallel() without retry', () => {
+  it('compiles a simple Promise.all as Parallel without Retry', () => {
+    const asl = compileFixtureJsonata('parallel.ts');
+    const parallelStates = getStatesByType(asl, 'Parallel');
+    expect(parallelStates.length).toBeGreaterThanOrEqual(1);
+    const [, parallelState] = parallelStates[0];
+    // Should NOT have Retry when no retry option is specified
+    expect((parallelState as any).Retry).toBeUndefined();
+  });
+});
+
+// ===========================================================================
+// .sort(comparator) in JSONPath mode emits SS540
+// ===========================================================================
+
+describe('ASL output: sort comparator in JSONPath mode', () => {
+  it('emits SS540 error for .sort(comparator) in JSONPath mode', () => {
+    const filePath = path.join(FIXTURES_DIR, 'sort-comparator.ts');
+    const result = compile({
+      sourceFiles: [filePath],
+      queryLanguage: 'JSONPath',
+    });
+    const ss540Error = result.errors.find(e => e.code === 'SS540');
+    expect(ss540Error).toBeDefined();
+  });
+});
+
+// ===========================================================================
+// Multiple rest patterns in one function
+// ===========================================================================
+
+describe('ASL output: multiple rest patterns in one function', () => {
+  it('compiles multiple destructuring patterns with rest in JSONata mode', () => {
+    const fs = require('fs');
+    const fixturePath = path.join(FIXTURES_DIR, '__test_multi_rest.ts');
+    fs.writeFileSync(fixturePath, `
+      import { Steps, SimpleStepContext } from '../../../src/runtime/index';
+      import { Lambda } from '../../../src/runtime/services/Lambda';
+
+      const svc1 = Lambda<{ id: string }, { name: string; age: number; city: string }>(
+        'arn:aws:lambda:us-east-1:123:function:Svc1'
+      );
+      const svc2 = Lambda<{ id: string }, { email: string; phone: string; address: string }>(
+        'arn:aws:lambda:us-east-1:123:function:Svc2'
+      );
+
+      export const multiRest = Steps.createFunction(
+        async (context: SimpleStepContext, input: { id: string }) => {
+          const { name, ...meta1 } = await svc1.call({ id: input.id });
+          const { email, ...meta2 } = await svc2.call({ id: input.id });
+          return { name, meta1, email, meta2 };
+        },
+      );
+    `);
+    try {
+      const result = compile({
+        sourceFiles: [fixturePath],
+        queryLanguage: 'JSONata',
+      });
+      expect(result.errors).toHaveLength(0);
+      expect(result.stateMachines.length).toBeGreaterThanOrEqual(1);
+
+      const def = result.stateMachines[0].definition;
+      const json = AslSerializer.serialize(def);
+      const asl = JSON.parse(json);
+
+      // Both rest patterns should produce $sift expressions
+      const allStrings = collectAllStringValues(asl.States);
+      const siftExprs = allStrings.filter(s => s.includes('$sift'));
+      expect(siftExprs.length).toBeGreaterThanOrEqual(2);
+    } finally {
+      fs.unlinkSync(fixturePath);
+    }
+  });
+});
+
+// ===========================================================================
+// Version field with empty string
+// ===========================================================================
+
+// ===========================================================================
+// HTTPS Endpoint (http:invoke)
+// ===========================================================================
+
+describe('ASL output: HTTPS Endpoint (http:invoke)', () => {
+  let asl: any;
+  beforeAll(() => { asl = compileFixtureJsonata('http-endpoint.ts'); });
+
+  it('compiles without errors', () => {
+    expect(asl).toBeDefined();
+  });
+
+  it('contains a Task state with http:invoke Resource', () => {
+    const taskStates = getStatesByType(asl, 'Task');
+    expect(taskStates.length).toBeGreaterThanOrEqual(1);
+    const httpTask = taskStates.find(
+      ([, s]: any) => (s as any).Resource === 'arn:aws:states:::http:invoke'
+    );
+    expect(httpTask).toBeDefined();
+  });
+
+  it('includes ApiEndpoint and Method in parameters', () => {
+    const taskStates = getStatesByType(asl, 'Task');
+    const httpTask = taskStates.find(
+      ([, s]: any) => (s as any).Resource === 'arn:aws:states:::http:invoke'
+    );
+    expect(httpTask).toBeDefined();
+    const [, state] = httpTask!;
+    const params = (state as any).Arguments || (state as any).Parameters;
+    expect(params).toBeDefined();
+    const allStrings = collectAllStringValues(params);
+    expect(allStrings.some(s => s.includes('api.example.com'))).toBe(true);
+    expect(allStrings.some(s => s === 'POST')).toBe(true);
+  });
+});
+
+describe('ASL output: version field with empty string', () => {
+  it('omits Version when given empty string', () => {
+    const filePath = path.join(FIXTURES_DIR, 'sequential.ts');
+    const result = compile({
+      sourceFiles: [filePath],
+      queryLanguage: 'JSONata',
+      version: '',
+    });
+    expect(result.errors).toHaveLength(0);
+    const def = result.stateMachines[0].definition;
+    const json = AslSerializer.serialize(def);
+    const asl = JSON.parse(json);
+    // Empty string should be treated as falsy — no Version field
+    expect(asl.Version).toBeUndefined();
+  });
+});

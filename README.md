@@ -47,7 +47,7 @@ export const helloWorld = Steps.createFunction(
     },
     "Return_Result": {
       "Type": "Pass",
-      "Arguments": { "greeting": "{% $result.greeting %}" },
+      "Output": { "greeting": "{% $result.greeting %}" },
       "End": true
     }
   }
@@ -208,7 +208,7 @@ npx simplesteps compile workflow.ts -o output/ --query-language jsonpath
 - **15 AWS service bindings**: Lambda, DynamoDB, SQS, SNS, EventBridge, S3, Secrets Manager, SSM, ECS, Bedrock, Glue, CodeBuild, Athena, Batch, StepFunction + `Steps.awsSdk()` for direct SDK integration
 - **CDK token propagation** through CloudFormation intrinsics (`Fn::GetAtt`, `Ref`)
 - **Substep inlining** for reusable workflow fragments
-- **50+ diagnostic codes** with root-cause attribution and poisoned-value chain tracking
+- **40+ diagnostic codes** with root-cause attribution and poisoned-value chain tracking
 
 ## Documentation
 

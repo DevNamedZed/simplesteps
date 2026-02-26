@@ -39,6 +39,52 @@ export interface MapOptions {
 }
 
 // ---------------------------------------------------------------------------
+// 3b. DistributedMapOptions
+// ---------------------------------------------------------------------------
+
+export interface ItemReaderConfig {
+  readonly Resource: 'arn:aws:states:::s3:getObject';
+  readonly ReaderConfig: {
+    readonly InputType: 'CSV' | 'JSON' | 'MANIFEST';
+    readonly CSVHeaderLocation?: 'FIRST_ROW' | 'GIVEN';
+    readonly CSVHeaders?: readonly string[];
+    readonly MaxItems?: number;
+  };
+  readonly Parameters?: Record<string, unknown>;
+}
+
+export interface ResultWriterConfig {
+  readonly Resource: 'arn:aws:states:::s3:putObject';
+  readonly Parameters?: Record<string, unknown>;
+}
+
+export interface ItemBatcherConfig {
+  readonly MaxItemsPerBatch?: number;
+  readonly MaxInputBytesPerBatch?: number;
+  readonly BatchInput?: Record<string, unknown>;
+}
+
+export interface DistributedMapOptions {
+  readonly maxConcurrency?: number;
+  readonly executionType?: 'STANDARD' | 'EXPRESS';
+  readonly itemReader?: ItemReaderConfig;
+  readonly resultWriter?: ResultWriterConfig;
+  readonly itemBatcher?: ItemBatcherConfig;
+  readonly toleratedFailurePercentage?: number;
+  readonly toleratedFailureCount?: number;
+  readonly label?: string;
+  readonly retry?: import('./services/types').RetryPolicy | readonly import('./services/types').RetryPolicy[];
+}
+
+// ---------------------------------------------------------------------------
+// 3c. ParallelOptions
+// ---------------------------------------------------------------------------
+
+export interface ParallelOptions {
+  readonly retry?: import('./services/types').RetryPolicy | readonly import('./services/types').RetryPolicy[];
+}
+
+// ---------------------------------------------------------------------------
 // 4. HashAlgorithm
 // ---------------------------------------------------------------------------
 
@@ -200,6 +246,40 @@ export class Steps {
     throw new Error(RUNTIME_ERROR_MESSAGE);
   }
 
+  // -- Distributed Map -----------------------------------------------------
+
+  /**
+   * Distributed Map: large-scale parallel iteration with S3-based I/O.
+   * Compiles to a Map state with ProcessorConfig DISTRIBUTED.
+   *
+   * @example
+   *   const results = await Steps.distributedMap(
+   *     input.items,
+   *     async (item) => { return await processItem.call({ item }); },
+   *     {
+   *       maxConcurrency: 1000,
+   *       itemReader: {
+   *         Resource: 'arn:aws:states:::s3:getObject',
+   *         ReaderConfig: { InputType: 'CSV' },
+   *         Parameters: { Bucket: 'my-bucket', Key: 'data.csv' },
+   *       },
+   *       resultWriter: {
+   *         Resource: 'arn:aws:states:::s3:putObject',
+   *         Parameters: { Bucket: 'my-bucket', Prefix: 'results/' },
+   *       },
+   *       toleratedFailurePercentage: 5,
+   *       label: 'ProcessRecords',
+   *     },
+   *   );
+   */
+  static distributedMap<T, R>(
+    _items: readonly T[],
+    _callback: (item: T) => Promise<R>,
+    _options?: DistributedMapOptions,
+  ): Promise<R[]> {
+    throw new Error(RUNTIME_ERROR_MESSAGE);
+  }
+
   // -- Compiler hints ------------------------------------------------------
 
   /**
@@ -236,6 +316,33 @@ export class Steps {
     _action: string,
     _parameters: TInput,
   ): Promise<TOutput> {
+    throw new Error(RUNTIME_ERROR_MESSAGE);
+  }
+
+  /**
+   * Emit an explicit Succeed state. Terminates the current execution path.
+   *
+   * @example
+   *   Steps.succeed();
+   */
+  static succeed(): never {
+    throw new Error(RUNTIME_ERROR_MESSAGE);
+  }
+
+  /**
+   * Execute branches in parallel with optional retry configuration.
+   * Compiles to ASL Parallel state with Retry rules.
+   *
+   * @example
+   *   const [a, b] = await Steps.parallel(
+   *     [() => svc1.call(input), () => svc2.call(input)],
+   *     { retry: { errorEquals: ['States.ALL'], maxAttempts: 3 } },
+   *   );
+   */
+  static parallel<T extends readonly unknown[]>(
+    _branches: { [K in keyof T]: () => Promise<T[K]> },
+    _options?: ParallelOptions,
+  ): Promise<T> {
     throw new Error(RUNTIME_ERROR_MESSAGE);
   }
 }

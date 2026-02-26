@@ -59,6 +59,7 @@ export interface TaskState extends StateBase, TerminalFields {
   readonly HeartbeatSecondsPath?: string;
   readonly Retry?: readonly RetryRule[];
   readonly Catch?: readonly CatchRule[];
+  readonly Credentials?: Readonly<Record<string, unknown>>;
 }
 
 export interface PassState extends StateBase, TerminalFields {
@@ -108,7 +109,12 @@ export interface MapState extends StateBase, TerminalFields {
   readonly Type: 'Map';
   readonly ItemsPath?: string;
   readonly Items?: string;
-  readonly ItemProcessor: StateMachineDefinition;
+  readonly ItemProcessor: StateMachineDefinition & {
+    readonly ProcessorConfig?: {
+      readonly Mode: 'INLINE' | 'DISTRIBUTED';
+      readonly ExecutionType?: 'STANDARD' | 'EXPRESS';
+    };
+  };
   readonly ItemSelector?: Readonly<Record<string, unknown>>;
   readonly MaxConcurrency?: number;
   readonly ResultPath?: string | null;
@@ -118,6 +124,26 @@ export interface MapState extends StateBase, TerminalFields {
   readonly Arguments?: Readonly<Record<string, unknown>>;
   readonly Retry?: readonly RetryRule[];
   readonly Catch?: readonly CatchRule[];
+  // Distributed Map fields
+  readonly ItemReader?: {
+    readonly Resource: string;
+    readonly ReaderConfig?: Readonly<Record<string, unknown>>;
+    readonly Parameters?: Readonly<Record<string, unknown>>;
+    readonly Arguments?: Readonly<Record<string, unknown>>;
+  };
+  readonly ResultWriter?: {
+    readonly Resource: string;
+    readonly Parameters?: Readonly<Record<string, unknown>>;
+    readonly Arguments?: Readonly<Record<string, unknown>>;
+  };
+  readonly ItemBatcher?: {
+    readonly MaxItemsPerBatch?: number;
+    readonly MaxInputBytesPerBatch?: number;
+    readonly BatchInput?: Readonly<Record<string, unknown>>;
+  };
+  readonly ToleratedFailurePercentage?: number;
+  readonly ToleratedFailureCount?: number;
+  readonly Label?: string;
 }
 
 export interface SucceedState {

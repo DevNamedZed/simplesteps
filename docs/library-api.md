@@ -40,8 +40,14 @@ interface CompileOptions {
   cwd?: string;                // Working directory (default: process.cwd())
   substitutions?: Record<string, unknown>;  // Deploy-time value overrides
   queryLanguage?: 'JSONata' | 'JSONPath';   // ASL query language (default: 'JSONata')
+  timeoutSeconds?: number;     // Global state machine execution timeout
+  version?: string;            // ASL Version field (default: omitted)
+  sourceMap?: boolean;         // Add source file:line to ASL Comment fields (default: false)
 }
 ```
+
+- `version` — Sets the top-level `Version` field in the ASL output. Defaults to omitted (ASL default is `"1.0"`).
+- `sourceMap` — When `true`, every emitted ASL state gets a `Comment` field with `filename:line` pointing back to the TypeScript source. Useful for debugging compiled ASL. User-specified `comment` task options take precedence over auto-generated source map comments.
 
 Provide either `tsconfigPath` (compile a project) or `sourceFiles` (compile specific files). If both are provided, `sourceFiles` takes precedence.
 

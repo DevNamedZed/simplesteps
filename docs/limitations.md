@@ -166,6 +166,7 @@ These array methods compile to ASL intrinsics or JSONata built-in functions:
 | `arr.join(sep)` | `$join(arr, sep)` | SS540 | JSONata only |
 | `arr.reverse()` | `$reverse(arr)` | SS540 | JSONata only |
 | `arr.sort()` | `$sort(arr)` | SS540 | JSONata only |
+| `arr.sort((a, b) => a.x - b.x)` | `$sort(arr, function($a, $b) { $a.x < $b.x })` | SS540 | JSONata only |
 | `arr.concat(b)` | `$append(arr, b)` | SS540 | JSONata only |
 
 ### Higher-order array functions (JSONata only)
@@ -264,19 +265,33 @@ The compiler must be able to see the branches at compile time.
 
 ## Destructuring
 
-Object destructuring of **service call results** is not supported. The state builder only registers simple variable names:
+### Object destructuring of service call results
+
+Named property destructuring is supported — each property is registered as a separate variable:
 
 ```typescript
-// NOT OK — destructuring silently ignored
+// OK — each property becomes its own variable
 const { name, count } = await myLambda.call(input);
-
-// OK — assign to a variable, then access properties
-const result = await myLambda.call(input);
-const name = result.name;    // → $.result.name
-const count = result.count;  // → $.result.count
+// name → $.result.name (JSONPath) or $states.result.name (JSONata)
+// count → $.result.count (JSONPath) or $states.result.count (JSONata)
 ```
 
-Array destructuring **is** supported for `Promise.all` results (see above). Destructured **function parameters** in substeps also work (e.g., `async function process({ id, name }: Input)`).
+### Rest patterns (JSONata only)
+
+In JSONata mode, the rest element captures remaining properties via `$sift()`:
+
+```typescript
+// OK in JSONata mode — rest element
+const { name, ...metadata } = await myLambda.call(input);
+// name → $states.result.name
+// metadata → $sift($states.result, function($v, $k) { $k != 'name' })
+```
+
+Rest patterns emit SS540 in JSONPath mode (no equivalent).
+
+### Other destructuring
+
+Array destructuring is supported for `Promise.all` results (see above). Destructured function parameters in substeps also work (e.g., `async function process({ id, name }: Input)`).
 
 ## Classes
 
@@ -421,6 +436,21 @@ compile({ sourceFiles: ['workflow.ts'], queryLanguage: 'JSONPath' });
 ```
 
 Methods only available in JSONata mode produce error **SS540** when compiled in JSONPath mode. The error message tells you what mode to switch to.
+
+## HTTPS Endpoints
+
+HTTPS Endpoints (`arn:aws:states:::http:invoke`) are supported via the `HttpEndpoint` binding. Authentication requires an EventBridge Connection ARN configured in the AWS Console.
+
+```typescript
+const http = new HttpEndpoint();
+const result = await http.invoke({
+  ApiEndpoint: 'https://api.example.com/data',
+  Method: 'GET',
+  Authentication: { ConnectionArn: 'arn:aws:events:...:connection/MyConn' },
+});
+```
+
+See [Services](./services.md#httpendpoint) for the full API.
 
 ## General Rule
 

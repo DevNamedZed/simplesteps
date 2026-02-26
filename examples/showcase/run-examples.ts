@@ -49,6 +49,14 @@ const examples = [
   '36-array-methods.ts',
   '37-lambda-expressions.ts',
   '38-full-data-transform.ts',
+  '39-activity-task.ts',
+  '40-distributed-map.ts',
+  '41-credentials.ts',
+  '42-steps-parallel.ts',
+  '43-object-destructuring.ts',
+  '44-steps-succeed.ts',
+  '45-sort-comparator.ts',
+  '46-http-endpoint.ts',
 ];
 
 fs.mkdirSync(OUTPUT_DIR, { recursive: true });

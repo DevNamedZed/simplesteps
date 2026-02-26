@@ -461,6 +461,7 @@ const STEPS_TO_INTRINSIC: Record<string, string> = {
   arrayGetItem: 'States.ArrayGetItem',
   arrayLength: 'States.ArrayLength',
   arrayUnique: 'States.ArrayUnique',
+  arraySlice: 'States.ArraySlice',
   jsonParse: 'States.StringToJson',
   jsonStringify: 'States.JsonToString',
   merge: 'States.JsonMerge',
@@ -939,11 +940,63 @@ function resolveCallExpression(
       }
 
       // arr.sort() → $sort(arr)  [JSONata only]
-      if (methodName === 'sort' && expr.arguments.length === 0) {
-        if (jsonata) {
-          return { kind: 'intrinsic', path: `$sort(${baseStr})` };
+      // arr.sort((a, b) => a.x - b.x) → $sort(arr, function($a, $b) { $a.x < $b.x })  [JSONata only]
+      if (methodName === 'sort') {
+        if (expr.arguments.length === 0) {
+          if (jsonata) {
+            return { kind: 'intrinsic', path: `$sort(${baseStr})` };
+          }
+          return jsonataOnlyError(context, expr, 'arr.sort()');
         }
-        return jsonataOnlyError(context, expr, 'arr.sort()');
+        if (expr.arguments.length === 1) {
+          const cbArg = expr.arguments[0];
+          if (jsonata && (ts.isArrowFunction(cbArg) || ts.isFunctionExpression(cbArg)) && cbArg.parameters.length === 2) {
+            const paramA = cbArg.parameters[0];
+            const paramB = cbArg.parameters[1];
+            if (ts.isIdentifier(paramA.name) && ts.isIdentifier(paramB.name)) {
+              const symA = context.checker.getSymbolAtLocation(paramA.name);
+              const symB = context.checker.getSymbolAtLocation(paramB.name);
+              if (symA && symB) {
+                const childVars: VariableResolution = {
+                  variables: new Map([
+                    ...variables.variables,
+                    [symA, { symbol: symA, type: StepVariableType.StateOutput, jsonPath: `$${paramA.name.text}`, definitelyAssigned: true, constant: false } satisfies VariableInfo],
+                    [symB, { symbol: symB, type: StepVariableType.StateOutput, jsonPath: `$${paramB.name.text}`, definitelyAssigned: true, constant: false } satisfies VariableInfo],
+                  ]),
+                  inputSymbol: variables.inputSymbol,
+                  contextSymbol: variables.contextSymbol,
+                  deferredBindings: variables.deferredBindings,
+                };
+                // Extract body expression
+                let bodyExpr: ts.Expression | undefined;
+                if (!ts.isBlock(cbArg.body)) {
+                  bodyExpr = cbArg.body;
+                } else if (cbArg.body.statements.length === 1 && ts.isReturnStatement(cbArg.body.statements[0]) && cbArg.body.statements[0].expression) {
+                  bodyExpr = cbArg.body.statements[0].expression;
+                }
+                if (bodyExpr) {
+                  // Pattern: a - b or a.x - b.x → convert subtraction to less-than
+                  if (ts.isBinaryExpression(bodyExpr) && bodyExpr.operatorToken.kind === ts.SyntaxKind.MinusToken) {
+                    const leftR = resolveExpression(context, bodyExpr.left, childVars, dialect);
+                    const rightR = resolveExpression(context, bodyExpr.right, childVars, dialect);
+                    const leftStr = serializeArg(leftR, dialect);
+                    const rightStr = serializeArg(rightR, dialect);
+                    if (leftStr && rightStr) {
+                      return { kind: 'intrinsic', path: `$sort(${baseStr}, function($${paramA.name.text}, $${paramB.name.text}) { ${leftStr} < ${rightStr} })` };
+                    }
+                  }
+                  // General boolean expression: resolve directly
+                  const bodyR = resolveExpression(context, bodyExpr, childVars, dialect);
+                  const bodyStr = serializeArg(bodyR, dialect);
+                  if (bodyStr) {
+                    return { kind: 'intrinsic', path: `$sort(${baseStr}, function($${paramA.name.text}, $${paramB.name.text}) { ${bodyStr} })` };
+                  }
+                }
+              }
+            }
+          }
+          return jsonataOnlyError(context, expr, 'arr.sort(comparator)');
+        }
       }
 
       // arr.concat(b) → $append(arr, b)  [JSONata only]
@@ -963,13 +1016,23 @@ function resolveCallExpression(
       // arr.map(fn) → $map(arr, function($v) { expr })
       if (methodName === 'map' && expr.arguments.length === 1) {
         const cbArg = expr.arguments[0];
-        if (jsonata && (ts.isArrowFunction(cbArg) || ts.isFunctionExpression(cbArg))) {
-          const cb = resolveCallbackToJsonata(context, cbArg, variables, dialect);
-          if (cb) {
-            return { kind: 'intrinsic', path: `$map(${baseStr}, function(${cb.params.join(', ')}) { ${cb.body} })` };
+        if ((ts.isArrowFunction(cbArg) || ts.isFunctionExpression(cbArg))) {
+          // Detect async callback → emit helpful diagnostic
+          if (cbArg.modifiers?.some(m => m.kind === ts.SyntaxKind.AsyncKeyword)) {
+            context.addDiagnostic(expr,
+              'Array.prototype.map() with an async callback cannot be compiled to ASL. ' +
+              'Use Steps.map(items, async (item) => { ... }) or for...of with Steps.items() instead.',
+              'error', ErrorCodes.Expr.UncompilableExpression.code);
+            return { kind: 'unknown' };
+          }
+          if (jsonata) {
+            const cb = resolveCallbackToJsonata(context, cbArg, variables, dialect);
+            if (cb) {
+              return { kind: 'intrinsic', path: `$map(${baseStr}, function(${cb.params.join(', ')}) { ${cb.body} })` };
+            }
           }
         }
-        // Don't error — may be handled by cfgBuilder as a Map state for async callbacks
+        // Don't error — may be handled by cfgBuilder as a Map state
       }
 
       // arr.filter(fn) → $filter(arr, function($v) { pred })
@@ -1289,7 +1352,8 @@ function resolveJsonataStepsCall(
     // Keep as States.* intrinsics (no clean JSONata equivalent)
     case 'hash':
     case 'arrayPartition':
-    case 'arrayRange': {
+    case 'arrayRange':
+    case 'arraySlice': {
       const intrinsicName = STEPS_TO_INTRINSIC[methodName];
       if (intrinsicName) {
         return { kind: 'intrinsic', path: `${intrinsicName}(${serialized.join(', ')})` };

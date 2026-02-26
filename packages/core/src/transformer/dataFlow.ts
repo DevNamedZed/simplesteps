@@ -9,12 +9,13 @@
 
 import ts from 'typescript';
 import type { ServiceRegistry } from '../compiler/discovery/serviceDiscovery.js';
+import { detectCdkExpression } from '../compiler/analysis/cdkDetection.js';
 
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
 
-export type FreeVariableClassification = 'service-binding' | 'constant' | 'runtime';
+export type FreeVariableClassification = 'service-binding' | 'constant' | 'cdk-synth' | 'runtime';
 
 export interface ServiceInfo {
   /** The service name (e.g. "Lambda", "DynamoDB"). */
@@ -273,6 +274,17 @@ function classifyFreeVariable(
           constantValue: constValue,
         };
       }
+    }
+
+    // Check for CDK synth-time expression pattern
+    // (e.g., const arn = myLambda.functionArn where myLambda is a CDK construct)
+    const cdkMatch = detectCdkExpression(checker, decl.initializer);
+    if (cdkMatch) {
+      return {
+        symbol,
+        classification: 'cdk-synth',
+        runtimeExpr: decl.initializer,
+      };
     }
 
     // Runtime expression — preserve the initializer

@@ -24,6 +24,7 @@ import type {
   ChoiceState,
   WaitState,
   FailState,
+  SucceedState,
   MapState,
   ParallelState,
   CatchRule,
@@ -56,6 +57,7 @@ interface BuildContext {
   readonly usedNames: Set<string>;
   readonly tryCatchScopes: TryCatchScope[];
   readonly dialect: PathDialect;
+  readonly sourceMap?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -72,6 +74,9 @@ export function buildStateMachine(
   serviceRegistry: ServiceRegistry,
   variables: VariableResolutionBuilder,
   dialect: PathDialect = JSON_PATH_DIALECT,
+  timeoutSeconds?: number,
+  version?: string,
+  sourceMap?: boolean,
 ): StateMachineDefinition {
   const buildCtx: BuildContext = {
     compilerContext: context,
@@ -85,6 +90,7 @@ export function buildStateMachine(
     usedNames: new Set(),
     tryCatchScopes: [],
     dialect,
+    sourceMap,
   };
 
   const startState = processBlock(buildCtx, cfg.entry);
@@ -105,6 +111,8 @@ export function buildStateMachine(
 
   return {
     ...(dialect.queryLanguage && { QueryLanguage: dialect.queryLanguage }),
+    ...(timeoutSeconds != null && { TimeoutSeconds: timeoutSeconds }),
+    ...(version && { Version: version }),
     StartAt: startState,
     States: states,
   };
@@ -293,6 +301,12 @@ function processStatement(ctx: BuildContext, stmt: ts.Statement): string | null 
     if (result) return result;
   }
 
+  // Pattern 5: Steps.succeed() — Succeed state
+  if (ts.isExpressionStatement(stmt) && ts.isCallExpression(stmt.expression)) {
+    const result = processStepsSucceed(ctx, stmt.expression);
+    if (result) return result;
+  }
+
   return null;
 }
 
@@ -317,7 +331,14 @@ function processAwaitAssignment(
   if (!serviceCall) return null;
 
   // Get the variable name for ResultPath
-  const varName = ts.isIdentifier(decl.name) ? decl.name.text : undefined;
+  let varName: string | undefined;
+  if (ts.isIdentifier(decl.name)) {
+    varName = decl.name.text;
+  } else if (ts.isObjectBindingPattern(decl.name)) {
+    // Object destructuring: const { x, ...rest } = await svc.call(...)
+    // Use a synthetic temp name for the full result
+    varName = `__destructured_${ctx.usedNames.size}`;
+  }
   const resultPath = varName ? ctx.dialect.resultPath(varName) : null;
 
   // Register the variable as StateOutput
@@ -332,6 +353,49 @@ function processAwaitAssignment(
         constant: false,
       });
     }
+  } else if (varName && ts.isObjectBindingPattern(decl.name)) {
+    // Register each destructured property as a variable
+    const namedProps: string[] = [];
+    for (const element of decl.name.elements) {
+      if (element.dotDotDotToken) continue; // handle rest below
+      const propName = element.propertyName
+        ? (ts.isIdentifier(element.propertyName) ? element.propertyName.text : undefined)
+        : (ts.isIdentifier(element.name) ? element.name.text : undefined);
+      if (!propName || !ts.isIdentifier(element.name)) continue;
+      namedProps.push(propName);
+      const sym = ctx.compilerContext.checker.getSymbolAtLocation(element.name);
+      if (sym) {
+        ctx.variables.addVariable(sym, {
+          symbol: sym,
+          type: StepVariableType.StateOutput,
+          jsonPath: `${resultPath}.${propName}`,
+          definitelyAssigned: true,
+          constant: false,
+        });
+      }
+    }
+    // Handle rest element: const { x, ...rest } = result → rest = $sift(result, fn)
+    for (const element of decl.name.elements) {
+      if (!element.dotDotDotToken || !ts.isIdentifier(element.name)) continue;
+      const sym = ctx.compilerContext.checker.getSymbolAtLocation(element.name);
+      if (sym) {
+        if (ctx.dialect.queryLanguage === 'JSONata') {
+          const conditions = namedProps.map(p => `$k != '${p}'`).join(' and ');
+          const siftExpr = `$sift(${resultPath}, function($v, $k) { ${conditions} })`;
+          ctx.variables.addVariable(sym, {
+            symbol: sym,
+            type: StepVariableType.Derived,
+            definitelyAssigned: true,
+            constant: true,
+            intrinsicPath: siftExpr,
+          });
+        } else {
+          ctx.compilerContext.addError(element,
+            'Object rest patterns (const { x, ...rest } = obj) require JSONata mode. Use --query-language jsonata.',
+            ErrorCodes.Expr.JsonataOnlyFeature.code);
+        }
+      }
+    }
   }
 
   const stateName = generateStateName(
@@ -342,13 +406,18 @@ function processAwaitAssignment(
   const taskState: TaskState = {
     Type: 'Task',
     Resource: serviceCall.resource,
+    ...sourceComment(ctx, decl, serviceCall.comment),
+    ...(serviceCall.inputPath && { InputPath: serviceCall.inputPath }),
     ...(serviceCall.parameters && ctx.dialect.emitParameters(serviceCall.parameters)),
     ...(varName ? ctx.dialect.emitResultAssignment(varName) : ctx.dialect.emitResultDiscard()),
+    ...(serviceCall.resultSelector && { ResultSelector: serviceCall.resultSelector }),
+    ...(serviceCall.outputPath && { OutputPath: serviceCall.outputPath }),
     ...(serviceCall.retry && { Retry: serviceCall.retry }),
     ...(serviceCall.timeoutSeconds != null && { TimeoutSeconds: serviceCall.timeoutSeconds }),
     ...(serviceCall.timeoutSecondsPath && ctx.dialect.emitDynamicTimeout('TimeoutSeconds', serviceCall.timeoutSecondsPath)),
     ...(serviceCall.heartbeatSeconds != null && { HeartbeatSeconds: serviceCall.heartbeatSeconds }),
     ...(serviceCall.heartbeatSecondsPath && ctx.dialect.emitDynamicTimeout('HeartbeatSeconds', serviceCall.heartbeatSecondsPath)),
+    ...(serviceCall.credentials && { Credentials: serviceCall.credentials }),
     ...buildCatchRules(ctx),
   };
 
@@ -383,13 +452,18 @@ function processAwaitFireAndForget(
   const taskState: TaskState = {
     Type: 'Task',
     Resource: serviceCall.resource,
+    ...sourceComment(ctx, awaitExpr, serviceCall.comment),
+    ...(serviceCall.inputPath && { InputPath: serviceCall.inputPath }),
     ...(serviceCall.parameters && ctx.dialect.emitParameters(serviceCall.parameters)),
     ...ctx.dialect.emitResultDiscard(),
+    ...(serviceCall.resultSelector && { ResultSelector: serviceCall.resultSelector }),
+    ...(serviceCall.outputPath && { OutputPath: serviceCall.outputPath }),
     ...(serviceCall.retry && { Retry: serviceCall.retry }),
     ...(serviceCall.timeoutSeconds != null && { TimeoutSeconds: serviceCall.timeoutSeconds }),
     ...(serviceCall.timeoutSecondsPath && ctx.dialect.emitDynamicTimeout('TimeoutSeconds', serviceCall.timeoutSecondsPath)),
     ...(serviceCall.heartbeatSeconds != null && { HeartbeatSeconds: serviceCall.heartbeatSeconds }),
     ...(serviceCall.heartbeatSecondsPath && ctx.dialect.emitDynamicTimeout('HeartbeatSeconds', serviceCall.heartbeatSecondsPath)),
+    ...(serviceCall.credentials && { Credentials: serviceCall.credentials }),
     ...buildCatchRules(ctx),
   };
 
@@ -431,13 +505,18 @@ function processAwaitReassignment(
   const taskState: TaskState = {
     Type: 'Task',
     Resource: serviceCall.resource,
+    ...sourceComment(ctx, expr, serviceCall.comment),
+    ...(serviceCall.inputPath && { InputPath: serviceCall.inputPath }),
     ...(serviceCall.parameters && ctx.dialect.emitParameters(serviceCall.parameters)),
     ...resultAssignment,
+    ...(serviceCall.resultSelector && { ResultSelector: serviceCall.resultSelector }),
+    ...(serviceCall.outputPath && { OutputPath: serviceCall.outputPath }),
     ...(serviceCall.retry && { Retry: serviceCall.retry }),
     ...(serviceCall.timeoutSeconds != null && { TimeoutSeconds: serviceCall.timeoutSeconds }),
     ...(serviceCall.timeoutSecondsPath && ctx.dialect.emitDynamicTimeout('TimeoutSeconds', serviceCall.timeoutSecondsPath)),
     ...(serviceCall.heartbeatSeconds != null && { HeartbeatSeconds: serviceCall.heartbeatSeconds }),
     ...(serviceCall.heartbeatSecondsPath && ctx.dialect.emitDynamicTimeout('HeartbeatSeconds', serviceCall.heartbeatSecondsPath)),
+    ...(serviceCall.credentials && { Credentials: serviceCall.credentials }),
     ...buildCatchRules(ctx),
   };
 
@@ -495,6 +574,41 @@ function processStepsDelay(
   const stateName = generateStateName('Wait', ctx.usedNames);
   ctx.states.set(stateName, waitState as WaitState);
   return stateName;
+}
+
+// ---------------------------------------------------------------------------
+// Steps.succeed → Succeed state
+// ---------------------------------------------------------------------------
+
+function processStepsSucceed(
+  ctx: BuildContext,
+  callExpr: ts.CallExpression,
+): string | null {
+  if (!ts.isPropertyAccessExpression(callExpr.expression)) return null;
+  const propAccess = callExpr.expression;
+  if (!ts.isIdentifier(propAccess.expression) || propAccess.expression.text !== 'Steps') return null;
+  if (propAccess.name.text !== 'succeed') return null;
+
+  const stateName = generateStateName('Succeed', ctx.usedNames);
+  const succeedState: SucceedState = {
+    Type: 'Succeed',
+    ...sourceComment(ctx, callExpr),
+  };
+  ctx.states.set(stateName, succeedState);
+  return stateName;
+}
+
+// ---------------------------------------------------------------------------
+// Source map helper
+// ---------------------------------------------------------------------------
+
+function sourceComment(ctx: BuildContext, node: ts.Node, userComment?: string): Record<string, string> {
+  if (userComment) return { Comment: userComment };
+  if (!ctx.sourceMap) return {};
+  const sf = node.getSourceFile();
+  const { line } = sf.getLineAndCharacterOfPosition(node.getStart());
+  const file = sf.fileName.replace(/.*[\\/]/, '');
+  return { Comment: `${file}:${line + 1}` };
 }
 
 // ---------------------------------------------------------------------------
@@ -770,6 +884,45 @@ function processTryCatchTerminator(
   return null;
 }
 
+function buildDistributedMapFields(
+  ctx: BuildContext,
+  term: {
+    readonly itemReaderExpression?: ts.Expression;
+    readonly resultWriterExpression?: ts.Expression;
+    readonly itemBatcherExpression?: ts.Expression;
+    readonly toleratedFailurePercentage?: number;
+    readonly toleratedFailureCount?: number;
+    readonly label?: string;
+  },
+): Record<string, unknown> {
+  const fields: Record<string, unknown> = {};
+  const resolution = ctx.variables.toResolution();
+
+  if (term.itemReaderExpression && ts.isObjectLiteralExpression(term.itemReaderExpression)) {
+    fields.ItemReader = buildParameters(ctx.compilerContext, term.itemReaderExpression, resolution, ctx.dialect);
+  }
+
+  if (term.resultWriterExpression && ts.isObjectLiteralExpression(term.resultWriterExpression)) {
+    fields.ResultWriter = buildParameters(ctx.compilerContext, term.resultWriterExpression, resolution, ctx.dialect);
+  }
+
+  if (term.itemBatcherExpression && ts.isObjectLiteralExpression(term.itemBatcherExpression)) {
+    fields.ItemBatcher = buildParameters(ctx.compilerContext, term.itemBatcherExpression, resolution, ctx.dialect);
+  }
+
+  if (term.toleratedFailurePercentage != null) {
+    fields.ToleratedFailurePercentage = term.toleratedFailurePercentage;
+  }
+  if (term.toleratedFailureCount != null) {
+    fields.ToleratedFailureCount = term.toleratedFailureCount;
+  }
+  if (term.label) {
+    fields.Label = term.label;
+  }
+
+  return fields;
+}
+
 function processMapStateTerminator(
   ctx: BuildContext,
   term: {
@@ -785,6 +938,14 @@ function processMapStateTerminator(
     readonly resultBindingName?: string;
     readonly resultSymbol?: ts.Symbol;
     readonly retryExpression?: ts.Expression;
+    readonly distributed?: true;
+    readonly executionType?: 'STANDARD' | 'EXPRESS';
+    readonly itemReaderExpression?: ts.Expression;
+    readonly resultWriterExpression?: ts.Expression;
+    readonly itemBatcherExpression?: ts.Expression;
+    readonly toleratedFailurePercentage?: number;
+    readonly toleratedFailureCount?: number;
+    readonly label?: string;
   },
   block: BasicBlock,
   lastStateName: string | null,
@@ -835,7 +996,10 @@ function processMapStateTerminator(
     subStates[name] = state;
   }
 
-  const mapStateName = generateStateName('Map_items', ctx.usedNames);
+  const namePrefix = term.distributed
+    ? `DistMap_${term.label || 'items'}`
+    : 'Map_items';
+  const mapStateName = generateStateName(namePrefix, ctx.usedNames);
 
   if (!bodyFirst) {
     const errorNode = term.expression ?? term.itemsExpression;
@@ -857,11 +1021,22 @@ function processMapStateTerminator(
     ? ctx.dialect.emitResultAssignment(term.resultBindingName!)
     : ctx.dialect.emitResultDiscard();
 
+  // Build distributed map fields if applicable
+  const distributedFields = term.distributed
+    ? buildDistributedMapFields(ctx, term)
+    : {};
+
   const mapState: MapState = {
     Type: 'Map',
     ...ctx.dialect.emitItemsPath(itemsPath),
     ...(itemSelector && { ItemSelector: itemSelector }),
     ItemProcessor: {
+      ...(term.distributed && {
+        ProcessorConfig: {
+          Mode: 'DISTRIBUTED' as const,
+          ExecutionType: (term.executionType ?? 'STANDARD') as 'STANDARD' | 'EXPRESS',
+        },
+      }),
       StartAt: bodyFirst ?? 'Empty',
       States: subStates,
     },
@@ -869,6 +1044,7 @@ function processMapStateTerminator(
     ...resultFields,
     ...(mapRetry && { Retry: mapRetry }),
     ...buildCatchRules(ctx),
+    ...distributedFields,
   };
 
   ctx.states.set(mapStateName, mapState);
@@ -906,6 +1082,7 @@ function processParallelTerminator(
     readonly resultBindings: readonly string[];
     readonly resultSymbols: readonly (ts.Symbol | undefined)[];
     readonly exitBlock: string;
+    readonly retryExpression?: ts.Expression;
   },
   block: BasicBlock,
   lastStateName: string | null,
@@ -966,11 +1143,16 @@ function processParallelTerminator(
     parallelResultFields = ctx.dialect.emitParallelAssignment(bindings);
   }
 
+  const parallelRetry = term.retryExpression
+    ? extractRetryRules(ctx, term.retryExpression)
+    : undefined;
+
   const parallelStateName = generateStateName('Parallel', ctx.usedNames);
   const parallelState: ParallelState = {
     Type: 'Parallel',
     Branches: branchDefs,
     ...parallelResultFields,
+    ...(parallelRetry && { Retry: parallelRetry }),
     ...buildCatchRules(ctx),
   };
 
@@ -1104,12 +1286,17 @@ function processBranchExpression(
   const taskState: TaskState = {
     Type: 'Task',
     Resource: serviceCall.resource,
+    ...sourceComment(ctx, callExpr, serviceCall.comment),
+    ...(serviceCall.inputPath && { InputPath: serviceCall.inputPath }),
     ...(serviceCall.parameters && ctx.dialect.emitParameters(serviceCall.parameters)),
+    ...(serviceCall.resultSelector && { ResultSelector: serviceCall.resultSelector }),
+    ...(serviceCall.outputPath && { OutputPath: serviceCall.outputPath }),
     ...(serviceCall.retry && { Retry: serviceCall.retry }),
     ...(serviceCall.timeoutSeconds != null && { TimeoutSeconds: serviceCall.timeoutSeconds }),
     ...(serviceCall.timeoutSecondsPath && ctx.dialect.emitDynamicTimeout('TimeoutSeconds', serviceCall.timeoutSecondsPath)),
     ...(serviceCall.heartbeatSeconds != null && { HeartbeatSeconds: serviceCall.heartbeatSeconds }),
     ...(serviceCall.heartbeatSecondsPath && ctx.dialect.emitDynamicTimeout('HeartbeatSeconds', serviceCall.heartbeatSecondsPath)),
+    ...(serviceCall.credentials && { Credentials: serviceCall.credentials }),
     End: true,
   };
 
@@ -1141,12 +1328,17 @@ function processReturnTerminator(
       const taskState: TaskState = {
         Type: 'Task',
         Resource: serviceCall.resource,
+        ...sourceComment(ctx, expression, serviceCall.comment),
+        ...(serviceCall.inputPath && { InputPath: serviceCall.inputPath }),
         ...(serviceCall.parameters && ctx.dialect.emitParameters(serviceCall.parameters)),
+        ...(serviceCall.resultSelector && { ResultSelector: serviceCall.resultSelector }),
+        ...(serviceCall.outputPath && { OutputPath: serviceCall.outputPath }),
         ...(serviceCall.retry && { Retry: serviceCall.retry }),
         ...(serviceCall.timeoutSeconds != null && { TimeoutSeconds: serviceCall.timeoutSeconds }),
         ...(serviceCall.timeoutSecondsPath && ctx.dialect.emitDynamicTimeout('TimeoutSeconds', serviceCall.timeoutSecondsPath)),
         ...(serviceCall.heartbeatSeconds != null && { HeartbeatSeconds: serviceCall.heartbeatSeconds }),
         ...(serviceCall.heartbeatSecondsPath && ctx.dialect.emitDynamicTimeout('HeartbeatSeconds', serviceCall.heartbeatSecondsPath)),
+        ...(serviceCall.credentials && { Credentials: serviceCall.credentials }),
         ...buildCatchRules(ctx),
         End: true,
       };
@@ -1327,6 +1519,11 @@ interface ExtractedServiceCall {
   timeoutSecondsPath?: string;
   heartbeatSeconds?: number;
   heartbeatSecondsPath?: string;
+  credentials?: Record<string, unknown>;
+  comment?: string;
+  inputPath?: string;
+  outputPath?: string;
+  resultSelector?: Record<string, unknown>;
 }
 
 function extractServiceCall(
@@ -1512,7 +1709,7 @@ function extractTaskOptions(
   ctx: BuildContext,
   callExpr: ts.CallExpression,
   optionsArgIndex: number = 1,
-): Pick<ExtractedServiceCall, 'retry' | 'timeoutSeconds' | 'timeoutSecondsPath' | 'heartbeatSeconds' | 'heartbeatSecondsPath'> {
+): Pick<ExtractedServiceCall, 'retry' | 'timeoutSeconds' | 'timeoutSecondsPath' | 'heartbeatSeconds' | 'heartbeatSecondsPath' | 'credentials' | 'comment' | 'inputPath' | 'outputPath' | 'resultSelector'> {
   const optionsArg = callExpr.arguments[optionsArgIndex];
   if (!optionsArg || !ts.isObjectLiteralExpression(optionsArg)) return {};
 
@@ -1522,6 +1719,11 @@ function extractTaskOptions(
     timeoutSecondsPath?: string;
     heartbeatSeconds?: number;
     heartbeatSecondsPath?: string;
+    credentials?: Record<string, unknown>;
+    comment?: string;
+    inputPath?: string;
+    outputPath?: string;
+    resultSelector?: Record<string, unknown>;
   } = {};
 
   for (const prop of optionsArg.properties) {
@@ -1543,6 +1745,26 @@ function extractTaskOptions(
         result.heartbeatSeconds = resolved.value;
       } else if (resolved.kind === 'jsonpath') {
         result.heartbeatSecondsPath = resolved.path;
+      }
+    } else if (name === 'credentials') {
+      if (ts.isObjectLiteralExpression(prop.initializer)) {
+        result.credentials = buildParameters(ctx.compilerContext, prop.initializer, ctx.variables.toResolution(), ctx.dialect);
+      }
+    } else if (name === 'comment') {
+      if (ts.isStringLiteral(prop.initializer)) {
+        result.comment = prop.initializer.text;
+      }
+    } else if (name === 'inputPath') {
+      if (ts.isStringLiteral(prop.initializer)) {
+        result.inputPath = prop.initializer.text;
+      }
+    } else if (name === 'outputPath') {
+      if (ts.isStringLiteral(prop.initializer)) {
+        result.outputPath = prop.initializer.text;
+      }
+    } else if (name === 'resultSelector') {
+      if (ts.isObjectLiteralExpression(prop.initializer)) {
+        result.resultSelector = buildParameters(ctx.compilerContext, prop.initializer, ctx.variables.toResolution(), ctx.dialect);
       }
     }
   }

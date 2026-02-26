@@ -309,6 +309,34 @@ function synthesizeWorkflowSource(
         break;
       }
 
+      case 'cdk-synth': {
+        // CDK synth-time expression (e.g., myLambda.functionArn) — treat like runtime
+        // but emit SS705 warning so users know this was auto-detected
+        const cdkBindingName = `__binding_${bindingIndex}__`;
+        const cdkPlaceholder = `$$${bindingIndex}$$`;
+        substitutions[cdkBindingName] = cdkPlaceholder;
+
+        lines.push(`declare const ${cdkBindingName}: string;`);
+        lines.push(`const ${varName} = ${cdkBindingName};`);
+
+        if (fv.runtimeExpr) {
+          runtimeBindingExprs.push(fv.runtimeExpr);
+        } else {
+          runtimeBindingExprs.push(ts.factory.createIdentifier(varName));
+        }
+
+        const exprText = fv.runtimeExpr
+          ? printNode(ts.createPrinter(), fv.runtimeExpr)
+          : varName;
+        console.warn(
+          `[SimpleSteps] SS705: CDK synth-time expression '${exprText}' auto-detected ` +
+          `for variable '${varName}'. It will be resolved at CDK synth time.`,
+        );
+
+        bindingIndex++;
+        break;
+      }
+
       case 'runtime': {
         // Runtime expressions become declare const with placeholder
         const bindingName = `__binding_${bindingIndex}__`;

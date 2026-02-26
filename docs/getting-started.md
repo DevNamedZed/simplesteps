@@ -135,7 +135,7 @@ This produces `output/orderWorkflow.asl.json` — useful for reviewing the gener
 - [CDK Integration](./cdk-integration.md) -- `SimpleStepsStateMachine` construct, multiple workflows, file-based mode
 - [Library API](./library-api.md) -- use the compiler programmatically for custom pipelines
 - [CLI Reference](./cli.md) -- all compiler flags
-- [Services](./services.md) -- all 10 supported AWS services
+- [Services](./services.md) -- 15+ AWS service bindings + Steps.awsSdk()
 - [Language Reference](./language-reference.md) -- every TypeScript construct and its ASL mapping
 
 ## Starter Projects

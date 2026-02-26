@@ -40,7 +40,7 @@ The infrastructure code is identical. The difference is in how the step function
 **CDK + SimpleSteps:**
 - `SimpleStepsStateMachine` with `workflow: Steps.createFunction(async (ctx, input) => { ... })`
 - Sequential statements, `if/else`, `while`, `for...of`, `try/catch`, `Promise.all`
-- Typed service methods for all 10 AWS services
+- Typed service methods for 15+ AWS services
 - Variable names instead of JSONPath
 
 ## Feature Coverage

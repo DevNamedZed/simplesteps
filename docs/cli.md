@@ -65,6 +65,14 @@ When compiling with the CLI, any `declare const` variables without bindings are 
 
 To supply real values for `declare const` variables, use the [CDK integration](./cdk-integration.md) (via `bindings`) or the [library API](./library-api.md) (via `substitutions`).
 
+## Programmatic-Only Options
+
+The following compile options are available via the [library API](./library-api.md) but not the CLI:
+
+- `sourceMap` — Add source `file:line` to ASL `Comment` fields for debugging
+- `version` — Set the ASL `Version` field
+- `timeoutSeconds` — Set global state machine execution timeout
+
 ## Exit Codes
 
 | Code | Meaning |

@@ -27,6 +27,9 @@ export function generateStateMachine(
   analyzer?: WholeProgramAnalyzer,
   inlineBindings?: readonly InlineBinding[],
   dialect: PathDialect = JSON_PATH_DIALECT,
+  timeoutSeconds?: number,
+  version?: string,
+  sourceMap?: boolean,
 ): StateMachineDefinition {
   const variables = resolveVariables(context, callSite, serviceRegistry, substitutions, analyzer, dialect);
 
@@ -72,7 +75,7 @@ export function generateStateMachine(
     }
   }
 
-  return buildStateMachine(context, cfg, callSite, serviceRegistry, variables, dialect);
+  return buildStateMachine(context, cfg, callSite, serviceRegistry, variables, dialect, timeoutSeconds, version, sourceMap);
 }
 
 /**

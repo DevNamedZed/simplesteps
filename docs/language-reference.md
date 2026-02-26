@@ -15,13 +15,18 @@ Every TypeScript construct supported by SimpleSteps and its ASL mapping.
 | `for (const item of Steps.items(array, opts?))` | Map (for...of with MaxConcurrency, Retry, closures) |
 | `for (const item of Steps.sequential(array))` | Map (sequential, `MaxConcurrency: 1`) |
 | `await Promise.all([...])` | Parallel |
+| `await Steps.parallel(branches, opts?)` | Parallel (with Retry on the Parallel state) |
 | Deferred-await (`const p = call(); await p`) | Parallel (auto-batched) |
+| `await Steps.distributedMap(items, callback, opts)` | Map (DISTRIBUTED mode, S3 I/O) |
 | `await Steps.delay({ seconds: 30 })` | Wait |
 | `throw new Error(msg)` | Fail |
+| `Steps.succeed()` | Succeed (explicit early termination) |
 | `return value` | Succeed / End |
 | `try { ... } catch (e) { ... }` | Catch rules |
 | `if (e instanceof TimeoutError)` | Typed error matching |
 | `.call(input, { retry, timeoutSeconds, heartbeatSeconds })` | Retry / Timeout / Heartbeat |
+| `const { a, ...rest } = await svc.call(input)` | Object destructuring (rest requires JSONata) |
+| `await http.invoke({ ApiEndpoint, Method, ... })` | Task (HTTPS Endpoint via `http:invoke`) |
 
 ## Query Language
 
@@ -229,6 +234,37 @@ for (const item of Steps.items(input.items, { maxConcurrency: 5 })) {
 
 Use `Steps.items()` when you prefer imperative `for...of` syntax but need concurrency control. Use `Steps.map()` when you need to collect iteration results.
 
+### Distributed Map
+
+For large-scale parallel processing (up to 10,000 concurrent iterations) with S3-based I/O:
+
+```typescript
+const results = await Steps.distributedMap(
+  input.items,
+  async (item) => {
+    const result = await processItem.call({ data: item });
+    return { processed: result };
+  },
+  {
+    maxConcurrency: 1000,
+    executionType: 'EXPRESS',         // or 'STANDARD' (default)
+    itemReader: {
+      Resource: 'arn:aws:states:::s3:getObject',
+      ReaderConfig: { InputType: 'CSV' },
+      Parameters: { Bucket: input.bucket, Key: 'data.csv' },
+    },
+    resultWriter: {
+      Resource: 'arn:aws:states:::s3:putObject',
+      Parameters: { Bucket: input.bucket, Prefix: 'results/' },
+    },
+    toleratedFailurePercentage: 5,
+    label: 'ProcessRecords',
+  },
+);
+```
+
+Compiles to an ASL Map state with `ProcessorConfig: { Mode: 'DISTRIBUTED' }`, ItemReader, ResultWriter, and batching/tolerance options.
+
 ### Parallel Execution
 
 ```typescript
@@ -239,6 +275,50 @@ const [users, orders] = await Promise.all([
 ```
 
 Compiles to a Parallel state with one branch per promise. Each branch can be a single service call or a multi-step substep function.
+
+### Parallel with Retry
+
+When you need retry rules on the Parallel state itself, use `Steps.parallel()`:
+
+```typescript
+const [users, orders] = await Steps.parallel(
+  [
+    async () => await userService.call({ id: input.userId }),
+    async () => await orderService.call({ customerId: input.userId }),
+  ],
+  {
+    retry: {
+      errorEquals: ['States.ALL'],
+      maxAttempts: 3,
+      intervalSeconds: 1,
+      backoffRate: 2,
+    },
+  },
+);
+```
+
+**When to use which:**
+
+| Pattern | Use Case |
+|---|---|
+| `Promise.all([...])` | Simple parallel execution — no retry needed |
+| `Steps.parallel(branches, { retry })` | Parallel with retry/catch on the Parallel state itself |
+| Deferred-await (`const p = call(); await p`) | Natural JS pattern — compiler batches into Parallel |
+
+All three compile to ASL Parallel states. `Promise.all()` and deferred-await produce identical output. `Steps.parallel()` adds the ability to configure retry on the Parallel state.
+
+### Steps.succeed()
+
+Explicitly terminate the workflow with a Succeed state:
+
+```typescript
+if (result.status === 'already_processed') {
+  Steps.succeed();
+}
+// execution stops — code below this point is in a separate branch
+```
+
+In most cases, `return value` is sufficient. `Steps.succeed()` is useful for early termination without a return value.
 
 ### Deferred-Await (Natural Parallelism)
 
@@ -275,6 +355,26 @@ if (!order.valid) {
 ```
 
 `return` in a branch produces an End state at that point.
+
+## Object Destructuring
+
+Service call results can be destructured directly:
+
+```typescript
+const { name, age } = await userService.call({ id: input.userId });
+// name and age are separate variables, accessible in subsequent expressions
+```
+
+### Rest patterns (JSONata only)
+
+In JSONata mode, rest elements capture remaining properties:
+
+```typescript
+const { name, ...metadata } = await userService.call({ id: input.userId });
+// metadata → $sift(result, function($v, $k) { $k != 'name' })
+```
+
+Rest patterns require JSONata mode. In JSONPath mode, they emit SS540.
 
 ## Substeps
 

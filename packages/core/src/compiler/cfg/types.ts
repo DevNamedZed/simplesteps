@@ -63,6 +63,15 @@ export interface MapStateTerminator {
   readonly resultSymbol?: ts.Symbol;
   /** Retry policy extracted from options (for Steps.map/items). */
   readonly retryExpression?: ts.Expression;
+  // Distributed Map fields (only set when Steps.distributedMap is used)
+  readonly distributed?: true;
+  readonly executionType?: 'STANDARD' | 'EXPRESS';
+  readonly itemReaderExpression?: ts.Expression;
+  readonly resultWriterExpression?: ts.Expression;
+  readonly itemBatcherExpression?: ts.Expression;
+  readonly toleratedFailurePercentage?: number;
+  readonly toleratedFailureCount?: number;
+  readonly label?: string;
 }
 
 export interface ReturnTerminator {
@@ -96,6 +105,8 @@ export interface ParallelTerminator {
   readonly resultBindings: readonly string[];
   readonly resultSymbols: readonly (ts.Symbol | undefined)[];
   readonly exitBlock: string;
+  /** Retry policy extracted from Steps.parallel() options. */
+  readonly retryExpression?: ts.Expression;
 }
 
 export interface TernaryAssignTerminator {

@@ -54,6 +54,12 @@ export interface CompileOptions {
   readonly substitutions?: Readonly<Record<string, unknown>>;
   /** Query language for ASL path expressions. Defaults to 'JSONata'. */
   readonly queryLanguage?: 'JSONPath' | 'JSONata';
+  /** Global timeout for state machine execution in seconds. Maps to ASL TimeoutSeconds. */
+  readonly timeoutSeconds?: number;
+  /** ASL Version field. Defaults to omitted (ASL default is "1.0"). */
+  readonly version?: string;
+  /** Populate ASL Comment fields with source file:line locations. */
+  readonly sourceMap?: boolean;
 }
 
 /**
@@ -311,7 +317,7 @@ export function compile(options: CompileOptions): CompileResult {
   const dialect: PathDialect = options.queryLanguage === 'JSONPath' ? JSON_PATH_DIALECT : JSONATA_DIALECT;
   const stateMachines: CompiledStateMachine[] = [];
   for (const { callSite, cfg, inlineBindings } of compilationUnits) {
-    const definition = generateStateMachine(context, callSite, cfg, serviceRegistry, options.substitutions, analyzer, inlineBindings, dialect);
+    const definition = generateStateMachine(context, callSite, cfg, serviceRegistry, options.substitutions, analyzer, inlineBindings, dialect, options.timeoutSeconds, options.version, options.sourceMap);
     const name = deriveStateMachineName(callSite);
 
     // Collect service names used by this state machine
@@ -355,6 +361,12 @@ export interface CompileFromProgramOptions {
   readonly substitutions?: Readonly<Record<string, unknown>>;
   /** Query language for ASL path expressions. Defaults to 'JSONata'. */
   readonly queryLanguage?: 'JSONPath' | 'JSONata';
+  /** Global timeout for state machine execution in seconds. Maps to ASL TimeoutSeconds. */
+  readonly timeoutSeconds?: number;
+  /** ASL Version field. Defaults to omitted (ASL default is "1.0"). */
+  readonly version?: string;
+  /** Populate ASL Comment fields with source file:line locations. */
+  readonly sourceMap?: boolean;
 }
 
 /**
@@ -428,7 +440,7 @@ export function compileFromProgram(options: CompileFromProgramOptions): CompileR
   const dialect2: PathDialect = options.queryLanguage === 'JSONPath' ? JSON_PATH_DIALECT : JSONATA_DIALECT;
   const stateMachines: CompiledStateMachine[] = [];
   for (const { callSite, cfg, inlineBindings } of compilationUnits) {
-    const definition = generateStateMachine(context, callSite, cfg, serviceRegistry, options.substitutions, analyzer2, inlineBindings, dialect2);
+    const definition = generateStateMachine(context, callSite, cfg, serviceRegistry, options.substitutions, analyzer2, inlineBindings, dialect2, options.timeoutSeconds);
     const name = deriveStateMachineName(callSite);
 
     const services: string[] = [];

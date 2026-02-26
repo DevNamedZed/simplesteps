@@ -1,6 +1,6 @@
 # Services
 
-SimpleSteps provides typed bindings for 15 AWS services, plus a generic escape hatch for any AWS service.
+SimpleSteps provides typed bindings for 15 AWS services plus HTTPS Endpoints, Activity tasks, a callback pattern (`.waitForTaskToken`), and a generic escape hatch (`Steps.awsSdk()`) for any AWS service.
 
 All service bindings are compile-time markers. They provide TypeScript types for the compiler and throw if called at runtime.
 
@@ -304,6 +304,51 @@ Constructor takes a **Job Queue ARN**.
 
 ---
 
+## HttpEndpoint
+
+Call external HTTP APIs directly from Step Functions without a Lambda proxy.
+
+```typescript
+const http = new HttpEndpoint();
+
+// POST with authentication
+const result = await http.invoke<{ id: string; status: string }>({
+  ApiEndpoint: 'https://api.example.com/users',
+  Method: 'POST',
+  Headers: { 'Content-Type': 'application/json' },
+  RequestBody: { name: input.name, email: input.email },
+  Authentication: {
+    ConnectionArn: 'arn:aws:events:us-east-1:123:connection/MyApiConnection',
+  },
+});
+
+// GET (no body needed)
+const user = await http.invoke<{ id: string; name: string }>({
+  ApiEndpoint: `https://api.example.com/users/${result.id}`,
+  Method: 'GET',
+  Authentication: {
+    ConnectionArn: 'arn:aws:events:us-east-1:123:connection/MyApiConnection',
+  },
+});
+```
+
+No constructor argument. Parameters map directly to ASL `http:invoke` fields.
+
+**Request parameters:**
+
+| Parameter | Type | Required | Description |
+|---|---|---|---|
+| `ApiEndpoint` | `string` | Yes | The full URL to call |
+| `Method` | `string` | Yes | HTTP method (`GET`, `POST`, `PUT`, `DELETE`, `PATCH`, `HEAD`, `OPTIONS`) |
+| `Headers` | `Record<string, string>` | No | HTTP request headers |
+| `RequestBody` | `unknown` | No | Request body (for POST, PUT, PATCH) |
+| `QueryParameters` | `Record<string, string>` | No | Query string parameters |
+| `Authentication` | `{ ConnectionArn: string }` | No | EventBridge Connection for auth (OAuth, API Key, Basic Auth) |
+
+Authentication is managed via [EventBridge Connections](https://docs.aws.amazon.com/eventbridge/latest/userguide/eb-api-destinations.html), configured in the AWS Console or via CloudFormation/CDK.
+
+---
+
 ## `Steps.awsSdk()` -- Generic Escape Hatch
 
 For AWS services without a dedicated binding:
@@ -375,4 +420,105 @@ interface RetryPolicy {
 - `heartbeatSeconds` — Interval (in seconds) between heartbeat signals for long-running tasks. If no heartbeat is received within this interval, Step Functions raises `States.HeartbeatTimeout`.
 
 Both compile to their corresponding ASL fields (`TimeoutSeconds`, `HeartbeatSeconds`) on the Task state.
+
+### Comment
+
+Add a description to the Task state:
+
+```typescript
+const result = await fn.call(input, {
+  comment: 'Validate the incoming order',
+});
+```
+
+Compiles to ASL `Comment: "Validate the incoming order"` on the Task state. User-specified comments take precedence over source map auto-comments (see `sourceMap` compile option).
+
+### InputPath / OutputPath
+
+Filter state input or output:
+
+```typescript
+const result = await fn.call(input, {
+  inputPath: '$.detail',       // Only pass $.detail as Task input
+  outputPath: '$.Payload',     // Only keep $.Payload from Task output
+});
+```
+
+These are advanced options for controlling ASL data flow directly. In most cases, the compiler manages paths automatically.
+
+### ResultSelector
+
+Transform Task output before ResultPath (JSONPath mode):
+
+```typescript
+const result = await fn.call(input, {
+  resultSelector: {
+    'name.$': '$.Payload.name',
+    'statusCode.$': '$.StatusCode',
+  },
+});
+```
+
+In JSONata mode, use `Output` or `Assign` instead (managed automatically by the compiler).
+
+### Credentials (Cross-Account Execution)
+
+Task states support cross-account execution via the `credentials` option:
+
+```typescript
+const result = await fn.call(input, {
+  credentials: { RoleArn: 'arn:aws:iam::999999999999:role/CrossAccountRole' },
+});
+```
+
+This compiles to ASL `Credentials: { RoleArn: "..." }` on the Task state.
+
+---
+
+## Activity
+
+Activity tasks use external workers that poll for tasks, process them, and send back results.
+
+```typescript
+import { Activity } from '@simplesteps/core/runtime/services';
+
+const reviewTask = Activity<{ document: string }, { approved: boolean }>(
+  'arn:aws:states:us-east-1:123456789012:activity:HumanReview'
+);
+
+export const workflow = Steps.createFunction(
+  async (context, input: { document: string }) => {
+    const result = await reviewTask.call(
+      { document: input.document },
+      { timeoutSeconds: 3600, heartbeatSeconds: 60 },
+    );
+    return { approved: result.approved };
+  },
+);
+```
+
+The activity ARN is used directly as the Task state `Resource`. Retry, timeout, and heartbeat options are supported.
+
+---
+
+## Steps.awsSdk() — Direct SDK Integration
+
+For any AWS service not covered by typed bindings, use `Steps.awsSdk()`:
+
+```typescript
+const result = await Steps.awsSdk('s3', 'listObjectsV2', {
+  Bucket: input.bucket,
+  Prefix: 'data/',
+});
+
+// SNS example
+await Steps.awsSdk('sns', 'publish', {
+  TopicArn: 'arn:aws:sns:us-east-1:123:MyTopic',
+  Message: input.message,
+});
+```
+
+This compiles to `Resource: "arn:aws:states:::aws-sdk:s3:listObjectsV2"` with the parameters as Task `Arguments` (JSONata) or `Parameters` (JSONPath).
+
+The service and action arguments must be string literals (not variables) so the compiler can construct the ARN at compile time.
 

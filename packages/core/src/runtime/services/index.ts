@@ -12,6 +12,8 @@ export type {
   OptimizedMethodAlias,
   OptimizedEntry,
 } from './metadata';
+export { Activity } from './Activity';
+export type { ActivityInstance, ActivityOptions } from './Activity';
 export { Lambda } from './Lambda';
 export type { LambdaInstance, LambdaOptions } from './Lambda';
 export { SimpleQueueService, SQS } from './SimpleQueueService';
@@ -42,6 +44,8 @@ export { CodeBuild } from './CodeBuild';
 export type { CodeBuildOptions } from './CodeBuild';
 export { Athena } from './Athena';
 export type { AthenaOptions } from './Athena';
+export { HttpEndpoint } from './HttpEndpoint';
+export type { HttpEndpointRequest, HttpEndpointOptions } from './HttpEndpoint';
 export { APIGateway } from './APIGateway';
 export { AppSync } from './AppSync';
 export { CloudFormation } from './CloudFormation';

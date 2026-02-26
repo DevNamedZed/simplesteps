@@ -237,6 +237,21 @@ const cancelMachine = new SimpleStepsStateMachine(this, 'CancelOrder', {
 - You want to compile and inspect ASL via the CLI without CDK
 - Team preference for separating business logic from infrastructure
 
+## CDK Auto-Detection (SS705)
+
+When using the **inline workflow** pattern, the compiler automatically detects CDK construct property accesses (like `myLambda.functionArn` or `myTable.tableName`) and resolves them as synth-time values. This happens transparently — CDK Tokens flow into ASL as-is.
+
+If the compiler recognizes a variable as a CDK synth-time expression via pattern matching (rather than explicit `declare const` binding), it emits warning **SS705**:
+
+```
+[SimpleSteps] SS705: CDK synth-time expression 'validateFn.functionArn'
+auto-detected for variable 'validateOrderArn'. It will be resolved at CDK synth time.
+```
+
+This warning is informational — the compiled output is correct. The compiler detects common CDK property names (`functionArn`, `tableName`, `queueUrl`, `topicArn`, `bucketName`, etc.) and treats them as synth-time constants rather than raising an unresolvable variable error.
+
+To suppress the warning, use the **file-based** pattern with explicit `bindings` instead.
+
 ## Starter Project
 
 See [`examples/starters/cdk/`](../examples/starters/cdk/) for a complete, runnable CDK project using inline workflows.

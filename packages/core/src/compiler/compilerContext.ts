@@ -27,6 +27,9 @@ export interface CompilerDiagnostic {
  * the compiler uses ts.createProgram() directly without program.emit().
  */
 export class CompilerContext {
+  /** Maximum number of diagnostics before suppression. */
+  static readonly MAX_DIAGNOSTICS = 200;
+
   readonly checker: ts.TypeChecker;
   readonly logger: Logger;
   private readonly _diagnostics: CompilerDiagnostic[] = [];
@@ -61,6 +64,7 @@ export class CompilerContext {
     severity: DiagnosticSeverity,
     code: string,
   ): void {
+    if (this._diagnostics.length >= CompilerContext.MAX_DIAGNOSTICS) return;
     const sourceFile = node.getSourceFile();
     const { line, character } = sourceFile.getLineAndCharacterOfPosition(node.getStart());
 
@@ -85,6 +89,7 @@ export class CompilerContext {
     severity: DiagnosticSeverity,
     code: string,
   ): void {
+    if (this._diagnostics.length >= CompilerContext.MAX_DIAGNOSTICS) return;
     this._diagnostics.push({ file, line, column, message, severity, code });
   }
 

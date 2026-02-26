@@ -321,6 +321,22 @@ function processStatements(
       }
     }
 
+    // --- Steps.distributedMap() → Distributed Map state ---
+    {
+      const distMapResult = tryExtractStepsDistributedMap(state, context, stmt, accumulated, currentBlockId, remaining, loopStack, inlining);
+      if (distMapResult !== undefined) {
+        return distMapResult;
+      }
+    }
+
+    // --- Steps.parallel() → Parallel state with options (retry) ---
+    {
+      const stepsParallelResult = tryExtractStepsParallel(state, context, stmt, accumulated, currentBlockId, remaining, loopStack, inlining);
+      if (stepsParallelResult !== undefined) {
+        return stepsParallelResult;
+      }
+    }
+
     // --- Deferred-await batch → Parallel state ---
     if (pendingPromises.size > 0) {
       const batchResult = tryBatchDeferredAwaits(
@@ -334,6 +350,17 @@ function processStatements(
         }
         return exitBlockId;
       }
+    }
+
+    // --- Promise.race / Promise.any → compile-time error ---
+    if (ts.isExpressionStatement(stmt) && ts.isAwaitExpression(stmt.expression) &&
+        isPromiseRaceOrAny(stmt.expression.expression)) {
+      context.addError(
+        stmt.expression.expression,
+        `Promise.race() and Promise.any() are not supported. ASL Parallel states wait for all branches to complete. ` +
+        `Use Promise.all() instead, or delegate race logic to a Lambda function.`,
+        ErrorCodes.Cfg.PromiseRaceNotSupported.code,
+      );
     }
 
     // --- Promise.all (fire-and-forget, ExpressionStatement) → Parallel state ---
@@ -355,6 +382,21 @@ function processStatements(
           return processStatements(state, context, remaining, exitBlockId, loopStack, inlining);
         }
         return exitBlockId;
+      }
+    }
+
+    // --- Promise.race / Promise.any (variable statement) → compile-time error ---
+    if (ts.isVariableStatement(stmt)) {
+      const decl = stmt.declarationList.declarations[0];
+      if (decl?.initializer && ts.isAwaitExpression(decl.initializer) &&
+          ts.isCallExpression(decl.initializer.expression) &&
+          isPromiseRaceOrAny(decl.initializer.expression)) {
+        context.addError(
+          decl.initializer.expression,
+          `Promise.race() and Promise.any() are not supported. ASL Parallel states wait for all branches to complete. ` +
+          `Use Promise.all() instead, or delegate race logic to a Lambda function.`,
+          ErrorCodes.Cfg.PromiseRaceNotSupported.code,
+        );
       }
     }
 
@@ -1497,6 +1539,198 @@ function isStepsMapCall(call: ts.CallExpression): boolean {
          prop.name.text === 'map';
 }
 
+function isStepsDistributedMapCall(call: ts.CallExpression): boolean {
+  if (!ts.isPropertyAccessExpression(call.expression)) return false;
+  const prop = call.expression;
+  return ts.isIdentifier(prop.expression) && prop.expression.text === 'Steps' &&
+         prop.name.text === 'distributedMap';
+}
+
+/**
+ * Extract Steps.distributedMap(items, callback, options?) into a MapStateTerminator
+ * with distributed: true and additional fields for ItemReader, ResultWriter, etc.
+ */
+function tryExtractStepsDistributedMap(
+  state: CFGBuilderState,
+  context: CompilerContext,
+  stmt: ts.Statement,
+  accumulated: ts.Statement[],
+  currentBlockId: string,
+  remaining: readonly ts.Statement[],
+  loopStack: readonly LoopContext[],
+  inlining: InliningContext,
+): string | null | undefined {
+  // Pattern 1: const results = await Steps.distributedMap(items, cb, opts?)
+  // Pattern 2: await Steps.distributedMap(items, cb, opts?)  (fire-and-forget)
+  let callExpr: ts.CallExpression | undefined;
+  let collectResults = false;
+  let resultBindingName: string | undefined;
+  let resultSymbol: ts.Symbol | undefined;
+
+  if (ts.isVariableStatement(stmt)) {
+    const decl = stmt.declarationList.declarations[0];
+    if (decl?.initializer && ts.isAwaitExpression(decl.initializer) &&
+        ts.isCallExpression(decl.initializer.expression)) {
+      const call = decl.initializer.expression;
+      if (isStepsDistributedMapCall(call)) {
+        callExpr = call;
+        collectResults = true;
+        if (ts.isIdentifier(decl.name)) {
+          resultBindingName = decl.name.text;
+          resultSymbol = context.checker.getSymbolAtLocation(decl.name);
+        }
+      }
+    }
+  } else if (ts.isExpressionStatement(stmt) && ts.isAwaitExpression(stmt.expression) &&
+             ts.isCallExpression(stmt.expression.expression)) {
+    const call = stmt.expression.expression;
+    if (isStepsDistributedMapCall(call)) {
+      callExpr = call;
+      collectResults = false;
+    }
+  }
+
+  if (!callExpr) return undefined;
+
+  // Extract arguments: Steps.distributedMap(items, callback, options?)
+  const itemsArg = callExpr.arguments[0];
+  const callbackArg = callExpr.arguments[1];
+  const optionsArg = callExpr.arguments[2];
+
+  if (!itemsArg || !callbackArg) {
+    context.addError(callExpr, 'Steps.distributedMap() requires at least 2 arguments: items and callback', ErrorCodes.Cfg.InvalidDistributedMapCall.code);
+    return undefined;
+  }
+
+  // Callback must be an arrow function or function expression
+  let callbackBody: ts.Block | undefined;
+  let callbackParam: ts.ParameterDeclaration | undefined;
+
+  if (ts.isArrowFunction(callbackArg) || ts.isFunctionExpression(callbackArg)) {
+    callbackParam = callbackArg.parameters[0];
+    if (ts.isBlock(callbackArg.body)) {
+      callbackBody = callbackArg.body;
+    } else {
+      context.addError(callbackArg, 'Steps.distributedMap() callback must have a block body (use { } braces)', ErrorCodes.Cfg.InvalidDistributedMapCall.code);
+      return undefined;
+    }
+  } else {
+    context.addError(callbackArg, 'Steps.distributedMap() callback must be an arrow function or function expression', ErrorCodes.Cfg.InvalidDistributedMapCall.code);
+    return undefined;
+  }
+
+  // Extract options
+  let maxConcurrency: number | undefined;
+  let executionType: 'STANDARD' | 'EXPRESS' | undefined;
+  let retryExpression: ts.Expression | undefined;
+  let itemReaderExpression: ts.Expression | undefined;
+  let resultWriterExpression: ts.Expression | undefined;
+  let itemBatcherExpression: ts.Expression | undefined;
+  let toleratedFailurePercentage: number | undefined;
+  let toleratedFailureCount: number | undefined;
+  let label: string | undefined;
+
+  if (optionsArg && ts.isObjectLiteralExpression(optionsArg)) {
+    for (const prop of optionsArg.properties) {
+      if (!ts.isPropertyAssignment(prop) || !ts.isIdentifier(prop.name)) continue;
+      switch (prop.name.text) {
+        case 'maxConcurrency':
+          if (ts.isNumericLiteral(prop.initializer)) {
+            maxConcurrency = Number(prop.initializer.text);
+          }
+          break;
+        case 'executionType':
+          if (ts.isStringLiteral(prop.initializer)) {
+            const val = prop.initializer.text;
+            if (val === 'STANDARD' || val === 'EXPRESS') {
+              executionType = val;
+            }
+          }
+          break;
+        case 'retry':
+          retryExpression = prop.initializer;
+          break;
+        case 'itemReader':
+          itemReaderExpression = prop.initializer;
+          break;
+        case 'resultWriter':
+          resultWriterExpression = prop.initializer;
+          break;
+        case 'itemBatcher':
+          itemBatcherExpression = prop.initializer;
+          break;
+        case 'toleratedFailurePercentage':
+          if (ts.isNumericLiteral(prop.initializer)) {
+            toleratedFailurePercentage = Number(prop.initializer.text);
+          }
+          break;
+        case 'toleratedFailureCount':
+          if (ts.isNumericLiteral(prop.initializer)) {
+            toleratedFailureCount = Number(prop.initializer.text);
+          }
+          break;
+        case 'label':
+          if (ts.isStringLiteral(prop.initializer)) {
+            label = prop.initializer.text;
+          }
+          break;
+      }
+    }
+  }
+
+  // Extract iteration variable name and symbol
+  let iterVarName = 'item';
+  let iterVarSymbol: ts.Symbol | undefined;
+  if (callbackParam && ts.isIdentifier(callbackParam.name)) {
+    iterVarName = callbackParam.name.text;
+    iterVarSymbol = context.checker.getSymbolAtLocation(callbackParam.name);
+  }
+
+  const bodyBlockId = state.newBlockId('distmap_body');
+  const exitBlockId = state.newBlockId('distmap_exit');
+
+  // Finalize current block with mapState terminator (distributed)
+  state.addBlock(currentBlockId, accumulated, {
+    kind: 'mapState',
+    itemsExpression: itemsArg,
+    iterVarName,
+    iterVarSymbol,
+    bodyBlock: bodyBlockId,
+    exitBlock: exitBlockId,
+    collectResults,
+    maxConcurrency,
+    ...(resultBindingName && { resultBindingName }),
+    ...(resultSymbol && { resultSymbol }),
+    ...(retryExpression && { retryExpression }),
+    distributed: true,
+    ...(executionType && { executionType }),
+    ...(itemReaderExpression && { itemReaderExpression }),
+    ...(resultWriterExpression && { resultWriterExpression }),
+    ...(itemBatcherExpression && { itemBatcherExpression }),
+    ...(toleratedFailurePercentage != null && { toleratedFailurePercentage }),
+    ...(toleratedFailureCount != null && { toleratedFailureCount }),
+    ...(label && { label }),
+  });
+
+  // Process the callback body
+  const bodyStatements = Array.from(callbackBody.statements);
+  const bodyExit = processStatements(
+    state, context, bodyStatements, bodyBlockId,
+    [...loopStack, { conditionBlock: bodyBlockId, exitBlock: exitBlockId }],
+    inlining,
+  );
+
+  // Body exit: implicit end of iteration
+  if (bodyExit !== null) {
+    patchBlockTerminator(state, bodyExit, { kind: 'return', expression: undefined });
+  }
+
+  if (remaining.length > 0) {
+    return processStatements(state, context, remaining, exitBlockId, loopStack, inlining);
+  }
+  return exitBlockId;
+}
+
 /** Check if an expression is a call to Steps.<method>() */
 function isStepsCall(expr: ts.Expression, method: string): boolean {
   if (!ts.isCallExpression(expr)) return false;
@@ -1504,6 +1738,119 @@ function isStepsCall(expr: ts.Expression, method: string): boolean {
   const prop = expr.expression;
   return ts.isIdentifier(prop.expression) && prop.expression.text === 'Steps' &&
          prop.name.text === method;
+}
+
+// ---------------------------------------------------------------------------
+// Steps.parallel() → Parallel state with retry options
+// ---------------------------------------------------------------------------
+
+/**
+ * Detect `const [a, b] = await Steps.parallel([fn1, fn2], { retry: {...} })`
+ * or `await Steps.parallel([fn1, fn2], { retry: {...} })` (fire-and-forget).
+ */
+function tryExtractStepsParallel(
+  state: CFGBuilderState,
+  context: CompilerContext,
+  stmt: ts.Statement,
+  accumulated: ts.Statement[],
+  currentBlockId: string,
+  remaining: readonly ts.Statement[],
+  loopStack: readonly LoopContext[],
+  inlining: InliningContext,
+): string | null | undefined {
+  let callExpr: ts.CallExpression | undefined;
+  let resultBindings: string[] = [];
+  let resultSymbols: (ts.Symbol | undefined)[] = [];
+
+  // Pattern 1: const [a, b] = await Steps.parallel([...], opts)
+  if (ts.isVariableStatement(stmt)) {
+    const decl = stmt.declarationList.declarations[0];
+    if (decl?.initializer && ts.isAwaitExpression(decl.initializer) &&
+        ts.isCallExpression(decl.initializer.expression) &&
+        isStepsCall(decl.initializer.expression, 'parallel')) {
+      callExpr = decl.initializer.expression;
+      if (ts.isArrayBindingPattern(decl.name)) {
+        for (const el of decl.name.elements) {
+          if (ts.isBindingElement(el) && ts.isIdentifier(el.name)) {
+            resultBindings.push(el.name.text);
+            resultSymbols.push(context.checker.getSymbolAtLocation(el.name));
+          } else {
+            resultBindings.push('_');
+            resultSymbols.push(undefined);
+          }
+        }
+      } else if (ts.isIdentifier(decl.name)) {
+        resultBindings = [decl.name.text];
+        resultSymbols = [context.checker.getSymbolAtLocation(decl.name)];
+      }
+    }
+  }
+
+  // Pattern 2: await Steps.parallel([...], opts)  (fire-and-forget)
+  if (!callExpr && ts.isExpressionStatement(stmt) && ts.isAwaitExpression(stmt.expression) &&
+      ts.isCallExpression(stmt.expression.expression) &&
+      isStepsCall(stmt.expression.expression, 'parallel')) {
+    callExpr = stmt.expression.expression;
+  }
+
+  if (!callExpr) return undefined;
+
+  // First arg: array of branch functions
+  const branchesArg = callExpr.arguments[0];
+  if (!branchesArg || !ts.isArrayLiteralExpression(branchesArg)) {
+    context.addError(callExpr, 'Steps.parallel() first argument must be an array literal of functions', ErrorCodes.Cfg.PromiseAllNotArray.code);
+    return undefined;
+  }
+
+  // Extract branch expressions: unwrap () => expr to just expr
+  const branches: ts.Expression[] = [];
+  for (const el of branchesArg.elements) {
+    if (ts.isArrowFunction(el) && !ts.isBlock(el.body)) {
+      branches.push(el.body);
+    } else if (ts.isArrowFunction(el) && ts.isBlock(el.body)) {
+      // Block body arrow: () => { return await svc.call(...) }
+      // Extract the await expression from the single return statement
+      const stmts = el.body.statements;
+      if (stmts.length === 1 && ts.isReturnStatement(stmts[0]) && stmts[0].expression) {
+        branches.push(stmts[0].expression);
+      } else {
+        branches.push(el);
+      }
+    } else {
+      branches.push(el);
+    }
+  }
+
+  // Second arg: options with retry
+  let retryExpression: ts.Expression | undefined;
+  const optionsArg = callExpr.arguments[1];
+  if (optionsArg && ts.isObjectLiteralExpression(optionsArg)) {
+    for (const prop of optionsArg.properties) {
+      if (!ts.isPropertyAssignment(prop) || !ts.isIdentifier(prop.name)) continue;
+      if (prop.name.text === 'retry') {
+        retryExpression = prop.initializer;
+      }
+    }
+  }
+
+  const exitBlockId = state.newBlockId('parallel_exit');
+  const classifiedBranches = classifyParallelBranches(
+    state, context, branches, loopStack, inlining,
+  );
+
+  state.addBlock(currentBlockId, accumulated, {
+    kind: 'parallel',
+    branches: classifiedBranches,
+    resultBindings,
+    resultSymbols,
+    exitBlock: exitBlockId,
+    ...(retryExpression && { retryExpression }),
+  });
+
+  if (remaining.length > 0) {
+    return processStatements(state, context, remaining, exitBlockId, loopStack, inlining);
+  }
+  return exitBlockId;
 }
 
 // ---------------------------------------------------------------------------
@@ -1675,6 +2022,17 @@ function extractPromiseAll(
   }
 
   return { branches, resultBindings, resultSymbols };
+}
+
+/**
+ * Returns true if the expression is a call to `Promise.race(...)` or `Promise.any(...)`.
+ */
+function isPromiseRaceOrAny(expr: ts.Expression): boolean {
+  if (!ts.isCallExpression(expr)) return false;
+  if (!ts.isPropertyAccessExpression(expr.expression)) return false;
+  const prop = expr.expression;
+  if (!ts.isIdentifier(prop.expression) || prop.expression.text !== 'Promise') return false;
+  return prop.name.text === 'race' || prop.name.text === 'any';
 }
 
 /**
