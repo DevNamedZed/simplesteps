@@ -479,11 +479,12 @@ function buildChoiceRuleFromBinary(
     return comparison;
   }
 
-  // Numeric comparisons: <, >, <=, >=
+  // Relational comparisons: <, >, <=, >=
   // When operands were flipped (e.g. `5 < x` → variable=x, comparand=5),
   // reverse the operator: < becomes >, <= becomes >=, etc.
+  const effectiveOp = flipped ? flipRelationalOp(op) : op;
+
   if (comparand.kind === 'literal' && typeof comparand.value === 'number') {
-    const effectiveOp = flipped ? flipRelationalOp(op) : op;
     switch (effectiveOp) {
       case ts.SyntaxKind.LessThanToken:
         return { Variable: variable, NumericLessThan: comparand.value, Next: nextState } as ComparisonRule;
@@ -493,6 +494,33 @@ function buildChoiceRuleFromBinary(
         return { Variable: variable, NumericLessThanEquals: comparand.value, Next: nextState } as ComparisonRule;
       case ts.SyntaxKind.GreaterThanEqualsToken:
         return { Variable: variable, NumericGreaterThanEquals: comparand.value, Next: nextState } as ComparisonRule;
+    }
+  }
+
+  if (comparand.kind === 'literal' && typeof comparand.value === 'string') {
+    switch (effectiveOp) {
+      case ts.SyntaxKind.LessThanToken:
+        return { Variable: variable, StringLessThan: comparand.value, Next: nextState } as ComparisonRule;
+      case ts.SyntaxKind.GreaterThanToken:
+        return { Variable: variable, StringGreaterThan: comparand.value, Next: nextState } as ComparisonRule;
+      case ts.SyntaxKind.LessThanEqualsToken:
+        return { Variable: variable, StringLessThanEquals: comparand.value, Next: nextState } as ComparisonRule;
+      case ts.SyntaxKind.GreaterThanEqualsToken:
+        return { Variable: variable, StringGreaterThanEquals: comparand.value, Next: nextState } as ComparisonRule;
+    }
+  }
+
+  // Variable-to-variable relational: use Numeric*Path as default (most common for relational ops)
+  if (comparand.kind === 'jsonpath') {
+    switch (effectiveOp) {
+      case ts.SyntaxKind.LessThanToken:
+        return { Variable: variable, NumericLessThanPath: comparand.path, Next: nextState } as ComparisonRule;
+      case ts.SyntaxKind.GreaterThanToken:
+        return { Variable: variable, NumericGreaterThanPath: comparand.path, Next: nextState } as ComparisonRule;
+      case ts.SyntaxKind.LessThanEqualsToken:
+        return { Variable: variable, NumericLessThanEqualsPath: comparand.path, Next: nextState } as ComparisonRule;
+      case ts.SyntaxKind.GreaterThanEqualsToken:
+        return { Variable: variable, NumericGreaterThanEqualsPath: comparand.path, Next: nextState } as ComparisonRule;
     }
   }
 
@@ -525,7 +553,10 @@ function buildEqualityComparison(
   next: string,
 ): ComparisonRule {
   if (comparand.kind === 'jsonpath') {
-    // Variable-to-variable comparison: use Path variant
+    // Variable-to-variable comparison: use StringEqualsPath as default.
+    // ASL requires a typed operator; string comparison is the safest universal default
+    // since it works for most JSON values. NumericEqualsPath/BooleanEqualsPath would
+    // require compile-time type inference which is not always reliable.
     return { Variable: variable, StringEqualsPath: comparand.path, Next: next } as ComparisonRule;
   }
 

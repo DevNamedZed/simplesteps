@@ -543,9 +543,11 @@ export function resolveExpression(
     }
 
     if (base.kind === 'jsonpath') {
-      // Special case: input.field → $.field (not $.input.field)
-      // because input maps to '$' directly
-      return { kind: 'jsonpath', path: `${base.path}.${propName}` };
+      // Context object properties use PascalCase in ASL (e.g. context.execution.id → $$.Execution.Id)
+      const isContext = base.path === '$$' || base.path!.startsWith('$$.') ||
+                        base.path === '$states.context' || base.path!.startsWith('$states.context.');
+      const mapped = isContext ? propName.charAt(0).toUpperCase() + propName.slice(1) : propName;
+      return { kind: 'jsonpath', path: `${base.path}.${mapped}` };
     }
 
     // Constant object property access: e.g. OrderStatus.Shipped → 'SHIPPED'
@@ -709,7 +711,9 @@ function serializeJsonataArg(resolved: ResolvedExpression): string | null {
     case 'literal': {
       const v = resolved.value;
       if (typeof v === 'string') {
-        const escaped = v.replace(/'/g, "\\'");
+        const escaped = v
+          .replace(/\\/g, '\\\\')
+          .replace(/'/g, "\\'");
         return `'${escaped}'`;
       }
       if (typeof v === 'number' || typeof v === 'boolean') {
@@ -949,9 +953,17 @@ function resolveCallExpression(
       }
 
       // str.trim() / trimStart() / trimEnd() → $trim(str)  [JSONata only]
-      if ((methodName === 'trim' || methodName === 'trimStart' || methodName === 'trimEnd') && expr.arguments.length === 0) {
+      if (methodName === 'trim' && expr.arguments.length === 0) {
         if (jsonata) {
           return { kind: 'intrinsic', path: `$trim(${baseStr})` };
+        }
+        return jsonataOnlyError(context, expr, 'str.trim()');
+      }
+      if ((methodName === 'trimStart' || methodName === 'trimEnd') && expr.arguments.length === 0) {
+        if (jsonata) {
+          // JSONata $trim() trims both sides; no single-side trim available
+          context.addDiagnostic(expr, `str.${methodName}() is not supported in JSONata — $trim() trims both sides. Use str.trim() instead.`, 'error', 'SS540');
+          return { kind: 'unknown' };
         }
         return jsonataOnlyError(context, expr, `str.${methodName}()`);
       }
@@ -1064,7 +1076,8 @@ function resolveCallExpression(
           const repResolved = resolveExpression(context, expr.arguments[1], variables, dialect);
           const repStr = serializeArg(repResolved, dialect);
           if (patStr !== null && repStr !== null) {
-            return { kind: 'intrinsic', path: `$replace(${baseStr}, ${patStr}, ${repStr})` };
+            // JS replace() with string pattern replaces first occurrence only; $replace limit=1
+            return { kind: 'intrinsic', path: `$replace(${baseStr}, ${patStr}, ${repStr}, 1)` };
           }
         }
         return jsonataOnlyError(context, expr, 'str.replace()');
@@ -1105,7 +1118,8 @@ function resolveCallExpression(
         const valStr = serializeArg(valResolved, dialect);
         if (valStr !== null) {
           if (jsonata) {
-            return { kind: 'intrinsic', path: `${valStr} in ${baseStr}` };
+            // $contains works for both string and array containment in JSONata
+            return { kind: 'intrinsic', path: `$contains(${baseStr}, ${valStr})` };
           }
           return { kind: 'intrinsic', path: `States.ArrayContains(${baseStr}, ${valStr})` };
         }
@@ -1115,7 +1129,7 @@ function resolveCallExpression(
       if (methodName === 'join') {
         if (jsonata) {
           if (expr.arguments.length === 0) {
-            return { kind: 'intrinsic', path: `$join(${baseStr})` };
+            return { kind: 'intrinsic', path: `$join(${baseStr}, ',')` };
           }
           if (expr.arguments.length === 1) {
             const sepResolved = resolveExpression(context, expr.arguments[0], variables, dialect);

@@ -18,7 +18,7 @@ Every TypeScript construct supported by SimpleSteps and its ASL mapping.
 | `await Steps.parallel(branches, opts?)` | Parallel (with Retry on the Parallel state) |
 | Deferred-await (`const p = call(); await p`) | Parallel (auto-batched) |
 | `await Steps.distributedMap(items, callback, opts)` | Map (DISTRIBUTED mode, S3 I/O) |
-| `await Steps.delay({ seconds: 30 })` | Wait |
+| `Steps.delay({ seconds: 30 })` | Wait |
 | `throw new Error(msg)` | Fail |
 | `Steps.succeed()` | Succeed (explicit early termination) |
 | `return value` | Succeed / End |
@@ -342,8 +342,8 @@ The compiler detects non-awaited service calls and batches their subsequent awai
 ### Wait
 
 ```typescript
-await Steps.delay({ seconds: 30 });
-await Steps.delay({ timestamp: '2024-12-31T23:59:59Z' });
+Steps.delay({ seconds: 30 });
+Steps.delay({ timestamp: '2024-12-31T23:59:59Z' });
 ```
 
 ### Early Return
@@ -440,21 +440,31 @@ The first parameter (`context: SimpleStepContext`) provides execution metadata f
 
 ```typescript
 const workflow = Steps.createFunction(async (context, input) => {
-  const execId = context.execution.id;       // $$.Execution.Id
-  const startTime = context.execution.startTime;  // $$.Execution.StartTime
-  const stateName = context.state.name;      // $$.State.Name
-  const retryCount = context.state.retryCount;  // $$.State.RetryCount
-  const machineId = context.stateMachine.id;    // $$.StateMachine.Id
+  const execId = context.execution.id;           // $$.Execution.Id
+  const startTime = context.execution.startTime; // $$.Execution.StartTime
+  const stateName = context.state.name;          // $$.State.Name
+  const retryCount = context.state.retryCount;   // $$.State.RetryCount
+  const machineId = context.stateMachine.id;     // $$.StateMachine.Id
 });
 ```
 
 | Property | ASL Path | Description |
 |---|---|---|
 | `context.execution.id` | `$$.Execution.Id` | Unique execution ARN |
-| `context.execution.startTime` | `$$.Execution.StartTime` | ISO 8601 timestamp |
+| `context.execution.name` | `$$.Execution.Name` | Execution name |
+| `context.execution.startTime` | `$$.Execution.StartTime` | ISO 8601 start timestamp |
+| `context.execution.roleArn` | `$$.Execution.RoleArn` | IAM role ARN |
+| `context.execution.input` | `$$.Execution.Input` | Original execution input |
+| `context.execution.redriveCount` | `$$.Execution.RedriveCount` | Number of redrives |
+| `context.execution.redriveStatus` | `$$.Execution.RedriveStatus` | Redrive status |
 | `context.state.name` | `$$.State.Name` | Current state name |
+| `context.state.enteredTime` | `$$.State.EnteredTime` | ISO 8601 state entry timestamp |
 | `context.state.retryCount` | `$$.State.RetryCount` | Number of retries for current state |
 | `context.stateMachine.id` | `$$.StateMachine.Id` | State machine ARN |
+| `context.stateMachine.name` | `$$.StateMachine.Name` | State machine name |
+| `context.task.token` | `$$.Task.Token` | Task token (callback pattern) |
+| `context.map.item.index` | `$$.Map.Item.Index` | Current Map iteration index |
+| `context.map.item.value` | `$$.Map.Item.Value` | Current Map iteration value |
 
 The context object is optional — if your workflow doesn't need execution metadata, you can omit it and use only the input parameter.
 

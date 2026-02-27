@@ -1,6 +1,6 @@
 # Services
 
-SimpleSteps provides typed bindings for 64 AWS services — 16 with optimized integrations (including HTTPS Endpoints), 48 SDK-generated with full type signatures, plus Activity tasks, a callback pattern (`.waitForTaskToken`), and a generic escape hatch (`Steps.awsSdk()`) for any AWS service.
+SimpleSteps provides typed bindings for 66 AWS services — 17 with optimized integrations (including HTTPS Endpoints and Activity tasks), 48 SDK-generated with full type signatures, plus a callback pattern (`.waitForTaskToken`) and a generic escape hatch (`Steps.awsSdk()`) for any AWS service.
 
 All service bindings are compile-time markers. They provide TypeScript types for the compiler and throw if called at runtime.
 

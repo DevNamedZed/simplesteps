@@ -227,6 +227,20 @@ export function compile(options: CompileOptions): CompileResult {
     }
 
     const parsed = ts.parseJsonConfigFileContent(configFile.config, ts.sys, cwd);
+    const configErrors = parsed.errors.filter(e => e.category === ts.DiagnosticCategory.Error);
+    if (configErrors.length > 0) {
+      return {
+        stateMachines: [],
+        errors: configErrors.map(err => ({
+          file: err.file?.fileName ?? options.tsconfigPath!,
+          line: 1,
+          column: 1,
+          message: ts.flattenDiagnosticMessageText(err.messageText, '\n'),
+          severity: 'error' as const,
+          code: ErrorCodes.Config.InvalidConfig.code,
+        })),
+      };
+    }
     program = ts.createProgram(parsed.fileNames, parsed.options);
   } else {
     return {

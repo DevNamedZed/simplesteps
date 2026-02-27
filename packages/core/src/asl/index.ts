@@ -103,6 +103,7 @@ export class AslSerializer {
 const PATH_FIELDS = [
   'InputPath', 'OutputPath', 'ResultPath', 'ItemsPath',
   'TimeoutSecondsPath', 'HeartbeatSecondsPath', 'SecondsPath', 'TimestampPath',
+  'CausePath', 'ErrorPath',
 ];
 
 export class AslValidator {

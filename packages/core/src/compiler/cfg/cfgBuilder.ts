@@ -16,6 +16,7 @@ import type {
 interface LoopContext {
   readonly conditionBlock: string;
   readonly exitBlock: string;
+  readonly isSwitch?: boolean;
 }
 
 class CFGBuilderState {
@@ -228,7 +229,11 @@ function processStatements(
 
     // --- Continue statement ---
     if (ts.isContinueStatement(stmt)) {
-      const loop = loopStack[loopStack.length - 1];
+      // Skip switch contexts — continue targets the enclosing loop, not the switch
+      let loop: LoopContext | undefined;
+      for (let i = loopStack.length - 1; i >= 0; i--) {
+        if (!loopStack[i].isSwitch) { loop = loopStack[i]; break; }
+      }
       if (!loop) {
         context.addError(stmt, 'continue statement outside of loop', ErrorCodes.Cfg.ContinueOutsideLoop.code);
         continue;
@@ -1092,15 +1097,15 @@ function processSwitchStatement(
   const discriminant = stmt.expression;
   const clauses = Array.from(stmt.caseBlock.clauses);
 
-  // Validate: no fall-through (each non-empty case must end with break/return/throw)
+  // Validate: no fall-through (each non-empty case must end with break/return/throw/continue)
   for (const clause of clauses) {
     if (clause.statements.length === 0) continue;
     const lastStmt = clause.statements[clause.statements.length - 1];
-    if (!ts.isBreakStatement(lastStmt) && !ts.isReturnStatement(lastStmt) && !ts.isThrowStatement(lastStmt)) {
-      // Check if the last statement is a block ending with break/return/throw
+    if (!ts.isBreakStatement(lastStmt) && !ts.isReturnStatement(lastStmt) && !ts.isThrowStatement(lastStmt) && !ts.isContinueStatement(lastStmt)) {
+      // Check if the last statement is a block ending with break/return/throw/continue
       if (ts.isBlock(lastStmt)) {
         const blockLast = lastStmt.statements[lastStmt.statements.length - 1];
-        if (blockLast && (ts.isBreakStatement(blockLast) || ts.isReturnStatement(blockLast) || ts.isThrowStatement(blockLast))) {
+        if (blockLast && (ts.isBreakStatement(blockLast) || ts.isReturnStatement(blockLast) || ts.isThrowStatement(blockLast) || ts.isContinueStatement(blockLast))) {
           continue;
         }
       }
@@ -1120,7 +1125,7 @@ function processSwitchStatement(
   }
 
   // Create a switch "loop context" so break exits to mergeId
-  const switchCtx: LoopContext = { conditionBlock: mergeId, exitBlock: mergeId };
+  const switchCtx: LoopContext = { conditionBlock: mergeId, exitBlock: mergeId, isSwitch: true };
   const switchLoopStack = [...loopStack, switchCtx];
 
   // Process default body

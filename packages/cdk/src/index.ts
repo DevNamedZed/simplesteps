@@ -220,6 +220,14 @@ export function compileDefinitionBody(
     throw new Error(`No state machines found in ${sourceFile}`);
   }
 
+  if (result.stateMachines.length > 1) {
+    const available = result.stateMachines.map(m => m.name).join(', ');
+    throw new Error(
+      `Source file produces ${result.stateMachines.length} state machines (${available}). ` +
+      `Use the SimpleStepsStateMachine construct with stateMachineName to select one.`,
+    );
+  }
+
   const definition = AslSerializer.serialize(result.stateMachines[0].definition);
   return sfn.DefinitionBody.fromString(definition);
 }

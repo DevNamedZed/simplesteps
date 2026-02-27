@@ -506,6 +506,11 @@ function renderMockConfig(): void {
     customInput.style.display = current === 'custom' ? 'block' : 'none';
     customInput.addEventListener('input', () => {
       customMockValues.set(task.arn, customInput.value);
+      // Auto-switch to custom mode when user types in the textarea
+      if (select.value !== 'custom') {
+        select.value = 'custom';
+        mockModes.set(task.arn, 'custom');
+      }
     });
 
     select.addEventListener('change', () => {

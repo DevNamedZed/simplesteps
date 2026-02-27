@@ -8,6 +8,66 @@ Deploy SimpleSteps workflows with AWS CDK.
 npm install @simplesteps/core @simplesteps/cdk aws-cdk-lib constructs
 ```
 
+## Transformer Setup
+
+The inline `workflow` pattern requires a TypeScript transformer that extracts `Steps.createFunction()` calls from CDK construct props, compiles them to ASL, and injects the result back at build time. Choose one of the following build setups:
+
+### ts-patch (recommended for CDK projects)
+
+```bash
+npm install -D ts-patch typescript
+```
+
+Add scripts to `package.json`:
+
+```json
+{
+  "scripts": {
+    "prepare": "ts-patch install -s",
+    "build": "tspc"
+  }
+}
+```
+
+Add the transformer plugin to `tsconfig.json`:
+
+```json
+{
+  "compilerOptions": {
+    "plugins": [
+      { "transform": "@simplesteps/core/transformer" }
+    ]
+  }
+}
+```
+
+Run `npm install` to activate — the `prepare` script runs `ts-patch install` automatically. Then use `tspc` (ts-patch compiler) instead of `tsc` for builds.
+
+### Vite
+
+```typescript
+import { simpleStepsVitePlugin } from '@simplesteps/core/transformer/plugins/vite';
+
+export default defineConfig({
+  plugins: [simpleStepsVitePlugin()],
+});
+```
+
+### esbuild
+
+```typescript
+import { simpleStepsEsbuildPlugin } from '@simplesteps/core/transformer/plugins/esbuild';
+
+await esbuild.build({
+  plugins: [simpleStepsEsbuildPlugin()],
+  // ...
+});
+```
+
+Both the Vite and esbuild plugins read `tsconfig.json` from the project root by default. Pass `{ tsconfig: './path/to/tsconfig.json' }` to override.
+
+> **Note:** The `sourceFile` + `bindings` pattern (see [Alternative: Separate Workflow Files](#alternative-separate-workflow-files)) does not require the transformer — the compiler reads the file directly at synth time.
+
 ## `SimpleStepsStateMachine`
 
 An L3 CDK construct that compiles a `Steps.createFunction()` workflow to a Step Functions state machine at synth time. Define your workflow inline — service bindings reference CDK resources directly:
@@ -236,21 +296,6 @@ const cancelMachine = new SimpleStepsStateMachine(this, 'CancelOrder', {
 - The same workflow is reused across multiple stacks or accounts
 - You want to compile and inspect ASL via the CLI without CDK
 - Team preference for separating business logic from infrastructure
-
-## CDK Auto-Detection (SS705)
-
-When using the **inline workflow** pattern, the compiler automatically detects CDK construct property accesses (like `myLambda.functionArn` or `myTable.tableName`) and resolves them as synth-time values. This happens transparently — CDK Tokens flow into ASL as-is.
-
-If the compiler recognizes a variable as a CDK synth-time expression via pattern matching (rather than explicit `declare const` binding), it emits warning **SS705**:
-
-```
-[SimpleSteps] SS705: CDK synth-time expression 'validateFn.functionArn'
-auto-detected for variable 'validateOrderArn'. It will be resolved at CDK synth time.
-```
-
-This warning is informational — the compiled output is correct. The compiler detects common CDK property names (`functionArn`, `tableName`, `queueUrl`, `topicArn`, `bucketName`, etc.) and treats them as synth-time constants rather than raising an unresolvable variable error.
-
-To suppress the warning, use the **file-based** pattern with explicit `bindings` instead.
 
 ## Starter Project
 

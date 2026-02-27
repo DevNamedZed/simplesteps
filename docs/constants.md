@@ -48,6 +48,12 @@ The following `Math` methods are evaluated at compile time when all arguments ar
 | `Math.ceil(x)` | `Math.ceil(3.2)` -> `4` |
 | `Math.round(x)` | `Math.round(3.5)` -> `4` |
 | `Math.abs(x)` | `Math.abs(-5)` -> `5` |
+| `Math.sqrt(x)` | `Math.sqrt(16)` -> `4` |
+| `Math.trunc(x)` | `Math.trunc(3.7)` -> `3` |
+| `Math.sign(x)` | `Math.sign(-5)` -> `-1` |
+| `Math.log(x)` | `Math.log(1)` -> `0` |
+| `Math.log2(x)` | `Math.log2(8)` -> `3` |
+| `Math.log10(x)` | `Math.log10(1000)` -> `3` |
 | `Math.min(a, b, ...)` | `Math.min(3, 1, 2)` -> `1` |
 | `Math.max(a, b, ...)` | `Math.max(3, 1, 2)` -> `3` |
 | `Math.pow(x, y)` | `Math.pow(2, 10)` -> `1024` |
@@ -88,7 +94,7 @@ export const workflow = Steps.createFunction(
 - **Runtime values** -- function parameters, service call results, `context.*`
 - **String methods** -- `'hello'.toUpperCase()` is not folded
 - **User-defined functions** -- `myFunction(42)` is not folded
-- **Non-Math pure functions** -- only `Math.floor/ceil/round/abs/min/max/pow` are supported
+- **Non-Math pure functions** -- only `Math.floor/ceil/round/abs/sqrt/trunc/sign/log/log2/log10/min/max/pow` are supported
 - **Constants declared inside `Steps.createFunction()`** -- only module-level constants are folded
 
 See [`examples/showcase/21-constants.ts`](../examples/showcase/21-constants.ts) for a working example.

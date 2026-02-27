@@ -23,6 +23,7 @@ import { StateMachineError, normalizeError, errorMatches, globMatch } from './er
 import { applyInputPath, applyParameters, applyResultSelector, applyResultPath, applyOutputPath } from './dataFlow.js';
 import { resolvePath, resolvePayloadTemplate } from './jsonpath.js';
 import { evaluateChoiceRule } from './choiceEvaluator.js';
+import { executeIntrinsic } from './intrinsics.js';
 
 // ---------------------------------------------------------------------------
 // Pass
@@ -35,7 +36,7 @@ export function executePassState(
   context: ContextObject,
 ): StepResult {
   const effectiveInput = applyInputPath(stateData, state.InputPath);
-  const parameterized = applyParameters(effectiveInput, state.Parameters, context);
+  const parameterized = applyParameters(effectiveInput, state.Parameters, context, executeIntrinsic);
 
   // If Result is present, use it; otherwise use the parameterized input
   const result = state.Result !== undefined ? state.Result : parameterized;
@@ -151,7 +152,7 @@ export async function executeTaskState(
 ): Promise<StepResult> {
   // 1. Data flow: input pipeline
   const effectiveInput = applyInputPath(stateData, state.InputPath);
-  const parameterized = applyParameters(effectiveInput, state.Parameters, context);
+  const parameterized = applyParameters(effectiveInput, state.Parameters, context, executeIntrinsic);
 
   // 2. Resolve service mock
   const resource = typeof state.Resource === 'string' ? state.Resource : JSON.stringify(state.Resource);
@@ -183,7 +184,7 @@ export async function executeTaskState(
   }
 
   // 4. Data flow: output pipeline
-  const selected = applyResultSelector(result.value, state.ResultSelector, context);
+  const selected = applyResultSelector(result.value, state.ResultSelector, context, executeIntrinsic);
   const merged = applyResultPath(stateData, state.ResultPath, selected);
   const output = applyOutputPath(merged, state.OutputPath);
 
@@ -428,7 +429,7 @@ export async function executeParallelState(
 
   if (result.caught) return result.caught;
 
-  const selected = applyResultSelector(result.value, state.ResultSelector, context);
+  const selected = applyResultSelector(result.value, state.ResultSelector, context, executeIntrinsic);
   const merged = applyResultPath(stateData, state.ResultPath, selected);
   const output = applyOutputPath(merged, state.OutputPath);
 
@@ -479,7 +480,7 @@ export async function executeMapState(
       let itemInput: any = item;
       const selector = state.ItemSelector ?? state.Parameters;
       if (selector) {
-        itemInput = resolvePayloadTemplate(selector as Record<string, unknown>, effectiveInput, context);
+        itemInput = resolvePayloadTemplate(selector as Record<string, unknown>, effectiveInput, context, executeIntrinsic);
       }
 
       const itemResult = await runSubMachine(state.ItemProcessor, itemInput, context);
@@ -501,7 +502,7 @@ export async function executeMapState(
 
   if (result.caught) return result.caught;
 
-  const selected = applyResultSelector(result.value, state.ResultSelector, context);
+  const selected = applyResultSelector(result.value, state.ResultSelector, context, executeIntrinsic);
   const merged = applyResultPath(stateData, state.ResultPath, selected);
   const output = applyOutputPath(merged, state.OutputPath);
 

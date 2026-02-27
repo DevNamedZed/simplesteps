@@ -101,18 +101,18 @@ This produces a complete ASL state machine — a Parallel state for the concurre
 | `await Steps.map(items, callback)` | Map state (with results + closures) |
 | `await Promise.all([...])` | Parallel state |
 | Deferred-await (`const p = call(); await p`) | Parallel state (auto-batched) |
-| `await Steps.delay({ seconds: 30 })` | Wait state |
+| `Steps.delay({ seconds: 30 })` | Wait state |
 | `throw new Error(msg)` | Fail state |
 | `try/catch` | Catch rules |
 | Template literals, arithmetic, `Math.*` | JSONata expressions / intrinsics |
 | `arr.map()`, `.filter()`, `.reduce()` | JSONata higher-order functions |
 | `str.toUpperCase()`, `.trim()`, `.split()` | JSONata string built-ins |
 
-64+ JavaScript methods compile directly to JSONata. See the full [language reference](https://github.com/DevNamedZed/simplesteps/blob/main/docs/language-reference.md).
+65+ JavaScript methods compile directly to JSONata. See the full [language reference](https://github.com/DevNamedZed/simplesteps/blob/main/docs/language-reference.md).
 
 ## AWS Service Bindings
 
-64 typed service bindings with compile-time resolution:
+66 typed service bindings with compile-time resolution:
 
 ```typescript
 import { Lambda, DynamoDB, SQS, SNS, S3, EventBridge } from '@simplesteps/core/runtime/services';

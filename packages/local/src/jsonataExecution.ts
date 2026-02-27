@@ -51,9 +51,9 @@ export async function executeStateJsonata(
     case 'Wait':
       return executeWaitJsonata(state, stateName, stateData, context, options, scope);
     case 'Fail':
-      return executeFailJsonata(state, stateName, stateData, scope);
+      return executeFailJsonata(state, stateName, stateData, context, scope);
     case 'Succeed':
-      return executeSucceedJsonata(state, stateData, scope);
+      return executeSucceedJsonata(state, stateData, context, scope);
     case 'Parallel':
       return executeParallelJsonata(state, stateName, stateData, context, options, scope, runSubMachine);
     case 'Map':
@@ -296,6 +296,7 @@ async function executeFailJsonata(
   state: FailState,
   _stateName: string,
   stateData: any,
+  context: ContextObject,
   scope: VariableScope,
 ): Promise<never> {
   let errorName = state.Error ?? 'States.TaskFailed';
@@ -303,10 +304,10 @@ async function executeFailJsonata(
 
   // In JSONata mode, Error and Cause can be JSONata expressions
   if (typeof errorName === 'string' && isJsonataExpr(errorName)) {
-    errorName = await evaluateJsonata(errorName, { input: stateData, context: {} as any }, scope);
+    errorName = await evaluateJsonata(errorName, { input: stateData, context }, scope);
   }
   if (typeof cause === 'string' && isJsonataExpr(cause)) {
-    cause = await evaluateJsonata(cause, { input: stateData, context: {} as any }, scope);
+    cause = await evaluateJsonata(cause, { input: stateData, context }, scope);
   }
 
   throw new StateMachineError(errorName, cause);
@@ -319,11 +320,12 @@ async function executeFailJsonata(
 async function executeSucceedJsonata(
   state: SucceedState,
   stateData: any,
+  context: ContextObject,
   scope: VariableScope,
 ): Promise<JsonataStepResult> {
   let output = stateData;
   if ((state as any).Output !== undefined) {
-    const statesBinding = makeStatesBinding(stateData, {} as any);
+    const statesBinding = makeStatesBinding(stateData, context);
     output = await evaluateJsonataPayload((state as any).Output, statesBinding, scope);
   }
   return { output, nextState: null, scope };

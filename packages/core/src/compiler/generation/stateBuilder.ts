@@ -476,7 +476,16 @@ function processAwaitReassignment(
   expr: ts.BinaryExpression,
 ): string | null {
   const awaitExpr = expr.right as ts.AwaitExpression;
-  const callExpr = awaitExpr.expression;
+  let callExpr: ts.Expression = awaitExpr.expression;
+
+  // Resolve deferred promise: x = await promiseVar → look up original call
+  if (ts.isIdentifier(callExpr)) {
+    const sym = ctx.compilerContext.checker.getSymbolAtLocation(callExpr);
+    if (sym && ctx.cfg.deferredCalls?.has(sym)) {
+      callExpr = ctx.cfg.deferredCalls.get(sym)!;
+    }
+  }
+
   if (!ts.isCallExpression(callExpr)) return null;
 
   const serviceCall = extractServiceCall(ctx, callExpr) ?? extractStepsAwsSdk(ctx, callExpr);
@@ -2017,6 +2026,12 @@ function createSubContext(
   const subVariables = new VRBClass();
   for (const [sym, info] of ctx.variables.variables) {
     if (info.type === StepVariableType.External || info.type === StepVariableType.Constant) {
+      subVariables.addVariable(sym, info);
+    }
+    // Copy Derived variables whose expressions don't reference $states.input
+    // (which changes meaning inside Map state scope)
+    if (info.type === StepVariableType.Derived && info.intrinsicPath &&
+        !info.intrinsicPath.includes('$states.input')) {
       subVariables.addVariable(sym, info);
     }
   }

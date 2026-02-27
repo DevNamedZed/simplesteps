@@ -136,9 +136,7 @@ export class ModuleEnvironment {
     if (this.importResolver) {
       for (const moduleSpec of this.starReExports) {
         const value = this.importResolver(this.sourceFile, moduleSpec, name);
-        if (value.kind !== 'bottom' || !value.reason.includes('not found')) {
-          return value;
-        }
+        if (value.kind !== 'bottom') return value;
       }
     }
 

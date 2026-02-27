@@ -132,7 +132,15 @@ export function resolvePayloadTemplate(
         // JSONPath reference
         result[outputKey] = resolveReference(expr, stateData, context);
       }
-    } else if (value !== null && typeof value === 'object' && !Array.isArray(value)) {
+    } else if (Array.isArray(value)) {
+      // Array — recurse into each element
+      result[key] = value.map((item: any) => {
+        if (item !== null && typeof item === 'object' && !Array.isArray(item)) {
+          return resolvePayloadTemplate(item as Record<string, unknown>, stateData, context, resolveIntrinsic);
+        }
+        return item;
+      });
+    } else if (value !== null && typeof value === 'object') {
       // Nested object — recurse
       result[key] = resolvePayloadTemplate(
         value as Record<string, unknown>,

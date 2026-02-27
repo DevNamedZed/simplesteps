@@ -170,7 +170,7 @@ npx simplesteps compile workflow.ts -o output/ --query-language jsonpath
 | `await Promise.all([...])` | Parallel state |
 | `await Steps.parallel(branches, { retry })` | Parallel state with retry |
 | Deferred-await (`const p = call(); await p`) | Parallel state (auto-batched) |
-| `await Steps.delay({ seconds: 30 })` | Wait state |
+| `Steps.delay({ seconds: 30 })` | Wait state |
 | `Steps.succeed()` | Succeed state (early termination) |
 | `throw new Error(msg)` | Fail state |
 | `return value` | Succeed / End state |
@@ -211,7 +211,7 @@ npx simplesteps compile workflow.ts -o output/ --query-language jsonpath
 - **Whole-program data flow analysis** with constant propagation lattice across modules
 - **Cross-file import resolution** with demand-driven analysis and cycle detection
 - **Pure function inlining** for compile-time constant derivation
-- **64 typed AWS service bindings** — 16 with optimized integrations (Lambda, DynamoDB, SQS, SNS, EventBridge, S3, Secrets Manager, SSM, ECS, Bedrock, Glue, CodeBuild, Athena, Batch, StepFunction, HttpEndpoint) + Activity tasks + 48 SDK-generated bindings with full type signatures + `Steps.awsSdk()` escape hatch
+- **66 typed AWS service bindings** — 17 with optimized integrations (Lambda, DynamoDB, SQS, SNS, EventBridge, S3, Secrets Manager, SSM, ECS, Bedrock, Glue, CodeBuild, Athena, Batch, StepFunction, HttpEndpoint, Activity) + 48 SDK-generated bindings with full type signatures + `Steps.awsSdk()` escape hatch
 - **CDK token propagation** through CloudFormation intrinsics (`Fn::GetAtt`, `Ref`) with synth-time expression auto-detection
 - **Source map comments** — optional `sourceMap` flag annotates ASL states with TypeScript source locations
 - **Object destructuring** with rest patterns for extracting service call results

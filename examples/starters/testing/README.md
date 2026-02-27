@@ -31,7 +31,7 @@ let asl: StateMachineDefinition;
 
 beforeAll(() => {
   const result = compile({
-    sourceFiles: ['./workflows/my-workflow.ts'],
+    tsconfigPath: './tsconfig.workflows.json',
   });
   asl = JSON.parse(AslSerializer.serialize(result.stateMachines[0].definition));
 });

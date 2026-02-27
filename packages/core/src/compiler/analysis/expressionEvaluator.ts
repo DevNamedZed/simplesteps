@@ -262,12 +262,15 @@ export class ExpressionEvaluator {
         return bottom('< on incompatible types', expr);
       case ts.SyntaxKind.LessThanEqualsToken:
         if (typeof l === 'number' && typeof r === 'number') return constant(l <= r);
+        if (typeof l === 'string' && typeof r === 'string') return constant(l <= r);
         return bottom('<= on incompatible types', expr);
       case ts.SyntaxKind.GreaterThanToken:
         if (typeof l === 'number' && typeof r === 'number') return constant(l > r);
+        if (typeof l === 'string' && typeof r === 'string') return constant(l > r);
         return bottom('> on incompatible types', expr);
       case ts.SyntaxKind.GreaterThanEqualsToken:
         if (typeof l === 'number' && typeof r === 'number') return constant(l >= r);
+        if (typeof l === 'string' && typeof r === 'string') return constant(l >= r);
         return bottom('>= on incompatible types', expr);
       case ts.SyntaxKind.BarToken:
         if (typeof l === 'number' && typeof r === 'number') return constant(l | r);

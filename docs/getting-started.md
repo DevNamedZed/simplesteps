@@ -16,6 +16,41 @@ npm install @simplesteps/core @simplesteps/cdk aws-cdk-lib constructs
 npm install @simplesteps/core
 ```
 
+## Build Setup
+
+The CDK inline `workflow` pattern uses a TypeScript transformer to compile `Steps.createFunction()` calls at build time. Set up ts-patch:
+
+```bash
+npm install -D ts-patch
+```
+
+Add scripts to `package.json`:
+
+```json
+{
+  "scripts": {
+    "prepare": "ts-patch install -s",
+    "build": "tspc"
+  }
+}
+```
+
+Add the transformer plugin to `tsconfig.json`:
+
+```json
+{
+  "compilerOptions": {
+    "plugins": [
+      { "transform": "@simplesteps/core/transformer" }
+    ]
+  }
+}
+```
+
+Run `npm install` to activate — the `prepare` script runs `ts-patch install` automatically. Then use `tspc` instead of `tsc` for builds.
+
+> For Vite or esbuild alternatives, see [CDK Integration — Transformer Setup](./cdk-integration.md#transformer-setup).
+
 ## Your First Workflow
 
 Create `lib/stack.ts`. Everything lives in one file — infrastructure, service bindings, and workflow logic:
@@ -135,7 +170,7 @@ This produces `output/orderWorkflow.asl.json` — useful for reviewing the gener
 - [CDK Integration](./cdk-integration.md) -- `SimpleStepsStateMachine` construct, multiple workflows, file-based mode
 - [Library API](./library-api.md) -- use the compiler programmatically for custom pipelines
 - [CLI Reference](./cli.md) -- all compiler flags
-- [Services](./services.md) -- 64 typed AWS service bindings + Steps.awsSdk()
+- [Services](./services.md) -- 66 typed AWS service bindings + Steps.awsSdk()
 - [Language Reference](./language-reference.md) -- every TypeScript construct and its ASL mapping
 
 ## Starter Projects
@@ -145,3 +180,4 @@ Complete, standalone projects you can clone and run:
 - [`examples/starters/cdk/`](../examples/starters/cdk/) -- CDK deployment
 - [`examples/starters/library-api/`](../examples/starters/library-api/) -- programmatic compilation
 - [`examples/starters/cli/`](../examples/starters/cli/) -- CLI compilation
+- [`examples/starters/testing/`](../examples/starters/testing/) -- Jest testing with local execution

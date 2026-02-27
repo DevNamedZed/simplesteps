@@ -169,7 +169,7 @@ SimpleSteps doesn't replace CDK — it replaces the step function constructs ins
 | `new sfn.Choice().when().otherwise()` | `if/else`, `switch/case` |
 | `new sfn.Parallel().branch(...)` | `await Promise.all([...])` |
 | `new sfn.Map(scope, id, { ... })` | `for (const item of array)` |
-| `new sfn.Wait(scope, id, { time })` | `await Steps.delay(...)` |
+| `new sfn.Wait(scope, id, { time })` | `Steps.delay(...)` |
 | `new sfn.Fail(scope, id, { error })` | `throw new Error(msg)` |
 | `task.addCatch(handler)` | `try/catch` |
 | `task.addRetry({ ... })` | `{ retry: { ... } }` option |

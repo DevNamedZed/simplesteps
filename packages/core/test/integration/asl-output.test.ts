@@ -5554,3 +5554,332 @@ describe('ASL output: version field with empty string', () => {
     expect(asl.Version).toBeUndefined();
   });
 });
+
+// ---------------------------------------------------------------------------
+// String method edge cases (JSONata)
+// ---------------------------------------------------------------------------
+
+describe('string method edge cases (JSONata)', () => {
+  let asl: any;
+  let allStrings: string[];
+
+  beforeAll(() => {
+    asl = compileFixtureJsonata('string-method-edge-cases.ts');
+    allStrings = collectAllStringValues(asl.States);
+  });
+
+  it('compiles without errors', () => {
+    const filePath = path.join(FIXTURES_DIR, 'string-method-edge-cases.ts');
+    const result = compile({ sourceFiles: [filePath], queryLanguage: 'JSONata' });
+    expect(result.errors).toHaveLength(0);
+  });
+
+  it('arr.join() with no args emits $join(arr, \',\')', () => {
+    const joinExpr = allStrings.find(v => /\$join\([^)]+,\s*','/.test(v));
+    expect(joinExpr).toBeDefined();
+  });
+
+  it('str.replace() emits $replace with limit 1', () => {
+    const replaceExpr = allStrings.find(v => /\$replace\([^)]+,\s*'old',\s*'new',\s*1\)/.test(v));
+    expect(replaceExpr).toBeDefined();
+  });
+
+  it('str.includes() emits $contains()', () => {
+    const containsExpr = allStrings.find(v => /\$contains\([^)]+,\s*'hello'\)/.test(v));
+    expect(containsExpr).toBeDefined();
+  });
+
+  it('backslash in string literal is properly escaped', () => {
+    const backslashExpr = allStrings.find(v => v.includes('$replace(') && v.includes('\\\\n'));
+    expect(backslashExpr).toBeDefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Relational path comparisons (JSONPath)
+// ---------------------------------------------------------------------------
+
+describe('relational path comparisons (JSONPath)', () => {
+  let asl: any;
+
+  beforeAll(() => {
+    asl = compileToJson('relational-path-comparisons.ts');
+  });
+
+  it('compiles without errors', () => {
+    const filePath = path.join(FIXTURES_DIR, 'relational-path-comparisons.ts');
+    const result = compile({ sourceFiles: [filePath], queryLanguage: 'JSONPath' });
+    expect(result.errors).toHaveLength(0);
+  });
+
+  it('contains a Choice state', () => {
+    const choices = getStatesByType(asl, 'Choice');
+    expect(choices.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('Choice rule uses NumericGreaterThanPath for variable-to-variable comparison', () => {
+    const choices = getStatesByType(asl, 'Choice');
+    const allChoiceRules = choices.flatMap(([, s]) => s.Choices || []);
+    const hasPathComparison = allChoiceRules.some((rule: any) =>
+      rule.NumericGreaterThanPath !== undefined
+    );
+    expect(hasPathComparison).toBe(true);
+  });
+
+  it('NumericGreaterThanPath references a JSONPath ($.xxx)', () => {
+    const choices = getStatesByType(asl, 'Choice');
+    const allChoiceRules = choices.flatMap(([, s]) => s.Choices || []);
+    const pathRule = allChoiceRules.find((rule: any) => rule.NumericGreaterThanPath);
+    expect(pathRule).toBeDefined();
+    expect(pathRule.NumericGreaterThanPath).toMatch(/^\$/);
+  });
+
+  it('both branches produce Pass states with winner value', () => {
+    const passes = getStatesByType(asl, 'Pass');
+    const allValues = collectAllStringValues(passes.map(([, s]) => s));
+    expect(allValues).toContain('A');
+    expect(allValues).toContain('B');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Deferred variable reassignment
+// ---------------------------------------------------------------------------
+
+describe('deferred variable reassignment', () => {
+  let asl: any;
+
+  beforeAll(() => {
+    asl = compileToJson('deferred-reassignment.ts');
+  });
+
+  it('compiles without errors', () => {
+    const filePath = path.join(FIXTURES_DIR, 'deferred-reassignment.ts');
+    const result = compile({ sourceFiles: [filePath], queryLanguage: 'JSONPath' });
+    expect(result.errors).toHaveLength(0);
+  });
+
+  it('produces two Task states for both service calls', () => {
+    const tasks = getStatesByType(asl, 'Task');
+    expect(tasks.length).toBe(2);
+  });
+
+  it('Task states reference FnA and FnB Lambda ARNs', () => {
+    const tasks = getStatesByType(asl, 'Task');
+    const resources = tasks.map(([, s]) => s.Resource);
+    expect(resources.some(r => r.includes('FnA'))).toBe(true);
+    expect(resources.some(r => r.includes('FnB'))).toBe(true);
+  });
+
+  it('first Task chains to second Task (sequential, no Parallel)', () => {
+    const tasks = getStatesByType(asl, 'Task');
+    const parallels = getStatesByType(asl, 'Parallel');
+    expect(parallels).toHaveLength(0);
+    const fnATask = tasks.find(([, s]) => s.Resource.includes('FnA'));
+    expect(fnATask).toBeDefined();
+    expect(fnATask![1].Next).toBeDefined();
+    expect(fnATask![1].End).toBeUndefined();
+  });
+
+  it('second Task has End: true (return-result optimization)', () => {
+    const tasks = getStatesByType(asl, 'Task');
+    const fnBTask = tasks.find(([, s]) => s.Resource.includes('FnB'));
+    expect(fnBTask).toBeDefined();
+    expect(fnBTask![1].End).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Switch continue inside while loop
+// ---------------------------------------------------------------------------
+
+describe('switch continue inside while loop', () => {
+  let asl: any;
+
+  beforeAll(() => {
+    asl = compileToJson('switch-continue.ts');
+  });
+
+  it('compiles without errors', () => {
+    const filePath = path.join(FIXTURES_DIR, 'switch-continue.ts');
+    const result = compile({ sourceFiles: [filePath], queryLanguage: 'JSONPath' });
+    expect(result.errors).toHaveLength(0);
+  });
+
+  it('contains a Choice state for the while loop condition', () => {
+    const choices = getStatesByType(asl, 'Choice');
+    const whileChoice = choices.find(([, s]) =>
+      s.Choices.some((r: any) => r.BooleanEquals !== undefined)
+    );
+    expect(whileChoice).toBeDefined();
+  });
+
+  it('contains Choice states for the switch cases', () => {
+    const choices = getStatesByType(asl, 'Choice');
+    expect(choices.length).toBeGreaterThanOrEqual(3);
+  });
+
+  it('continue in skip case targets the while loop condition (not switch merge)', () => {
+    const stateEntries = Object.entries(asl.States) as [string, any][];
+
+    const whileChoice = stateEntries.find(([, s]) =>
+      s.Type === 'Choice' &&
+      s.Choices?.some((r: any) => r.BooleanEquals !== undefined)
+    );
+    expect(whileChoice).toBeDefined();
+    const whileChoiceName = whileChoice![0];
+
+    const skipTask = stateEntries.find(([, s]) =>
+      s.Type === 'Task' &&
+      s.Parameters?.action === 'skipped'
+    );
+    expect(skipTask).toBeDefined();
+    expect(skipTask![1].Next).toBe(whileChoiceName);
+  });
+
+  it('normal flow (non-continue) goes through post-switch statements', () => {
+    const stateEntries = Object.entries(asl.States) as [string, any][];
+
+    const postSwitchTask = stateEntries.find(([, s]) =>
+      s.Type === 'Task' &&
+      s.Parameters?.action === 'post-switch'
+    );
+    expect(postSwitchTask).toBeDefined();
+
+    const processFnTask = stateEntries.find(([, s]) =>
+      s.Type === 'Task' &&
+      s.Resource?.includes('process')
+    );
+    expect(processFnTask).toBeDefined();
+    expect(processFnTask![1].Next).toBe(postSwitchTask![0]);
+  });
+
+  it('produces Task states for both processFn and logFn', () => {
+    const tasks = getStatesByType(asl, 'Task');
+    expect(tasks.length).toBeGreaterThanOrEqual(2);
+    const allStrings = collectAllStringValues(tasks.map(([, s]) => s));
+    expect(allStrings.some(v => v.includes('process'))).toBe(true);
+    expect(allStrings.some(v => v.includes('log'))).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Context property resolution (camelCase → PascalCase)
+// ---------------------------------------------------------------------------
+
+describe('context property resolution (JSONPath)', () => {
+  let basicAsl: any;
+  let fullAsl: any;
+
+  beforeAll(() => {
+    const filePath = path.join(FIXTURES_DIR, 'context-properties.ts');
+    const result = compile({ sourceFiles: [filePath], queryLanguage: 'JSONPath' });
+    if (result.errors.length > 0) {
+      const msgs = result.errors.map(e => `  [${e.code}] ${e.message}`);
+      throw new Error(`Compilation errors:\n${msgs.join('\n')}`);
+    }
+    const asls = result.stateMachines.map(sm => {
+      const json = AslSerializer.serialize(sm.definition);
+      return JSON.parse(json);
+    });
+    basicAsl = asls[0];
+    fullAsl = asls[1];
+  });
+
+  it('compiles without errors', () => {
+    const filePath = path.join(FIXTURES_DIR, 'context-properties.ts');
+    const result = compile({ sourceFiles: [filePath], queryLanguage: 'JSONPath' });
+    expect(result.errors).toHaveLength(0);
+  });
+
+  it('maps context.execution.id to $$.Execution.Id', () => {
+    const allStrings = collectAllStringValues(basicAsl.States);
+    expect(allStrings).toContain('$$.Execution.Id');
+  });
+
+  it('maps context.execution.startTime to $$.Execution.StartTime', () => {
+    const allStrings = collectAllStringValues(basicAsl.States);
+    expect(allStrings).toContain('$$.Execution.StartTime');
+  });
+
+  it('maps context.state.name to $$.State.Name', () => {
+    const allStrings = collectAllStringValues(basicAsl.States);
+    expect(allStrings).toContain('$$.State.Name');
+  });
+
+  it('maps context.state.retryCount to $$.State.RetryCount', () => {
+    const allStrings = collectAllStringValues(basicAsl.States);
+    expect(allStrings).toContain('$$.State.RetryCount');
+  });
+
+  it('maps context.stateMachine.id to $$.StateMachine.Id', () => {
+    const allStrings = collectAllStringValues(basicAsl.States);
+    expect(allStrings).toContain('$$.StateMachine.Id');
+  });
+
+  it('maps context.execution.name to $$.Execution.Name', () => {
+    const allStrings = collectAllStringValues(fullAsl.States);
+    expect(allStrings).toContain('$$.Execution.Name');
+  });
+
+  it('maps context.execution.roleArn to $$.Execution.RoleArn', () => {
+    const allStrings = collectAllStringValues(fullAsl.States);
+    expect(allStrings).toContain('$$.Execution.RoleArn');
+  });
+
+  it('maps context.state.enteredTime to $$.State.EnteredTime', () => {
+    const allStrings = collectAllStringValues(fullAsl.States);
+    expect(allStrings).toContain('$$.State.EnteredTime');
+  });
+
+  it('maps context.stateMachine.name to $$.StateMachine.Name', () => {
+    const allStrings = collectAllStringValues(fullAsl.States);
+    expect(allStrings).toContain('$$.StateMachine.Name');
+  });
+});
+
+describe('context property resolution (JSONata)', () => {
+  let basicAsl: any;
+  let fullAsl: any;
+
+  beforeAll(() => {
+    const filePath = path.join(FIXTURES_DIR, 'context-properties.ts');
+    const result = compile({ sourceFiles: [filePath], queryLanguage: 'JSONata' });
+    if (result.errors.length > 0) {
+      const msgs = result.errors.map(e => `  [${e.code}] ${e.message}`);
+      throw new Error(`Compilation errors:\n${msgs.join('\n')}`);
+    }
+    const asls = result.stateMachines.map(sm => {
+      const json = AslSerializer.serialize(sm.definition);
+      return JSON.parse(json);
+    });
+    basicAsl = asls[0];
+    fullAsl = asls[1];
+  });
+
+  it('compiles without errors', () => {
+    const filePath = path.join(FIXTURES_DIR, 'context-properties.ts');
+    const result = compile({ sourceFiles: [filePath], queryLanguage: 'JSONata' });
+    expect(result.errors).toHaveLength(0);
+  });
+
+  it('maps context.execution.id to $states.context.Execution.Id', () => {
+    const allStrings = collectAllStringValues(basicAsl.States);
+    expect(allStrings.some(s => s.includes('$states.context.Execution.Id'))).toBe(true);
+  });
+
+  it('maps context.state.name to $states.context.State.Name', () => {
+    const allStrings = collectAllStringValues(basicAsl.States);
+    expect(allStrings.some(s => s.includes('$states.context.State.Name'))).toBe(true);
+  });
+
+  it('maps context.stateMachine.id to $states.context.StateMachine.Id', () => {
+    const allStrings = collectAllStringValues(basicAsl.States);
+    expect(allStrings.some(s => s.includes('$states.context.StateMachine.Id'))).toBe(true);
+  });
+
+  it('maps context.execution.roleArn to $states.context.Execution.RoleArn', () => {
+    const allStrings = collectAllStringValues(fullAsl.States);
+    expect(allStrings.some(s => s.includes('$states.context.Execution.RoleArn'))).toBe(true);
+  });
+});
