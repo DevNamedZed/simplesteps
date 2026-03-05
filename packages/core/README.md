@@ -118,7 +118,7 @@ This produces a complete ASL state machine — a Parallel state for the concurre
 import { Lambda, DynamoDB, SQS, SNS, S3, EventBridge } from '@simplesteps/core/runtime/services';
 ```
 
-16 services have optimized integrations (Lambda, DynamoDB, SQS, SNS, EventBridge, S3, Secrets Manager, SSM, ECS, Bedrock, Glue, CodeBuild, Athena, Batch, StepFunction, HttpEndpoint), 48 have SDK-generated bindings with full type signatures, and `Steps.awsSdk()` covers anything else.
+17 services have optimized integrations (Lambda, DynamoDB, SQS, SNS, EventBridge, S3, Secrets Manager, SSM, ECS, Bedrock, Glue, CodeBuild, Athena, Batch, StepFunction, HttpEndpoint, Activity), 48 have SDK-generated bindings with full type signatures, and `Steps.awsSdk()` covers anything else.
 
 ## CDK
 

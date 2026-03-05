@@ -94,6 +94,20 @@ function parseIntrinsicCall(expr: string): IntrinsicCall {
   let depth = 0;
   let end = nameEnd;
   for (let i = nameEnd; i < expr.length; i++) {
+    if (expr[i] === "'") {
+      // Skip past string literal (respecting \' escapes)
+      i++;
+      while (i < expr.length) {
+        if (expr[i] === '\\' && i + 1 < expr.length && expr[i + 1] === "'") {
+          i += 2;
+        } else if (expr[i] === "'") {
+          break;
+        } else {
+          i++;
+        }
+      }
+      continue;
+    }
     if (expr[i] === '(') depth++;
     if (expr[i] === ')') depth--;
     if (depth === 0) { end = i; break; }
@@ -117,11 +131,21 @@ function parseArgList(str: string, start: number): { args: IntrinsicArg[]; end: 
     const ch = str[i];
 
     if (ch === "'") {
-      // String literal
-      const closeQuote = str.indexOf("'", i + 1);
-      if (closeQuote === -1) throw new Error(`Unterminated string in intrinsic args`);
-      args.push({ type: 'string', value: str.slice(i + 1, closeQuote) });
-      i = closeQuote + 1;
+      // String literal — walk char-by-char to handle escaped quotes (\')
+      let j = i + 1;
+      while (j < str.length) {
+        if (str[j] === '\\' && j + 1 < str.length && str[j + 1] === "'") {
+          j += 2; // skip escaped quote
+        } else if (str[j] === "'") {
+          break;
+        } else {
+          j++;
+        }
+      }
+      if (j >= str.length) throw new Error(`Unterminated string in intrinsic args`);
+      const raw = str.slice(i + 1, j);
+      args.push({ type: 'string', value: raw.replace(/\\'/g, "'") });
+      i = j + 1;
     } else if (ch === '$') {
       // JSONPath
       let j = i + 1;
@@ -129,12 +153,32 @@ function parseArgList(str: string, start: number): { args: IntrinsicArg[]; end: 
       args.push({ type: 'path', value: str.slice(i, j).trim() });
       i = j;
     } else if (ch === 'S' && str.startsWith('States.', i)) {
-      // Nested intrinsic call
-      const nested = parseIntrinsicCall(str.slice(i));
-      // Find where the nested call ends in the original string
-      const nestedStr = reconstructCall(nested);
+      // Nested intrinsic call — find the actual end via balanced parens
+      const openParen = str.indexOf('(', i);
+      let depth = 0;
+      let callEnd = openParen;
+      for (let k = openParen; k < str.length; k++) {
+        if (str[k] === "'") {
+          // Skip past string literal (respecting \' escapes)
+          k++;
+          while (k < str.length) {
+            if (str[k] === '\\' && k + 1 < str.length && str[k + 1] === "'") {
+              k += 2;
+            } else if (str[k] === "'") {
+              break;
+            } else {
+              k++;
+            }
+          }
+          continue;
+        }
+        if (str[k] === '(') depth++;
+        if (str[k] === ')') depth--;
+        if (depth === 0) { callEnd = k; break; }
+      }
+      const nested = parseIntrinsicCall(str.slice(i, callEnd + 1));
       args.push({ type: 'call', value: nested });
-      i += nestedStr.length;
+      i = callEnd + 1;
     } else if (ch === 't' && str.startsWith('true', i)) {
       args.push({ type: 'boolean', value: true });
       i += 4;
@@ -162,19 +206,6 @@ function parseArgList(str: string, start: number): { args: IntrinsicArg[]; end: 
   }
 
   return { args, end: i };
-}
-
-function reconstructCall(call: IntrinsicCall): string {
-  const args = call.args.map(a => {
-    switch (a.type) {
-      case 'string': return `'${a.value}'`;
-      case 'number': return String(a.value);
-      case 'boolean': return String(a.value);
-      case 'path': return a.value;
-      case 'call': return reconstructCall(a.value);
-    }
-  });
-  return `${call.name}(${args.join(', ')})`;
 }
 
 // ---------------------------------------------------------------------------
@@ -208,7 +239,7 @@ function evaluateCall(call: IntrinsicCall, stateData: any, context: ContextObjec
     case 'States.Base64Encode': return base64Encode(args[0]);
     case 'States.Base64Decode': return base64Decode(args[0]);
     case 'States.Hash': return computeHash(args[1], args[0]);
-    case 'States.JsonMerge': return { ...args[0], ...args[1] };
+    case 'States.JsonMerge': return statesJsonMerge(args[0], args[1], args[2]);
     case 'States.MathRandom': return Math.floor(Math.random() * (args[1] - args[0])) + args[0];
     case 'States.MathAdd': return args[0] + args[1];
     case 'States.StringSplit': return args[1] === '' ? [...args[0]] : args[0].split(args[1]);
@@ -231,7 +262,25 @@ function statesFormat(args: any[]): string {
   });
 }
 
+function statesJsonMerge(a: any, b: any, deep?: boolean): any {
+  if (!deep) return { ...a, ...b };
+  const result = { ...a };
+  for (const key of Object.keys(b)) {
+    if (
+      result[key] !== undefined &&
+      typeof result[key] === 'object' && result[key] !== null && !Array.isArray(result[key]) &&
+      typeof b[key] === 'object' && b[key] !== null && !Array.isArray(b[key])
+    ) {
+      result[key] = statesJsonMerge(result[key], b[key], true);
+    } else {
+      result[key] = b[key];
+    }
+  }
+  return result;
+}
+
 function statesArrayPartition(arr: any[], size: number): any[][] {
+  if (!size || size <= 0) throw new Error('States.ArrayPartition: chunk size must be a positive integer');
   const result: any[][] = [];
   for (let i = 0; i < arr.length; i += size) {
     result.push(arr.slice(i, i + size));
@@ -251,9 +300,9 @@ function statesArrayContains(arr: any[], value: any): boolean {
 function statesArrayRange(start: number, end: number, step: number): number[] {
   const result: number[] = [];
   if (step > 0) {
-    for (let i = start; i < end; i += step) result.push(i);
+    for (let i = start; i <= end; i += step) result.push(i);
   } else if (step < 0) {
-    for (let i = start; i > end; i += step) result.push(i);
+    for (let i = start; i >= end; i += step) result.push(i);
   }
   return result;
 }

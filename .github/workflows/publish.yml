@@ -35,6 +35,11 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
+      - name: Publish @simplesteps/local
+        run: npm publish --workspace packages/local --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
       - name: Publish @simplesteps/cdk
         run: npm publish --workspace packages/cdk --provenance --access public
         env:

@@ -388,7 +388,7 @@ function serializeJsonataOperand(resolved: ReturnType<typeof resolveExpression>)
 function serializeJsonataValue(value: unknown): string {
   if (typeof value === 'string') {
     // Single-quote strings in JSONata, escape single quotes
-    return `'${value.replace(/'/g, "\\'")}'`;
+    return `'${value.replace(/\\/g, '\\\\').replace(/'/g, "\\'")}'`;
   }
   if (typeof value === 'number' || typeof value === 'boolean') {
     return String(value);

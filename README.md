@@ -206,7 +206,7 @@ npx simplesteps compile workflow.ts -o output/ --query-language jsonpath
 ## Compiler Features
 
 - **Dual query language support** — JSONata (default) and JSONPath, switchable via `--query-language`
-- **64+ JS method → JSONata mappings** — string, math, array, type conversion, higher-order functions, and operators compile directly
+- **65+ JS method → JSONata mappings** — string, math, array, type conversion, higher-order functions, and operators compile directly
 - **Lambda expression analysis** — pure callbacks in `.map()`, `.filter()`, `.reduce()` auto-compile to JSONata higher-order functions
 - **Whole-program data flow analysis** with constant propagation lattice across modules
 - **Cross-file import resolution** with demand-driven analysis and cycle detection

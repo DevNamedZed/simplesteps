@@ -66,6 +66,13 @@ describe('States.ArrayPartition', () => {
       { arr: [1, 2, 3, 4, 5] }, ctx,
     )).toEqual([[1, 2], [3, 4], [5]]);
   });
+
+  it('throws on zero chunk size', () => {
+    expect(() => executeIntrinsic(
+      "States.ArrayPartition($.arr, 0)",
+      { arr: [1, 2, 3] }, ctx,
+    )).toThrow('chunk size must be a positive integer');
+  });
 });
 
 describe('States.ArrayContains', () => {
@@ -89,7 +96,7 @@ describe('States.ArrayRange', () => {
     expect(executeIntrinsic(
       "States.ArrayRange(0, 5, 1)",
       {}, ctx,
-    )).toEqual([0, 1, 2, 3, 4]);
+    )).toEqual([0, 1, 2, 3, 4, 5]);
   });
 
   it('generates range with step', () => {
@@ -158,6 +165,13 @@ describe('States.JsonMerge', () => {
       { a: { x: 1 }, b: { x: 2 } }, ctx,
     )).toEqual({ x: 2 });
   });
+
+  it('deep merges nested objects when flag is true', () => {
+    expect(executeIntrinsic(
+      "States.JsonMerge($.a, $.b, true)",
+      { a: { nested: { x: 1, y: 2 } }, b: { nested: { y: 3, z: 4 } } }, ctx,
+    )).toEqual({ nested: { x: 1, y: 3, z: 4 } });
+  });
 });
 
 describe('States.StringSplit', () => {
@@ -200,5 +214,28 @@ describe('States.MathRandom', () => {
     const result = executeIntrinsic("States.MathRandom(0, 10)", {}, ctx);
     expect(result).toBeGreaterThanOrEqual(0);
     expect(result).toBeLessThan(10);
+  });
+});
+
+describe('Intrinsic parser edge cases', () => {
+  it('handles unbalanced open paren inside string literal', () => {
+    expect(executeIntrinsic(
+      "States.Format('count: ({}', $.val)",
+      { val: 'test' }, ctx,
+    )).toBe('count: (test');
+  });
+
+  it('handles unbalanced close paren inside string literal', () => {
+    expect(executeIntrinsic(
+      "States.Format('done) {}', $.val)",
+      { val: 'ok' }, ctx,
+    )).toBe('done) ok');
+  });
+
+  it('handles nested call with unbalanced paren in string literal', () => {
+    expect(executeIntrinsic(
+      "States.Format('(result: {}', States.JsonToString($.data))",
+      { data: { x: 1 } }, ctx,
+    )).toBe('(result: {"x":1}');
   });
 });
