@@ -85,6 +85,10 @@ export function resolveReference(
 export function setPath(data: any, path: string, value: any): any {
   if (path === '$') return value;
 
+  if (data === null || data === undefined) {
+    data = {};
+  }
+
   const segments = parsePath(path);
   let current = data;
 
@@ -105,6 +109,27 @@ export function setPath(data: any, path: string, value: any): any {
 // ---------------------------------------------------------------------------
 // Payload template resolution (JSONPath mode)
 // ---------------------------------------------------------------------------
+
+/**
+ * Recursively resolve an array within a payload template.
+ * Handles nested objects (with `.$` keys) and nested arrays.
+ */
+function resolvePayloadTemplateArray(
+  arr: any[],
+  stateData: any,
+  context: ContextObject,
+  resolveIntrinsic?: (expr: string, stateData: any, context: ContextObject) => any,
+): any[] {
+  return arr.map((item: any) => {
+    if (item !== null && typeof item === 'object' && !Array.isArray(item)) {
+      return resolvePayloadTemplate(item as Record<string, unknown>, stateData, context, resolveIntrinsic);
+    }
+    if (Array.isArray(item)) {
+      return resolvePayloadTemplateArray(item, stateData, context, resolveIntrinsic);
+    }
+    return item;
+  });
+}
 
 /**
  * Resolve a payload template object. Keys ending in '.$' are JSONPath
@@ -133,13 +158,8 @@ export function resolvePayloadTemplate(
         result[outputKey] = resolveReference(expr, stateData, context);
       }
     } else if (Array.isArray(value)) {
-      // Array — recurse into each element
-      result[key] = value.map((item: any) => {
-        if (item !== null && typeof item === 'object' && !Array.isArray(item)) {
-          return resolvePayloadTemplate(item as Record<string, unknown>, stateData, context, resolveIntrinsic);
-        }
-        return item;
-      });
+      // Array — recurse into each element (including nested arrays)
+      result[key] = resolvePayloadTemplateArray(value, stateData, context, resolveIntrinsic);
     } else if (value !== null && typeof value === 'object') {
       // Nested object — recurse
       result[key] = resolvePayloadTemplate(

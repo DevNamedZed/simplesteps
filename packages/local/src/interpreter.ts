@@ -99,6 +99,7 @@ export async function interpret(
     // Update per-state context
     context.State.Name = currentStateName;
     context.State.EnteredTime = new Date().toISOString();
+    context.State.RetryCount = 0;
 
     const start = Date.now();
     let result: StepResult;

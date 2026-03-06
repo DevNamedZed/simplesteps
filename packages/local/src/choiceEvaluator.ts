@@ -111,8 +111,12 @@ function evaluateComparisonRule(
  * '*' matches zero or more characters. NOT a regex.
  */
 function stringMatches(value: string, pattern: string): boolean {
-  const escaped = pattern.replace(/[.+?^${}()|[\]\\]/g, '\\$&');
-  const regex = new RegExp('^' + escaped.replace(/\*/g, '.*') + '$');
+  // Handle \* escape sequences (literal asterisk) before general regex escaping
+  const PLACEHOLDER = '\x00STAR\x00';
+  const withPlaceholder = pattern.replace(/\\\*/g, PLACEHOLDER);
+  const escaped = withPlaceholder.replace(/[.+?^${}()|[\]\\]/g, '\\$&');
+  const regexStr = escaped.replace(/\*/g, '.*').split(PLACEHOLDER).join('\\*');
+  const regex = new RegExp('^' + regexStr + '$');
   return regex.test(value);
 }
 

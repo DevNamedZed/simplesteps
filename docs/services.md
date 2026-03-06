@@ -368,7 +368,7 @@ await Steps.awsSdk('ses', 'sendEmail', {
 });
 
 // Bedrock
-const response = await Steps.awsSdk<BedrockResponse>('bedrock', 'invokeModel', {
+const response = await Steps.awsSdk<BedrockParams, BedrockResponse>('bedrock', 'invokeModel', {
   ModelId: 'anthropic.claude-3-sonnet-20240229-v1:0',
   Body: JSON.stringify({ prompt: input.prompt }),
 });
@@ -502,26 +502,4 @@ export const workflow = Steps.createFunction(
 
 The activity ARN is used directly as the Task state `Resource`. Retry, timeout, and heartbeat options are supported.
 
----
-
-## Steps.awsSdk() — Direct SDK Integration
-
-For any AWS service not covered by typed bindings, use `Steps.awsSdk()`:
-
-```typescript
-const result = await Steps.awsSdk('s3', 'listObjectsV2', {
-  Bucket: input.bucket,
-  Prefix: 'data/',
-});
-
-// SNS example
-await Steps.awsSdk('sns', 'publish', {
-  TopicArn: 'arn:aws:sns:us-east-1:123:MyTopic',
-  Message: input.message,
-});
-```
-
-This compiles to `Resource: "arn:aws:states:::aws-sdk:s3:listObjectsV2"` with the parameters as Task `Arguments` (JSONata) or `Parameters` (JSONPath).
-
-The service and action arguments must be string literals (not variables) so the compiler can construct the ARN at compile time.
 

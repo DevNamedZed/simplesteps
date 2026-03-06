@@ -1,6 +1,6 @@
 # Intrinsic Functions
 
-SimpleSteps maps all 18 ASL intrinsic functions to TypeScript. **Write natural JavaScript** — the compiler handles the mapping. `Steps.*` methods are also available for direct access (useful in JSONPath mode or when no JS equivalent exists).
+SimpleSteps maps all 18 standard ASL intrinsic functions (plus the `States.ArraySlice` AWS extension) to TypeScript. **Write natural JavaScript** — the compiler handles the mapping. `Steps.*` methods are also available for direct access (useful in JSONPath mode or when no JS equivalent exists).
 
 ## Summary
 
@@ -22,6 +22,7 @@ SimpleSteps maps all 18 ASL intrinsic functions to TypeScript. **Write natural J
 | -- | `States.ArrayPartition` | `Steps.arrayPartition(arr, n)` |
 | -- | `States.ArrayRange` | `Steps.arrayRange(start, end, step)` |
 | -- | `States.ArrayUnique` | `Steps.arrayUnique(arr)` |
+| -- | `States.ArraySlice` | `Steps.arraySlice(arr, start, end)` |
 | -- | `States.Hash` | `Steps.hash(data, algorithm)` |
 | -- | `States.MathRandom` | `Steps.random(start, end)` |
 
@@ -75,9 +76,10 @@ const count = items.length;                 // States.ArrayLength($.items)
 const parts = csvLine.split(',');           // States.StringSplit($.csvLine, ',')
 
 // Steps.* only (no JS equivalent)
-const chunks = Steps.partition(items, 4);   // States.ArrayPartition($.items, 4)
-const indices = Steps.range(0, 100, 10);    // States.ArrayRange(0, 100, 10)
-const deduped = Steps.unique(items);        // States.ArrayUnique($.items)
+const chunks = Steps.arrayPartition(items, 4);   // States.ArrayPartition($.items, 4)
+const indices = Steps.arrayRange(0, 100, 10);    // States.ArrayRange(0, 100, 10)
+const deduped = Steps.arrayUnique(items);        // States.ArrayUnique($.items)
+const page = Steps.arraySlice(items, 0, 10); // States.ArraySlice($.items, 0, 10)
 ```
 
 ## Encoding

@@ -410,9 +410,10 @@ export async function executeParallelState(
 
   const executeBranches = async (): Promise<any> => {
     const branchResults = await Promise.all(
-      state.Branches.map(branchDef =>
-        runSubMachine(branchDef, effectiveInput, context),
-      ),
+      state.Branches.map(branchDef => {
+        const branchContext = structuredClone(context);
+        return runSubMachine(branchDef, effectiveInput, branchContext);
+      }),
     );
     return branchResults;
   };
@@ -472,18 +473,20 @@ export async function executeMapState(
     for (let index = 0; index < items.length; index++) {
       const item = items[index];
 
-      // Update Map context for this iteration
-      context.Map.Item.Index = index;
-      context.Map.Item.Value = item;
+      // Clone context per iteration to prevent mutations from leaking across iterations
+      const iterationContext = structuredClone(context);
+      iterationContext.Map.Item.Index = index;
+      iterationContext.Map.Item.Value = item;
 
       // Build per-item input using ItemSelector or Parameters
       let itemInput: any = item;
       const selector = state.ItemSelector ?? state.Parameters;
       if (selector) {
-        itemInput = resolvePayloadTemplate(selector as Record<string, unknown>, effectiveInput, context, executeIntrinsic);
+        // Per ASL spec, $ inside ItemSelector refers to the individual item, not the full input
+        itemInput = resolvePayloadTemplate(selector as Record<string, unknown>, item, iterationContext, executeIntrinsic);
       }
 
-      const itemResult = await runSubMachine(state.ItemProcessor, itemInput, context);
+      const itemResult = await runSubMachine(state.ItemProcessor, itemInput, iterationContext);
       results.push(itemResult);
     }
 

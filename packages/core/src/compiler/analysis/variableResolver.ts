@@ -661,6 +661,9 @@ const STEPS_TO_INTRINSIC: Record<string, string> = {
   arrayLength: 'States.ArrayLength',
   arrayUnique: 'States.ArrayUnique',
   arraySlice: 'States.ArraySlice',
+  partition: 'States.ArrayPartition',
+  unique: 'States.ArrayUnique',
+  range: 'States.ArrayRange',
   jsonParse: 'States.StringToJson',
   jsonStringify: 'States.JsonToString',
   merge: 'States.JsonMerge',
@@ -1079,6 +1082,9 @@ function resolveCallExpression(
             // JS replace() with string pattern replaces first occurrence only; $replace limit=1
             return { kind: 'intrinsic', path: `$replace(${baseStr}, ${patStr}, ${repStr}, 1)` };
           }
+          // Pattern or replacement couldn't be resolved (e.g. regex literal)
+          context.addError(expr, 'str.replace() requires string arguments. RegExp patterns are not supported.', ErrorCodes.Expr.UncompilableExpression.code);
+          return { kind: 'unknown' };
         }
         return jsonataOnlyError(context, expr, 'str.replace()');
       }
@@ -1255,6 +1261,12 @@ function resolveCallExpression(
             return { kind: 'intrinsic', path: `$filter(${baseStr}, function(${cb.params.join(', ')}) { ${cb.body} })` };
           }
         }
+      }
+
+      // arr.reduce(fn) without initial value — specific error
+      if (methodName === 'reduce' && expr.arguments.length === 1) {
+        context.addError(expr, 'Array.reduce() requires an initial value in SimpleSteps. Use arr.reduce(fn, initialValue).', ErrorCodes.Expr.UncompilableExpression.code);
+        return { kind: 'unknown' };
       }
 
       // arr.reduce(fn, init) → $reduce(arr, function($prev, $v) { expr }, init)
@@ -1529,7 +1541,7 @@ function resolveJsonataStepsCall(
       if (serialized.length === 2) return { kind: 'intrinsic', path: `${serialized[0]} + ${serialized[1]}` };
       break;
     case 'random':
-      if (serialized.length === 2) return { kind: 'intrinsic', path: `$floor($random() * (${serialized[1]} - ${serialized[0]})) + ${serialized[0]}` };
+      if (serialized.length === 2) return { kind: 'intrinsic', path: `$floor($random() * (${serialized[1]} - ${serialized[0]} + 1)) + ${serialized[0]}` };
       break;
     case 'base64Encode':
       if (serialized.length === 1) return { kind: 'intrinsic', path: `$base64encode(${serialized[0]})` };
@@ -1549,6 +1561,7 @@ function resolveJsonataStepsCall(
       if (serialized.length === 1) return { kind: 'intrinsic', path: `$count(${serialized[0]})` };
       break;
     case 'arrayUnique':
+    case 'unique':
       if (serialized.length === 1) return { kind: 'intrinsic', path: `$distinct(${serialized[0]})` };
       break;
     case 'jsonParse':
@@ -1568,7 +1581,9 @@ function resolveJsonataStepsCall(
     // Keep as States.* intrinsics (no clean JSONata equivalent)
     case 'hash':
     case 'arrayPartition':
+    case 'partition':
     case 'arrayRange':
+    case 'range':
     case 'arraySlice': {
       const intrinsicName = STEPS_TO_INTRINSIC[methodName];
       if (intrinsicName) {
@@ -1652,6 +1667,7 @@ function resolveObjectLiteral(
     if (ts.isSpreadAssignment(prop)) {
       spreadArgs.push(resolveExpression(context, prop.expression, variables, dialect));
     } else {
+      context.addError(prop, 'Cannot mix spread and non-spread properties. Use either {...a, ...b} or {x: 1, y: 2}.', ErrorCodes.Expr.UncompilableExpression.code);
       return { kind: 'unknown' };
     }
   }

@@ -229,7 +229,7 @@ npx simplesteps compile workflow.ts -o output/ --query-language jsonpath
 | [CLI Reference](docs/cli.md) | `simplesteps compile` flags |
 | [Services](docs/services.md) | AWS service bindings + `Steps.awsSdk()` |
 | [Error Handling](docs/error-handling.md) | try/catch, retry, custom errors |
-| [Intrinsic Functions](docs/intrinsic-functions.md) | All 18 ASL intrinsics |
+| [Intrinsic Functions](docs/intrinsic-functions.md) | All 19 ASL intrinsics |
 | [Language Reference](docs/language-reference.md) | Every TypeScript construct mapped |
 | [Constants](docs/constants.md) | Compile-time constant folding |
 | [Limitations](docs/limitations.md) | Unsupported patterns and workarounds |

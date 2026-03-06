@@ -227,19 +227,22 @@ async function executeChoiceJsonata(
 ): Promise<JsonataStepResult> {
   const statesBinding = makeStatesBinding(stateData, context);
 
+  // Apply Assign if present (Assign is a JSONata-mode extension not in the base ChoiceState type)
+  const newScope = await applyAssign(state as any, statesBinding, scope);
+
   for (const rule of state.Choices) {
     // JSONata mode uses Condition field
     const condition = (rule as any).Condition;
     if (condition && typeof condition === 'string') {
-      const result = await evaluateJsonata(condition, statesBinding, scope);
+      const result = await evaluateJsonata(condition, statesBinding, newScope);
       if (result) {
-        return { output: stateData, nextState: rule.Next, scope };
+        return { output: stateData, nextState: rule.Next, scope: newScope };
       }
     }
   }
 
   if (state.Default) {
-    return { output: stateData, nextState: state.Default, scope };
+    return { output: stateData, nextState: state.Default, scope: newScope };
   }
 
   throw new StateMachineError(
@@ -260,8 +263,9 @@ async function executeWaitJsonata(
   options: RunnerOptions,
   scope: VariableScope,
 ): Promise<JsonataStepResult> {
+  const statesBinding = makeStatesBinding(stateData, context);
+
   if (options.simulateWaits) {
-    const statesBinding = makeStatesBinding(stateData, context);
     let seconds = 0;
 
     if (typeof state.Seconds === 'number') {
@@ -284,8 +288,12 @@ async function executeWaitJsonata(
     }
   }
 
+  // Apply Assign and Output (Assign/Output are JSONata-mode extensions not in the base WaitState type)
+  const newScope = await applyAssign(state as any, statesBinding, scope);
+  const output = await resolveOutput(state, stateData, statesBinding, newScope);
+
   const nextState = state.End ? null : (state.Next ?? null);
-  return { output: stateData, nextState, scope };
+  return { output, nextState, scope: newScope };
 }
 
 // ---------------------------------------------------------------------------
@@ -346,9 +354,10 @@ async function executeParallelJsonata(
 ): Promise<JsonataStepResult> {
   const executeBranches = async () => {
     return Promise.all(
-      state.Branches.map(branchDef =>
-        runSubMachine(branchDef, stateData, context),
-      ),
+      state.Branches.map(branchDef => {
+        const branchContext = structuredClone(context);
+        return runSubMachine(branchDef, stateData, branchContext);
+      }),
     );
   };
 
@@ -409,17 +418,20 @@ async function executeMapJsonata(
     const results: any[] = [];
     for (let index = 0; index < items.length; index++) {
       const item = items[index];
-      context.Map.Item.Index = index;
-      context.Map.Item.Value = item;
+
+      // Clone context per iteration to prevent mutations from leaking across iterations
+      const iterationContext = structuredClone(context);
+      iterationContext.Map.Item.Index = index;
+      iterationContext.Map.Item.Value = item;
 
       // In JSONata mode, Arguments builds per-item input
       let itemInput: any = item;
       if (state.Arguments) {
-        const itemBinding = makeStatesBinding(item, context);
+        const itemBinding = makeStatesBinding(item, iterationContext);
         itemInput = await evaluateJsonataPayload(state.Arguments, itemBinding, scope);
       }
 
-      const itemResult = await runSubMachine(state.ItemProcessor, itemInput, context);
+      const itemResult = await runSubMachine(state.ItemProcessor, itemInput, iterationContext);
       results.push(itemResult);
     }
     return results;

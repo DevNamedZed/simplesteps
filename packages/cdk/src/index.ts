@@ -183,7 +183,7 @@ export class SimpleStepsStateMachine extends sfn.StateMachine {
       throw new Error(
         'Inline workflows require the SimpleSteps TypeScript transformer. ' +
         'Add the transformer to your build pipeline. ' +
-        'See: https://github.com/DevNamedZed/simplesteps#transformer-setup',
+        'See: https://github.com/DevNamedZed/simplesteps/blob/main/docs/cdk-integration.md',
       );
     }
 

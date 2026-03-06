@@ -92,8 +92,10 @@ export async function evaluateAssign(
   scope: VariableScope,
 ): Promise<Record<string, any>> {
   const bindings: Record<string, any> = {};
+  let currentScope = { ...scope };
   for (const [key, value] of Object.entries(assign)) {
-    bindings[key] = await evaluateJsonataPayload(value, statesBinding, scope);
+    bindings[key] = await evaluateJsonataPayload(value, statesBinding, currentScope);
+    currentScope = { ...currentScope, [key]: bindings[key] };
   }
   return bindings;
 }

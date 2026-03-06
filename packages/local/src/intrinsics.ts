@@ -83,6 +83,7 @@ type IntrinsicArg =
   | { type: 'string'; value: string }
   | { type: 'number'; value: number }
   | { type: 'boolean'; value: boolean }
+  | { type: 'null'; value: null }
   | { type: 'call'; value: IntrinsicCall };
 
 function parseIntrinsicCall(expr: string): IntrinsicCall {
@@ -185,11 +186,14 @@ function parseArgList(str: string, start: number): { args: IntrinsicArg[]; end: 
     } else if (ch === 'f' && str.startsWith('false', i)) {
       args.push({ type: 'boolean', value: false });
       i += 5;
+    } else if (ch === 'n' && str.startsWith('null', i)) {
+      args.push({ type: 'null', value: null });
+      i += 4;
     } else if (ch === '-' || ch === '+' || (ch >= '0' && ch <= '9')) {
       // Number literal
       let j = i;
       if (ch === '-' || ch === '+') j++;
-      while (j < str.length && ((str[j] >= '0' && str[j] <= '9') || str[j] === '.')) j++;
+      while (j < str.length && ((str[j] >= '0' && str[j] <= '9') || str[j] === '.' || str[j] === 'e' || str[j] === 'E' || ((str[j] === '+' || str[j] === '-') && (str[j-1] === 'e' || str[j-1] === 'E')))) j++;
       args.push({ type: 'number', value: parseFloat(str.slice(i, j)) });
       i = j;
     } else if (ch === ',') {
@@ -217,6 +221,7 @@ function resolveArg(arg: IntrinsicArg, stateData: any, context: ContextObject): 
     case 'string': return arg.value;
     case 'number': return arg.value;
     case 'boolean': return arg.value;
+    case 'null': return null;
     case 'path': return resolveReference(arg.value, stateData, context);
     case 'call': return evaluateCall(arg.value, stateData, context);
   }
@@ -236,11 +241,12 @@ function evaluateCall(call: IntrinsicCall, stateData: any, context: ContextObjec
     case 'States.ArrayGetItem': return args[0][args[1]];
     case 'States.ArrayLength': return args[0].length;
     case 'States.ArrayUnique': return statesArrayUnique(args[0]);
+    case 'States.ArraySlice': return (args[0] as any[]).slice(args[1] as number, args[2] as number);
     case 'States.Base64Encode': return base64Encode(args[0]);
     case 'States.Base64Decode': return base64Decode(args[0]);
     case 'States.Hash': return computeHash(args[1], args[0]);
     case 'States.JsonMerge': return statesJsonMerge(args[0], args[1], args[2]);
-    case 'States.MathRandom': return Math.floor(Math.random() * (args[1] - args[0])) + args[0];
+    case 'States.MathRandom': return Math.floor(Math.random() * (args[1] - args[0] + 1)) + args[0];
     case 'States.MathAdd': return args[0] + args[1];
     case 'States.StringSplit': return args[1] === '' ? [...args[0]] : args[0].split(args[1]);
     case 'States.UUID': return getRandomUUID();
@@ -256,10 +262,19 @@ function evaluateCall(call: IntrinsicCall, stateData: any, context: ContextObjec
 function statesFormat(args: any[]): string {
   const template = args[0] as string;
   let argIndex = 1;
-  return template.replace(/\{}/g, () => {
-    const val = args[argIndex++];
-    return val === undefined ? '' : String(val);
-  });
+  let result = '';
+  for (let i = 0; i < template.length; i++) {
+    if (template[i] === '\\' && i + 1 < template.length && (template[i + 1] === '{' || template[i + 1] === '}')) {
+      result += template[++i];
+    } else if (template[i] === '{' && i + 1 < template.length && template[i + 1] === '}') {
+      const val = args[argIndex++];
+      result += val === undefined ? '' : String(val);
+      i++; // skip }
+    } else {
+      result += template[i];
+    }
+  }
+  return result;
 }
 
 function statesJsonMerge(a: any, b: any, deep?: boolean): any {
@@ -298,6 +313,7 @@ function statesArrayContains(arr: any[], value: any): boolean {
 }
 
 function statesArrayRange(start: number, end: number, step: number): number[] {
+  if (step === 0) throw new Error('States.ArrayRange: step must not be zero');
   const result: number[] = [];
   if (step > 0) {
     for (let i = start; i <= end; i += step) result.push(i);

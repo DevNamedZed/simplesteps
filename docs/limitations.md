@@ -418,11 +418,11 @@ For AWS services not covered by the built-in bindings:
 
 ```typescript
 const obj = await Steps.awsSdk<{ Bucket: string; Key: string }, { Body: string }>(
-  'S3', 'GetObject', { Bucket: 'my-bucket', Key: input.key }
+  's3', 'getObject', { Bucket: 'my-bucket', Key: input.key }
 );
 ```
 
-Compiles to `Resource: "arn:aws:states:::aws-sdk:s3:GetObject"`.
+Compiles to `Resource: "arn:aws:states:::aws-sdk:s3:getObject"`.
 
 ## Query Language Modes
 

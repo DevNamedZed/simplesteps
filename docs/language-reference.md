@@ -480,7 +480,7 @@ The context object is optional — if your workflow doesn't need execution metad
 
 ## Intrinsic Functions
 
-See [Intrinsic Functions](./intrinsic-functions.md) for all 18 ASL intrinsics and their JS mappings.
+See [Intrinsic Functions](./intrinsic-functions.md) for all 19 ASL intrinsics and their JS mappings.
 
 ## Error Handling
 
