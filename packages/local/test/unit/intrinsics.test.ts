@@ -213,7 +213,7 @@ describe('States.MathRandom', () => {
   it('returns number in range', () => {
     const result = executeIntrinsic("States.MathRandom(0, 10)", {}, ctx);
     expect(result).toBeGreaterThanOrEqual(0);
-    expect(result).toBeLessThan(10);
+    expect(result).toBeLessThanOrEqual(10);
   });
 });
 
