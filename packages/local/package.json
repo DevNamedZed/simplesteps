@@ -1,6 +1,6 @@
 {
   "name": "@simplesteps/local",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "Local execution runtime for SimpleSteps — test AWS Step Functions workflows locally with mock services",
   "keywords": ["aws", "step-functions", "asl", "local", "testing", "mock", "simplesteps"],
   "license": "MIT",
@@ -34,7 +34,7 @@
     "clean": "rm -rf dist"
   },
   "dependencies": {
-    "@simplesteps/core": "0.1.1",
+    "@simplesteps/core": "0.2.0",
     "jsonata": "^2.0.5"
   },
   "peerDependencies": {

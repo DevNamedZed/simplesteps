@@ -1,6 +1,6 @@
 {
   "name": "@simplesteps/cdk",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "AWS CDK construct for SimpleSteps — compile TypeScript workflows into Step Functions state machines",
   "keywords": ["aws", "cdk", "step-functions", "simplesteps", "construct", "infrastructure-as-code"],
   "license": "MIT",
@@ -30,7 +30,7 @@
     "clean": "rm -rf dist"
   },
   "dependencies": {
-    "@simplesteps/core": "0.1.1"
+    "@simplesteps/core": "0.2.0"
   },
   "peerDependencies": {
     "aws-cdk-lib": "^2.0.0",
